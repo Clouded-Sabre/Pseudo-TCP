@@ -3,63 +3,37 @@ package main
 import (
 	"fmt"
 	"net"
-	"time"
+	"strconv"
 
-	"golang.org/x/net/ipv4"
+	"github.com/Clouded-Sabre/Pseudo-TCP/shared"
 )
 
 func main() {
-	// Listen on port 12345 (replace with desired port)
-	ln, err := ipv4.Listen(net.ParseIP("0.0.0.0"), 12345, ipv4.ProtocolTCP)
+	conn, err := net.ListenPacket("ip:"+strconv.Itoa(int(shared.ProtocolID)), shared.ServerIP)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Println("Error listening:", err)
 		return
 	}
-	defer ln.Close()
+	defer conn.Close()
 
+	fmt.Println("Server started")
+
+	// Handle incoming packets
 	for {
-		// Accept connection
-		conn, err := ln.Accept()
+		buffer := make([]byte, 1024)
+		_, addr, err := conn.ReadFrom(buffer)
 		if err != nil {
-			fmt.Println(err)
-			continue
-		}
-		defer conn.Close()
-
-		// Simulate TCP SYN-ACK (flags: SYN, ACK)
-		err = conn.SetDeadline(time.Now().Add(time.Second * 5)) // Set timeout for receiving SYN
-		if err != nil {
-			fmt.Println(err)
-			continue
-		}
-		b := make([]byte, ipv4.HeaderLen)
-		n, _, err := conn.Read(b)
-		if err != nil {
-			fmt.Println(err)
-			continue
-		}
-		if n == ipv4.HeaderLen && b[ipv4.TCPFlagOffset]&(ipv4.TCPFlagSYN|ipv4.TCPFlagACK) == (ipv4.TCPFlagSYN|ipv4.TCPFlagACK) {
-			fmt.Println("Received SYN from client")
-			b[ipv4.TCPFlagOffset] &= ^ipv4.TCPFlagSYN // Remove SYN flag
-			_, err = conn.Write(b)                    // Send simulated SYN-ACK
-			if err != nil {
-				fmt.Println(err)
-				continue
-			}
-		} else {
-			fmt.Println("Unexpected packet received")
-			continue
+			fmt.Println("Error reading:", err)
+			return
 		}
 
-		// Simulate receiving data (replace with actual handling)
-		for {
-			b := make([]byte, 1024)
-			n, _, err := conn.Read(b)
-			if err != nil {
-				fmt.Println(err)
-				break
-			}
-			fmt.Printf("Received %d bytes from client: %s\n", n, string(b[:n]))
-		}
+		// Process the received packet
+		packet := &shared.CustomPacket{}
+		packet.Unmarshal(buffer)
+		fmt.Printf("Received packet from %s: %s\n", addr.String(), string(packet.Payload))
+
+		// Blindly acknowledge the received packet by sending an ACK back
+		ackPacket := shared.NewCustomPacket(packet.AcknowledgmentNum, packet.SequenceNumber+1, []byte("ACK"))
+		conn.WriteTo(ackPacket.Marshal(), addr)
 	}
 }
