@@ -1,4 +1,4 @@
-package shared
+package config
 
 const (
 	ServerIP   = "127.0.0.2"
