@@ -4,56 +4,37 @@ package main
 
 import (
 	"fmt"
-	"net"
-	"strconv"
 	"time"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 	"github.com/Clouded-Sabre/Pseudo-TCP/lib"
+	"github.com/Clouded-Sabre/Pseudo-TCP/lib/client"
 )
 
 func main() {
-	// Generate a random client port number
-	clientPort := lib.GetAvailableRandomPort()
-
+	pcpCleintObj := client.NewPcpClient(lib.ProtocolID)
 	// Dial to the server
-	conn, err := net.Dial("ip:"+strconv.Itoa(int(lib.ProtocolID)), config.ServerIP)
+	conn, err := pcpCleintObj.DialPcp(config.ClientIP, config.ServerIP, config.ServerPort)
 	if err != nil {
 		fmt.Println("Error connecting:", err)
 		return
 	}
 	defer conn.Close()
 
-	// Initiate a new connection
-	err = lib.InitiateNewConnection(conn, clientPort)
-	if err != nil {
-		fmt.Println("Error initiating connection:", err)
-		return
-	}
-
-	fmt.Println("Client connected")
+	fmt.Println("PCP connection established!")
 
 	// Simulate data transmission
 	for i := 0; i < 5; i++ {
 		// Construct a packet
-		packet := lib.NewCustomPacket(0, 0, []byte(fmt.Sprintf("Data packet %d", i)))
+		payload := []byte(fmt.Sprintf("Data packet %d", i))
 
 		// Send the packet to the server
-		conn.Write(packet.Marshal())
-
-		// Wait for acknowledgment
-		buffer := make([]byte, 1024)
-		_, err := conn.Read(buffer)
-		if err != nil {
-			fmt.Println("Error reading acknowledgment:", err)
-			return
-		}
-		fmt.Printf("Received acknowledgment for packet %d\n", i)
+		conn.Write(payload)
 
 		time.Sleep(time.Second) // Simulate some delay between packets
 	}
 
 	// Close the connection
 	conn.Close()
-	fmt.Println("Connection closed")
+	fmt.Println("PCP Connection closed")
 }

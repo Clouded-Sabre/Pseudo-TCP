@@ -2,73 +2,57 @@ package main
 
 import (
 	"fmt"
-	"net"
-	"strconv"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 	"github.com/Clouded-Sabre/Pseudo-TCP/lib"
+	"github.com/Clouded-Sabre/Pseudo-TCP/lib/server"
+)
+
+var (
+	pcpServerObj *server.PcpServer
+	err          error
 )
 
 func main() {
-	lib.Connections = make(map[string]*lib.Connection)
-
-	serverConn, err := net.ListenPacket("ip:"+strconv.Itoa(int(lib.ProtocolID)), config.ServerIP)
+	// Create PCP server
+	pcpServerObj, err = server.NewPcpServer(lib.ProtocolID)
 	if err != nil {
-		fmt.Println("Error listening:", err)
+		fmt.Println("Error creating PCP server:", err)
 		return
 	}
-	defer serverConn.Close()
+	fmt.Println("PCP server started.")
 
-	fmt.Println("Server started")
+	// Listen for interrupt signal (Ctrl+C)
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 
-	// Handle incoming packets
+	// Start the PCP server
+	srv, err := pcpServerObj.ListenPcp(config.ServerIP, config.ServerPort)
+	if err != nil {
+		fmt.Printf("PCP server error listening at %s:%d: %s", config.ServerIP, config.ServerPort, err)
+		return
+	}
+
+	// Handle Ctrl+C signal for graceful shutdown
+	go func() {
+		<-signalChan
+		fmt.Println("\nReceived SIGINT (Ctrl+C). Shutting down...")
+		srv.Close() // Close the server gracefully
+		os.Exit(0)
+	}()
+
+	// Accept incoming connections
+	conn := srv.Accept()
+	buffer := make([]byte, 1024)
 	for {
-		buffer := make([]byte, 1024)
-		_, addr, err := serverConn.ReadFrom(buffer)
+		n, err := conn.Read(buffer)
 		if err != nil {
-			fmt.Println("Error reading:", err)
+			fmt.Println("Error reading packet:", err)
 			return
 		}
-
-		// Process the received packet
-		packet := &lib.CustomPacket{}
-		packet.Unmarshal(buffer)
-
-		// Extract client IP and port from the packet header
-		clientAddr := addr.String()
-		clientPort := packet.SourcePort // Extract destination port
-
-		// Check if the packet is intended for the server's port
-		if packet.DestinationPort != config.ServerPort {
-			fmt.Println("Packet not destined for server port. Ignoring.")
-			continue // Ignore the packet
-		}
-
-		lib.Mu.Lock()
-		defer lib.Mu.Unlock()
-
-		// Check if the connection exists
-		connKey := fmt.Sprintf("%s:%d", config.ClientIP, clientPort)
-		conn, ok := lib.Connections[connKey]
-
-		if ok {
-			// Close connection if FIN received
-			if string(packet.Payload) == "FIN" {
-				go lib.HandleCloseConnection(serverConn, addr, conn, connKey)
-			}
-
-			// Connection exists, acknowledge the received packet and update sequence number
-			if packet.SequenceNumber > conn.SequenceNumber {
-				go lib.HandleClientRequest(serverConn, addr, conn, connKey)
-			}
-		} else {
-			// Unknown connection, handle 3-way handshake
-			if string(packet.Payload) == "SYN" {
-				// New connection request
-				go lib.HandleNewConnection(serverConn, addr, int(packet.DestinationPort), int(clientPort))
-			} else {
-				fmt.Println("Unknown connection and packet:", clientAddr, clientPort, string(packet.Payload))
-			}
-		}
+		fmt.Println("Got Packet from client", buffer[:n])
 	}
 }
