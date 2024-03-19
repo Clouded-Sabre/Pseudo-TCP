@@ -35,6 +35,7 @@ func newService(pcpProtocolConn *PcpProtocolConnection, serviceAddr net.Addr, po
 		connectionMap:      make(map[string]*Connection),
 		tempConnMap:        make(map[string]*Connection),
 		newConnChannel:     make(chan *Connection),
+		ConnCloseSignal:    make(chan *Connection),
 		serviceCloseSignal: make(chan struct{}),
 	}, nil
 }
@@ -100,13 +101,21 @@ func (s *Service) handleDataPacket(packet *lib.PacketVector) {
 
 	// Check if the connection exists in the connection map
 	conn, ok := s.connectionMap[connKey]
-	if !ok {
-		log.Printf("Received data packet for non-existent connection: %s\n", connKey)
+	if ok {
+		// Dispatch the packet to the corresponding connection's input channel
+		conn.InputChannel <- packet
 		return
 	}
 
-	// Dispatch the packet to the corresponding connection's input channel
-	conn.InputChannel <- packet
+	// then check if the connection exists in temp connection map
+	tempConn, ok := s.tempConnMap[connKey]
+	if ok {
+		// Dispatch the packet to the corresponding connection's input channel
+		tempConn.InputChannel <- packet
+		return
+	}
+
+	log.Printf("Received data packet for non-existent connection: %s\n", connKey)
 }
 
 // handleSynPacket handles a SYN packet and initiates a new connection.
@@ -142,10 +151,13 @@ func (s *Service) handleSynPacket(packet *lib.PacketVector) {
 
 	// Send SYN-ACK packet to the SYN packet sender
 	// Construct a SYN-ACK packet
-	synAckPacket := lib.NewCustomPacket(uint16(s.Port), packet.Data.SourcePort, 0, packet.Data.SequenceNumber+1, lib.SYNFlag|lib.ACKFlag, nil)
+	newConn.lastAckNumber = packet.Data.SequenceNumber + 1
+	synAckPacket := lib.NewPcpPacket(uint16(s.Port), packet.Data.SourcePort, 0, newConn.lastAckNumber, lib.SYNFlag|lib.ACKFlag, nil)
+	fmt.Printf("%+v\n", synAckPacket)
 
 	// Send the SYN-ACK packet to the sender
 	s.OutputChan <- &lib.PacketVector{Data: synAckPacket, RemoteAddr: packet.RemoteAddr, LocalAddr: packet.LocalAddr}
+	newConn.nextSequenceNumber += 1
 
 	newConn.OpenServerState = lib.SynAckSent // set 3-way handshake state
 

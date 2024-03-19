@@ -54,7 +54,7 @@ func newPcpServerProtocolConnection(protocolId int, serverIP string) (*PcpProtoc
 		fmt.Println("Error listening:", err)
 		return nil, err
 	}
-	defer protocolConn.Close()
+	//defer protocolConn.Close()
 
 	fmt.Println("Pcp protocol Server started")
 
@@ -91,7 +91,7 @@ func (p *PcpProtocolConnection) handlingIncomingPackets() {
 		copy(packetData, buffer[:n])
 
 		// Extract destination port
-		packet := &lib.CustomPacket{}
+		packet := &lib.PcpPacket{}
 		packet.Unmarshal(packetData)
 		destPort := packet.DestinationPort
 
@@ -115,7 +115,9 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 	for {
 		packet := <-p.OutputChan // Subscribe to p.OutputChan
 		// Marshal the packet into bytes
+		fmt.Printf("Sending payload: %+v\n", packet.Data)
 		frameBytes := packet.Data.Marshal(packet.LocalAddr, packet.RemoteAddr)
+		fmt.Println("Frame Length:", len(frameBytes))
 		// Write the packet to the interface
 		_, err := p.Connection.WriteTo(frameBytes, packet.RemoteAddr)
 		if err != nil {

@@ -2,16 +2,18 @@ package lib
 
 import (
 	"encoding/binary"
+	"fmt"
 	"net"
+
+	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 )
 
 const (
-	ProtocolID = 20 // my custom IP protocol number
 	HeaderSize = 20 // HeaderSize is the size of the header in bytes (assumes option field is not used). Adjust as per your header size
 )
 
-// CustomPacket represents a packet in your custom protocol
-type CustomPacket struct {
+// PcpPacket represents a packet in your custom protocol
+type PcpPacket struct {
 	SourcePort        uint16 // SourcePort represents the source port
 	DestinationPort   uint16 // DestinationPort represents the destination port
 	SequenceNumber    uint32 // SequenceNumber represents the sequence number
@@ -25,9 +27,9 @@ type CustomPacket struct {
 	Payload       []byte // Payload represents the payload data
 }
 
-// Marshal converts a CustomPacket to a byte slice
-// Marshal converts a CustomPacket to a byte slice
-func (p *CustomPacket) Marshal(srcAddr, dstAddr net.Addr) []byte {
+// Marshal converts a PcpPacket to a byte slice
+// Marshal converts a PcpPacket to a byte slice
+func (p *PcpPacket) Marshal(srcAddr, dstAddr net.Addr) []byte {
 	// Calculate the length of the options field (including padding)
 	optionsLength := len(p.Options)
 	padding := 0
@@ -59,7 +61,7 @@ func (p *CustomPacket) Marshal(srcAddr, dstAddr net.Addr) []byte {
 	binary.BigEndian.PutUint16(frame[18:20], p.UrgentPointer)
 
 	// Copy options into frame
-	copy(frame[20:20+optionsLength], p.Options)
+	copy(frame[HeaderSize:HeaderSize+optionsLength], p.Options)
 
 	pcpFrameLength := totalLength + len(p.Payload)
 	// Calculate checksum over the pseudo-header, TCP header, and payload
@@ -74,8 +76,8 @@ func (p *CustomPacket) Marshal(srcAddr, dstAddr net.Addr) []byte {
 	return frame
 }
 
-// Unmarshal converts a byte slice to a CustomPacket
-func (p *CustomPacket) Unmarshal(data []byte) {
+// Unmarshal converts a byte slice to a PcpPacket
+func (p *PcpPacket) Unmarshal(data []byte) {
 	p.SourcePort = binary.BigEndian.Uint16(data[0:2])
 	p.DestinationPort = binary.BigEndian.Uint16(data[2:4])
 	p.SequenceNumber = binary.BigEndian.Uint32(data[4:8])
@@ -99,8 +101,8 @@ func (p *CustomPacket) Unmarshal(data []byte) {
 	p.Checksum = binary.BigEndian.Uint16(data[16:18]) // Assuming checksum field is at byte 16 and 17
 }
 
-func NewCustomPacket(sourcePort, destinationPort uint16, seqNum, ackNum uint32, flags uint8, data []byte) *CustomPacket {
-	return &CustomPacket{
+func NewPcpPacket(sourcePort, destinationPort uint16, seqNum, ackNum uint32, flags uint8, data []byte) *PcpPacket {
+	return &PcpPacket{
 		SourcePort:        sourcePort,
 		DestinationPort:   destinationPort,
 		SequenceNumber:    seqNum,
@@ -112,8 +114,8 @@ func NewCustomPacket(sourcePort, destinationPort uint16, seqNum, ackNum uint32, 
 
 // PacketVector represents a vector containing packet data along with metadata.
 type PacketVector struct {
-	Data                  *CustomPacket // Packet data
-	RemoteAddr, LocalAddr net.Addr      // Source address of the packet
+	Data                  *PcpPacket // Packet data
+	RemoteAddr, LocalAddr net.Addr   // Source address of the packet
 }
 
 func CalculateChecksum(frame []byte) uint16 {
@@ -169,7 +171,28 @@ func assemblePseudoHeader(srcAddr, dstAddr net.Addr, pcpFrameLength uint16) []by
 	binary.BigEndian.PutUint32(pseudoHeader[0:4], binary.BigEndian.Uint32(srcIP))
 	binary.BigEndian.PutUint32(pseudoHeader[4:8], binary.BigEndian.Uint32(dstIP))
 	// leave byte 8 (Fixed 8 bits) as all zero as byte 8
-	pseudoHeader[9] = uint8(ProtocolID)
+	pseudoHeader[9] = uint8(config.ProtocolID)
 	binary.BigEndian.PutUint16(pseudoHeader[10:12], pcpFrameLength)
 	return pseudoHeader
+}
+
+// Function to extract payload from an IP packet
+func ExtractIpPayload(ipFrame []byte) ([]byte, error) {
+	// Check if the minimum size of the IP header is present
+	if len(ipFrame) < 20 {
+		return nil, fmt.Errorf("invalid IP packet: insufficient header length")
+	}
+
+	// Determine the length of the IP header (in 32-bit words)
+	headerLen := int(ipFrame[0]&0x0F) * 4
+
+	// Check if the packet length is valid
+	if len(ipFrame) < headerLen {
+		return nil, fmt.Errorf("invalid IP packet: insufficient packet length")
+	}
+
+	// Extract the payload by skipping past the IP header
+	payload := ipFrame[headerLen:]
+
+	return payload, nil
 }

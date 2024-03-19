@@ -15,7 +15,7 @@ import (
 type pcpProtocolConnection struct {
 	ServerAddr, LocalAddr *net.IPAddr
 	pConn                 *net.IPConn
-	OutputChan            chan *lib.CustomPacket
+	OutputChan            chan *lib.PcpPacket
 	ConnectionMap         map[string]*Connection
 	tempConnectionMap     map[string]*Connection
 	ConnCloseSignalChan   chan *Connection
@@ -28,13 +28,13 @@ func newPcpProtocolConnection(p *pcpClient, serverAddr, localAddr *net.IPAddr) (
 		fmt.Println("Error listening:", err)
 		return nil, err
 	}
-	defer pConn.Close()
+	//defer pConn.Close()
 
 	pConnection := &pcpProtocolConnection{
 		LocalAddr:           localAddr,
 		ServerAddr:          serverAddr,
 		pConn:               pConn,
-		OutputChan:          make(chan *lib.CustomPacket),
+		OutputChan:          make(chan *lib.PcpPacket),
 		ConnectionMap:       make(map[string]*Connection),
 		tempConnectionMap:   make(map[string]*Connection),
 		ConnCloseSignalChan: make(chan *Connection),
@@ -67,9 +67,10 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*Connection, error) {
 	p.tempConnectionMap[connKey] = newConn
 
 	// Send SYN to server
-	synPacket := lib.NewCustomPacket(uint16(serverPort), uint16(clientPort), 0, 0, lib.SYNFlag, nil)
-
+	synPacket := lib.NewPcpPacket(uint16(clientPort), uint16(serverPort), newConn.nextSequenceNumber, 0, lib.SYNFlag, nil)
 	p.OutputChan <- synPacket
+	newConn.nextSequenceNumber += 1
+	log.Println("Initiated connection to server with connKey:", connKey)
 
 	// Wait for SYN-ACK
 	// Create a loop to read from connection's input channel till we see SYN-ACK packet from the other end
@@ -77,8 +78,10 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*Connection, error) {
 		packet := <-newConn.InputChannel
 		if packet.Flags == lib.SYNFlag|lib.ACKFlag { // Verify if it's a SYN-ACK from the server
 			// Prepare ACK packet
-			ackPacket := lib.NewCustomPacket(uint16(clientPort), uint16(serverPort), 0, 0, lib.ACKFlag, nil)
+			newConn.lastAckNumber = packet.SequenceNumber + 1
+			ackPacket := lib.NewPcpPacket(uint16(clientPort), uint16(serverPort), newConn.nextSequenceNumber, newConn.lastAckNumber, lib.ACKFlag, nil)
 			newConn.OutputChan <- ackPacket
+			//newConn.expectedAckNum = 2
 
 			// Connection established, remove newConn from tempClientConnections, and place it into clientConnections pool
 			delete(p.tempConnectionMap, connKey)
@@ -111,9 +114,17 @@ func (p *pcpProtocolConnection) handleIncomingPackets() {
 		packetData := make([]byte, n)
 		copy(packetData, buffer[:n])
 
+		// extract Pcp frame from the received IP frame
+		pcpFrame, err := lib.ExtractIpPayload(packetData)
+		if err != nil {
+			log.Println("Received IP frame is il-formated. Ignore it!")
+			continue
+		}
 		// Extract destination port
-		packet := &lib.CustomPacket{}
-		packet.Unmarshal(packetData)
+		packet := &lib.PcpPacket{}
+		packet.Unmarshal(pcpFrame)
+		fmt.Println("Received packet Length:", n)
+		fmt.Printf("Got packet:\n %+v\n", packet)
 
 		// Extract destination IP and port from the packet
 		sourcePort := packet.SourcePort
@@ -147,6 +158,10 @@ func (p *pcpProtocolConnection) handleIncomingPackets() {
 func (p *pcpProtocolConnection) handleOutgoingPackets() {
 	for {
 		packet := <-p.OutputChan // Subscribe to p.OutputChan
+		if len(packet.Payload) > 0 {
+			fmt.Println("outgoing packet payload is", packet.Payload)
+		}
+
 		// Marshal the packet into bytes
 		frameBytes := packet.Marshal(p.LocalAddr, p.ServerAddr)
 		// Write the packet to the interface

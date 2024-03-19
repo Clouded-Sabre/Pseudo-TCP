@@ -2,40 +2,43 @@ package client
 
 import (
 	"fmt"
+	"log"
 	"net"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/lib"
 )
 
 type Connection struct {
-	key                            string // connection key for easy reference
-	RemoteAddr                     net.Addr
-	RemotePort                     int
-	LocalAddr                      net.Addr
-	LocalPort                      int
-	SequenceNumber                 uint32                 // the last acknowledged sequence number
-	InputChannel                   chan *lib.CustomPacket // per connection packet input channel
-	OutputChan                     chan *lib.CustomPacket // overall output channel shared by all connections
-	readChannel                    chan []byte            // for connection read function
-	terminationCallerState         uint                   // 4-way termination caller states
-	terminationRespState           uint                   // 4-way termination responder states
-	pcpClientConn                  *pcpProtocolConnection // point back to parent
-	expectedAckNum, expectedSeqNum uint32
-	writeOnHold                    bool // true if 4-way termination starts
+	key                    string // connection key for easy reference
+	RemoteAddr             net.Addr
+	RemotePort             int
+	LocalAddr              net.Addr
+	LocalPort              int
+	nextSequenceNumber     uint32                 // the SEQ sequence number of the next outgoing packet
+	lastAckNumber          uint32                 // the last acknowleged incoming packet
+	InputChannel           chan *lib.PcpPacket    // per connection packet input channel
+	OutputChan             chan *lib.PcpPacket    // overall output channel shared by all connections
+	readChannel            chan []byte            // for connection read function
+	terminationCallerState uint                   // 4-way termination caller states
+	terminationRespState   uint                   // 4-way termination responder states
+	pcpClientConn          *pcpProtocolConnection // point back to parent
+	//expectedAckNum, expectedSeqNum uint32
+	writeOnHold bool // true if 4-way termination starts
 }
 
 func newConnection(key string, pClientConn *pcpProtocolConnection, remoteAddr net.Addr, remotePort int, localAddr net.Addr, localPort int) (*Connection, error) {
 	newConn := &Connection{
-		key:            key,
-		RemoteAddr:     remoteAddr,
-		RemotePort:     remotePort,
-		LocalAddr:      localAddr,
-		LocalPort:      localPort,
-		SequenceNumber: 0,
-		InputChannel:   make(chan *lib.CustomPacket),
-		readChannel:    make(chan []byte),
-		OutputChan:     pClientConn.OutputChan,
-		pcpClientConn:  pClientConn,
+		key:                key,
+		RemoteAddr:         remoteAddr,
+		RemotePort:         remotePort,
+		LocalAddr:          localAddr,
+		LocalPort:          localPort,
+		nextSequenceNumber: 0,
+		lastAckNumber:      0,
+		InputChannel:       make(chan *lib.PcpPacket),
+		readChannel:        make(chan []byte),
+		OutputChan:         pClientConn.OutputChan,
+		pcpClientConn:      pClientConn,
 		// all the rest variables keep there init value
 	}
 
@@ -44,7 +47,7 @@ func newConnection(key string, pClientConn *pcpProtocolConnection, remoteAddr ne
 
 func (c *Connection) handleIncomingPackets() {
 	var (
-		packet                     *lib.CustomPacket
+		packet                     *lib.PcpPacket
 		isACK, isFIN, isDataPacket bool
 	)
 	// Create a loop to read from connection's input channel
@@ -75,10 +78,13 @@ func (c *Connection) handleIncomingPackets() {
 			}
 			if isFIN {
 				if c.terminationCallerState == lib.CallerAckReceived {
+					log.Println("FIN from server received.")
 					// 4-way termination initiated from the client
 					c.terminationRespState = lib.CallerFinReceived
 					// Sent ACK back to the server
+
 					c.acknowledge(packet)
+					log.Println("ACK to FIN from server sent.")
 					// set 4-way termination state to CallerFINSent
 					c.terminationCallerState = lib.CallerAckSent
 					// sent the close signal to pConnClient to clear the connection
@@ -92,11 +98,15 @@ func (c *Connection) handleIncomingPackets() {
 					c.terminationRespState = lib.RespFinReceived
 					// Sent ACK back to the server
 					// Assemble ACK packet to be sent to the other end
-					c.acknowledge(packet)
+					c.lastAckNumber = packet.SequenceNumber + 1
+					ackPacket := lib.NewPcpPacket(uint16(c.LocalPort), uint16(c.RemotePort), c.nextSequenceNumber, c.lastAckNumber, lib.ACKFlag, nil)
+					// Send the acknowledgment packet to the other end
+					c.OutputChan <- ackPacket
+					//c.nextSequenceNumber += 1
 
 					// sent fin packet to the server
 					// Assemble ACK packet to be sent to the other end
-					finPacket := lib.NewCustomPacket(uint16(c.LocalPort), uint16(c.RemotePort), 0, 0, lib.FINFlag, nil)
+					finPacket := lib.NewPcpPacket(uint16(c.LocalPort), uint16(c.RemotePort), c.nextSequenceNumber, c.lastAckNumber, lib.FINFlag, nil)
 					c.OutputChan <- finPacket
 					c.terminationRespState = lib.RespFinSent
 				}
@@ -113,30 +123,32 @@ func (c *Connection) Close() error {
 	// put write channel on hold so that no data packet interfere with termination process
 	c.writeOnHold = true
 	// Assemble FIN packet to be sent to the other end
-	finPacket := lib.NewCustomPacket(uint16(c.LocalPort), uint16(c.RemotePort), 0, 0, lib.ACKFlag, nil)
+	finPacket := lib.NewPcpPacket(uint16(c.LocalPort), uint16(c.RemotePort), c.nextSequenceNumber, c.lastAckNumber, lib.FINFlag, nil)
 	c.OutputChan <- finPacket
+	c.nextSequenceNumber += 1
 	// set 4-way termination state to CallerFINSent
 	c.terminationCallerState = lib.CallerFinSent
 
 	return nil
 }
 
-func (c *Connection) acknowledge(packet *lib.CustomPacket) {
-	// prepare a CustomPacket for acknowledging the received packet
-	ackPacket := lib.NewCustomPacket(uint16(c.LocalPort), uint16(c.RemotePort), 0, packet.SequenceNumber+uint32(len(packet.Payload)), lib.ACKFlag, nil)
+func (c *Connection) acknowledge(packet *lib.PcpPacket) {
+	// prepare a PcpPacket for acknowledging the received packet
+	c.lastAckNumber = packet.SequenceNumber + uint32(len(packet.Payload))
+	ackPacket := lib.NewPcpPacket(uint16(c.LocalPort), uint16(c.RemotePort), c.nextSequenceNumber, c.lastAckNumber, lib.ACKFlag, nil)
 
 	// Send the acknowledgment packet to the other end
 	c.OutputChan <- ackPacket
 }
 
 // Read function for Pcp connection
-func (c *Connection) handleDataPacket(packet *lib.CustomPacket) {
+func (c *Connection) handleDataPacket(packet *lib.PcpPacket) {
 	// Extract SYN and ACK flags from the packet
 	//isACK := packet.Flags&ACKFlag != 0
 	// check SEQ and ACK
-	if packet.SequenceNumber < c.expectedSeqNum {
+	if packet.SequenceNumber < c.lastAckNumber {
 		// out of order packet received ignore it
-		fmt.Println("Expect SEQ:", c.expectedAckNum, ", but got SEQ:", packet.SequenceNumber)
+		fmt.Println("last acknowledged SEQ:", c.lastAckNumber, ", but got incoming SEQ:", packet.SequenceNumber)
 		fmt.Println("Received out-of-order data packet. Ignore it\n", packet)
 		return
 	}
@@ -144,9 +156,6 @@ func (c *Connection) handleDataPacket(packet *lib.CustomPacket) {
 
 	// put packet payload to read channel
 	c.readChannel <- packet.Payload
-
-	// update expectSeqNum
-	c.expectedSeqNum = packet.SequenceNumber + uint32(len(packet.Payload))
 
 	// send ACK packet back to the server
 	c.acknowledge(packet)
@@ -161,7 +170,7 @@ func (c *Connection) Read(buffer []byte) (int, error) {
 		fmt.Println(err)
 		return 0, err
 	}
-	copy(payload, buffer[:payloadLength])
+	copy(buffer[:payloadLength], payload)
 	return payloadLength, nil
 }
 
@@ -174,9 +183,12 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 		return 0, err
 	}
 	// make a copy so that buffer can be overwritten
-	copy(buffer, payload)
+	copy(payload, buffer)
+	log.Println("Sent payload:", string(payload))
 	// Construct a packet
-	packet := lib.NewCustomPacket(uint16(c.LocalPort), uint16(c.RemotePort), c.expectedAckNum, c.expectedSeqNum, 0, payload)
+	packet := lib.NewPcpPacket(uint16(c.LocalPort), uint16(c.RemotePort), c.nextSequenceNumber, c.lastAckNumber, 0, payload)
+	c.nextSequenceNumber += uint32(len(packet.Payload))
+
 	c.OutputChan <- packet
 
 	return len(payload), nil
