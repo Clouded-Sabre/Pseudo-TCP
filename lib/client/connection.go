@@ -82,8 +82,11 @@ func (c *Connection) handleIncomingPackets() {
 					// 4-way termination initiated from the client
 					c.terminationRespState = lib.CallerFinReceived
 					// Sent ACK back to the server
+					c.lastAckNumber = packet.SequenceNumber + 1
+					ackPacket := lib.NewPcpPacket(uint16(c.LocalPort), uint16(c.RemotePort), c.nextSequenceNumber, c.lastAckNumber, lib.ACKFlag, nil)
+					// Send the acknowledgment packet to the other end
+					c.OutputChan <- ackPacket
 
-					c.acknowledge(packet)
 					log.Println("ACK to FIN from server sent.")
 					// set 4-way termination state to CallerFINSent
 					c.terminationCallerState = lib.CallerAckSent
