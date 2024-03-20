@@ -1,11 +1,10 @@
 package lib
 
 import (
+	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"net"
-
-	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 )
 
 const (
@@ -28,8 +27,7 @@ type PcpPacket struct {
 }
 
 // Marshal converts a PcpPacket to a byte slice
-// Marshal converts a PcpPacket to a byte slice
-func (p *PcpPacket) Marshal(srcAddr, dstAddr net.Addr) []byte {
+func (p *PcpPacket) Marshal(srcAddr, dstAddr net.Addr, protocolId uint8) []byte {
 	// Calculate the length of the options field (including padding)
 	optionsLength := len(p.Options)
 	padding := 0
@@ -65,7 +63,7 @@ func (p *PcpPacket) Marshal(srcAddr, dstAddr net.Addr) []byte {
 
 	pcpFrameLength := totalLength + len(p.Payload)
 	// Calculate checksum over the pseudo-header, TCP header, and payload
-	pseudoHeader := assemblePseudoHeader(srcAddr, dstAddr, uint16(pcpFrameLength))
+	pseudoHeader := assemblePseudoHeader(srcAddr, dstAddr, protocolId, uint16(pcpFrameLength))
 	data := append(pseudoHeader, append(frame, p.Payload...)...)
 	checksum := CalculateChecksum(data)
 	binary.BigEndian.PutUint16(frame[16:18], checksum)
@@ -118,7 +116,7 @@ type PacketVector struct {
 	RemoteAddr, LocalAddr net.Addr   // Source address of the packet
 }
 
-func CalculateChecksum(frame []byte) uint16 {
+/*func CalculateChecksum(frame []byte) uint16 {
 	// Initialize sum to zero (32-bit for potential overflow handling)
 	sum := uint32(0)
 
@@ -128,6 +126,11 @@ func CalculateChecksum(frame []byte) uint16 {
 		word := uint32(binary.BigEndian.Uint16(frame[i : i+2]))
 		// Add the word to the sum
 		sum += word
+	}
+
+	// If the total length is odd, add padding (zero byte)
+	if len(frame)%2 != 0 {
+		sum += uint32(frame[len(frame)-1]) << 8 // Pad with the last byte shifted by 8 bits
 	}
 
 	// Handle potential carry from addition (one's complement addition)
@@ -140,9 +143,31 @@ func CalculateChecksum(frame []byte) uint16 {
 	checksum := ^uint16(sum)
 
 	return checksum
+}*/
+
+func CalculateChecksum(buffer []byte) uint16 {
+	var cksum uint32 = 0
+
+	// Process 16-bit words (2 bytes each)
+	for i := 0; i < len(buffer)-1; i += 2 {
+		word := binary.BigEndian.Uint16(buffer[i : i+2])
+		cksum += uint32(word)
+	}
+
+	// Handle remaining odd byte, if any
+	if len(buffer)%2 != 0 {
+		cksum += uint32(buffer[len(buffer)-1]) << 8 // Shift last byte to 16 bits
+	}
+
+	// Fold 32-bit sum to 16 bits
+	cksum = (cksum >> 16) + (cksum & 0xffff)
+	cksum += (cksum >> 16)
+
+	// Return one's complement of the final sum
+	return ^uint16(cksum)
 }
 
-func VerifyChecksum(data []byte, srcAddr, dstAddr net.Addr) bool {
+func VerifyChecksum(data []byte, srcAddr, dstAddr net.Addr, protocolId uint8) bool {
 	// Retrieve the checksum from the packet
 	receivedChecksum := binary.BigEndian.Uint16(data[16:18]) // Assuming checksum field is at byte 16 and 17
 
@@ -151,7 +176,7 @@ func VerifyChecksum(data []byte, srcAddr, dstAddr net.Addr) bool {
 
 	// Calculate checksum over the pseudo-header, TCP header, and payload
 	pcpFrameLength := uint16(len(data))
-	pseudoHeader := assemblePseudoHeader(srcAddr, dstAddr, pcpFrameLength)
+	pseudoHeader := assemblePseudoHeader(srcAddr, dstAddr, protocolId, pcpFrameLength)
 	checksumData := append(pseudoHeader, data...)
 	// Calculate the checksum
 	calculatedChecksum := CalculateChecksum(checksumData)
@@ -164,14 +189,14 @@ func VerifyChecksum(data []byte, srcAddr, dstAddr net.Addr) bool {
 }
 
 // assemblePseudoHeader assembles the pseudo-header for checksum calculation
-func assemblePseudoHeader(srcAddr, dstAddr net.Addr, pcpFrameLength uint16) []byte {
+func assemblePseudoHeader(srcAddr, dstAddr net.Addr, protocolId uint8, pcpFrameLength uint16) []byte {
 	pseudoHeader := make([]byte, 12)
 	srcIP := srcAddr.(*net.IPAddr).IP.To4() // Type assertion to get the IPv4 address
 	dstIP := dstAddr.(*net.IPAddr).IP.To4() // Type assertion to get the IPv4 address
 	binary.BigEndian.PutUint32(pseudoHeader[0:4], binary.BigEndian.Uint32(srcIP))
 	binary.BigEndian.PutUint32(pseudoHeader[4:8], binary.BigEndian.Uint32(dstIP))
 	// leave byte 8 (Fixed 8 bits) as all zero as byte 8
-	pseudoHeader[9] = uint8(config.ProtocolID)
+	pseudoHeader[9] = protocolId
 	binary.BigEndian.PutUint16(pseudoHeader[10:12], pcpFrameLength)
 	return pseudoHeader
 }
@@ -195,4 +220,14 @@ func ExtractIpPayload(ipFrame []byte) ([]byte, error) {
 	payload := ipFrame[headerLen:]
 
 	return payload, nil
+}
+
+func GenerateISN() (uint32, error) {
+	// Generate a random 32-bit value
+	var isn uint32
+	err := binary.Read(rand.Reader, binary.BigEndian, &isn)
+	if err != nil {
+		return 0, err
+	}
+	return isn, nil
 }

@@ -7,11 +7,11 @@ import (
 
 // pcp protocol client struct
 type pcpClient struct {
-	ProtocolID         int
+	ProtocolID         uint8
 	ProtoConnectionMap map[string]*pcpProtocolConnection // keep track of all protocolConn created by dialIP
 }
 
-func NewPcpClient(protocolId int) *pcpClient {
+func NewPcpClient(protocolId uint8) *pcpClient {
 	// starts the PCP protocol client main service
 	// the main role is to create pcpClient object - one per system
 

@@ -43,8 +43,15 @@ func main() {
 		os.Exit(0)
 	}()*/
 
-	// Accept incoming connections
-	conn := srv.Accept()
+	for {
+		// Accept incoming connections
+		conn := srv.Accept()
+
+		go handleConnection(conn)
+	}
+}
+
+func handleConnection(conn *server.Connection) {
 	buffer := make([]byte, 1024)
 	for {
 		n, err := conn.Read(buffer)

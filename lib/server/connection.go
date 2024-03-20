@@ -31,6 +31,7 @@ type Connection struct {
 var Mu sync.Mutex
 
 func newConnection(key string, srv *Service, remoteAddr net.Addr, remotePort int, localAddr net.Addr, localPort int) (*Connection, error) {
+	isn, _ := lib.GenerateISN()
 	newConn := &Connection{
 		key:                key,
 		pcpService:         srv,
@@ -38,7 +39,7 @@ func newConnection(key string, srv *Service, remoteAddr net.Addr, remotePort int
 		RemotePort:         remotePort,
 		LocalAddr:          localAddr,
 		LocalPort:          localPort,
-		nextSequenceNumber: 0,
+		nextSequenceNumber: isn,
 		lastAckNumber:      0,
 		InputChannel:       make(chan *lib.PacketVector),
 		readChannel:        make(chan []byte),
@@ -103,7 +104,7 @@ func (c *Connection) handleIncomingPackets() {
 					// 4-way termination initiated from the server
 					c.terminationRespState = lib.RespFinReceived
 					// Sent ACK back to the server
-					c.lastAckNumber += 1
+					c.lastAckNumber = uint32(uint64(c.lastAckNumber) + 1)
 					ackPacket := lib.NewPcpPacket(uint16(c.LocalPort), uint16(c.RemotePort), c.nextSequenceNumber, c.lastAckNumber, lib.ACKFlag, nil)
 					// Send the acknowledgment packet to the other end
 					c.OutputChan <- &lib.PacketVector{Data: ackPacket, RemoteAddr: packet.RemoteAddr, LocalAddr: packet.LocalAddr}
@@ -114,7 +115,7 @@ func (c *Connection) handleIncomingPackets() {
 					finPacket := lib.NewPcpPacket(uint16(c.LocalPort), uint16(c.RemotePort), c.nextSequenceNumber, c.lastAckNumber, lib.FINFlag, nil)
 					c.OutputChan <- &lib.PacketVector{Data: finPacket, RemoteAddr: c.RemoteAddr, LocalAddr: c.LocalAddr}
 					c.terminationRespState = lib.RespFinSent
-					c.nextSequenceNumber += 1
+					c.nextSequenceNumber = uint32(uint64(c.nextSequenceNumber) + 1) // implicit modulo op
 					log.Println("FIN to client sent.")
 				}
 				//ignore FIN packet in other scenario
@@ -126,12 +127,12 @@ func (c *Connection) handleIncomingPackets() {
 
 func (c *Connection) acknowledge(packet *lib.PacketVector) {
 	// prepare a PcpPacket for acknowledging the received packet
-	c.lastAckNumber += packet.Data.SequenceNumber + uint32(len(packet.Data.Payload))
+	c.lastAckNumber = uint32(uint64(packet.Data.SequenceNumber) + uint64(len(packet.Data.Payload))) //implicit modulo op
 	ackPacket := lib.NewPcpPacket(uint16(c.LocalPort), uint16(c.RemotePort), c.nextSequenceNumber, c.lastAckNumber, lib.ACKFlag, nil)
 
 	// Send the acknowledgment packet to the other end
 	c.OutputChan <- &lib.PacketVector{Data: ackPacket, RemoteAddr: packet.RemoteAddr, LocalAddr: packet.LocalAddr}
-	log.Printf("Acknowledging packet with sequence number %d\n", 0)
+	log.Println("Acknowledging packet with SEQ", c.nextSequenceNumber, " and ACQ", c.lastAckNumber)
 }
 
 // Read function for Pcp connection
@@ -216,8 +217,8 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 	copy(payload, buffer)
 	// Construct a packet
 	packet := lib.NewPcpPacket(uint16(c.LocalPort), uint16(c.RemotePort), c.nextSequenceNumber, c.lastAckNumber, 0, payload)
-	c.nextSequenceNumber += uint32(len(payload))
-	c.OutputChan <- &lib.PacketVector{Data: packet, RemoteAddr: c.RemoteAddr, LocalAddr: c.RemoteAddr}
+	c.nextSequenceNumber = uint32(uint64(c.nextSequenceNumber) + uint64(len(payload))) // implicit modulo op
+	c.OutputChan <- &lib.PacketVector{Data: packet, RemoteAddr: c.RemoteAddr, LocalAddr: c.LocalAddr}
 
 	return len(payload), nil
 }
@@ -231,7 +232,7 @@ func (c *Connection) Close() error {
 	c.writeOnHold = true
 	// Assemble FIN packet to be sent to the other end
 	finPacket := lib.NewPcpPacket(uint16(c.LocalPort), uint16(c.RemotePort), c.nextSequenceNumber, c.lastAckNumber, lib.ACKFlag, nil)
-	c.nextSequenceNumber += 1
+	c.nextSequenceNumber = uint32(uint64(c.nextSequenceNumber) + 1) // implicit modulo op
 	c.OutputChan <- &lib.PacketVector{Data: finPacket, RemoteAddr: c.RemoteAddr, LocalAddr: c.LocalAddr}
 	// set 4-way termination state to CallerFINSent
 	c.terminationCallerState = lib.CallerFinSent

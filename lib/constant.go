@@ -27,3 +27,8 @@ const (
 	SYNFlag uint8 = 1 << 1
 	FINFlag uint8 = 1 << 0
 )
+
+const (
+	Red   = "\033[31m"
+	Reset = "\033[0m"
+)

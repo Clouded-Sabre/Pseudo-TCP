@@ -13,6 +13,7 @@ import (
 
 // pcp client protocol connection struct
 type pcpProtocolConnection struct {
+	pcpClientObj          *pcpClient
 	ServerAddr, LocalAddr *net.IPAddr
 	pConn                 *net.IPConn
 	OutputChan            chan *lib.PcpPacket
@@ -31,6 +32,7 @@ func newPcpProtocolConnection(p *pcpClient, serverAddr, localAddr *net.IPAddr) (
 	//defer pConn.Close()
 
 	pConnection := &pcpProtocolConnection{
+		pcpClientObj:        p,
 		LocalAddr:           localAddr,
 		ServerAddr:          serverAddr,
 		pConn:               pConn,
@@ -69,7 +71,7 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*Connection, error) {
 	// Send SYN to server
 	synPacket := lib.NewPcpPacket(uint16(clientPort), uint16(serverPort), newConn.nextSequenceNumber, 0, lib.SYNFlag, nil)
 	p.OutputChan <- synPacket
-	newConn.nextSequenceNumber += 1
+	newConn.nextSequenceNumber = uint32(uint64(newConn.nextSequenceNumber) + 1) // implicit modulo op
 	log.Println("Initiated connection to server with connKey:", connKey)
 
 	// Wait for SYN-ACK
@@ -78,7 +80,7 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*Connection, error) {
 		packet := <-newConn.InputChannel
 		if packet.Flags == lib.SYNFlag|lib.ACKFlag { // Verify if it's a SYN-ACK from the server
 			// Prepare ACK packet
-			newConn.lastAckNumber = packet.SequenceNumber + 1
+			newConn.lastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
 			ackPacket := lib.NewPcpPacket(uint16(clientPort), uint16(serverPort), newConn.nextSequenceNumber, newConn.lastAckNumber, lib.ACKFlag, nil)
 			newConn.OutputChan <- ackPacket
 			//newConn.expectedAckNum = 2
@@ -120,6 +122,13 @@ func (p *pcpProtocolConnection) handleIncomingPackets() {
 			log.Println("Received IP frame is il-formated. Ignore it!")
 			continue
 		}
+		log.Println("extracted PCP frame length is", len(pcpFrame), pcpFrame)
+		// check PCP packet checksum
+		if !lib.VerifyChecksum(pcpFrame, p.ServerAddr, p.LocalAddr, uint8(p.pcpClientObj.ProtocolID)) {
+			log.Println("Packet checksum verification failed. Skip this packet.")
+			continue
+		}
+
 		// Extract destination port
 		packet := &lib.PcpPacket{}
 		packet.Unmarshal(pcpFrame)
@@ -163,7 +172,7 @@ func (p *pcpProtocolConnection) handleOutgoingPackets() {
 		}
 
 		// Marshal the packet into bytes
-		frameBytes := packet.Marshal(p.LocalAddr, p.ServerAddr)
+		frameBytes := packet.Marshal(p.LocalAddr, p.ServerAddr, p.pcpClientObj.ProtocolID)
 		// Write the packet to the interface
 		_, err := p.pConn.Write(frameBytes)
 		if err != nil {

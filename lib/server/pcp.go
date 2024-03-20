@@ -12,12 +12,13 @@ import (
 )
 
 type PcpServer struct {
-	ProtocolID         int
+	ProtocolID         uint8
 	ProtoConnectionMap map[string]*PcpProtocolConnection // keep track of all protocolConn created by dialIP
 }
 
 // pcp protocol server struct
 type PcpProtocolConnection struct {
+	pcpServerObj       *PcpServer
 	ServerAddr         net.Addr
 	Connection         net.PacketConn
 	OutputChan         chan *lib.PacketVector
@@ -25,7 +26,7 @@ type PcpProtocolConnection struct {
 	serviceCloseSignal chan *Service
 }
 
-func NewPcpServer(protocolId int) (*PcpServer, error) {
+func NewPcpServer(protocolId uint8) (*PcpServer, error) {
 	// starts the PCP protocol client main service
 	// the main role is to create pcpServer object - one per system
 
@@ -42,14 +43,14 @@ func NewPcpServer(protocolId int) (*PcpServer, error) {
 	return pcpServerObj, nil
 }
 
-func newPcpServerProtocolConnection(protocolId int, serverIP string) (*PcpProtocolConnection, error) { // serverIP must be a specific IP, not 0.0.0.0
+func newPcpServerProtocolConnection(p *PcpServer, serverIP string) (*PcpProtocolConnection, error) { // serverIP must be a specific IP, not 0.0.0.0
 	serverAddr, err := net.ResolveIPAddr("ip", serverIP)
 	if err != nil {
 		fmt.Println("Error:", err)
 		return nil, err
 	}
 	// Listen on the PCP protocol (20) at the server IP
-	protocolConn, err := net.ListenPacket("ip:"+strconv.Itoa(int(protocolId)), serverIP)
+	protocolConn, err := net.ListenPacket("ip:"+strconv.Itoa(int(p.ProtocolID)), serverIP)
 	if err != nil {
 		fmt.Println("Error listening:", err)
 		return nil, err
@@ -62,6 +63,7 @@ func newPcpServerProtocolConnection(protocolId int, serverIP string) (*PcpProtoc
 	//go checkServiceHealth(services)
 
 	pcpObj := &PcpProtocolConnection{
+		pcpServerObj:       p,
 		ServerAddr:         serverAddr,
 		Connection:         protocolConn,
 		OutputChan:         make(chan *lib.PacketVector),
@@ -90,6 +92,12 @@ func (p *PcpProtocolConnection) handlingIncomingPackets() {
 		packetData := make([]byte, n)
 		copy(packetData, buffer[:n])
 
+		// check PCP packet checksum
+		if !lib.VerifyChecksum(packetData, addr, p.ServerAddr, p.pcpServerObj.ProtocolID) {
+			log.Println("Packet checksum verification failed. Skip this packet.")
+			continue
+		}
+
 		// Extract destination port
 		packet := &lib.PcpPacket{}
 		packet.Unmarshal(packetData)
@@ -116,8 +124,8 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 		packet := <-p.OutputChan // Subscribe to p.OutputChan
 		// Marshal the packet into bytes
 		fmt.Printf("Sending payload: %+v\n", packet.Data)
-		frameBytes := packet.Data.Marshal(packet.LocalAddr, packet.RemoteAddr)
-		fmt.Println("Frame Length:", len(frameBytes))
+		frameBytes := packet.Data.Marshal(packet.LocalAddr, packet.RemoteAddr, p.pcpServerObj.ProtocolID)
+		fmt.Println("Frame Length:", len(frameBytes), frameBytes)
 		// Write the packet to the interface
 		_, err := p.Connection.WriteTo(frameBytes, packet.RemoteAddr)
 		if err != nil {
@@ -161,7 +169,7 @@ func (p *PcpServer) ListenPcp(serviceIP string, port int) (*Service, error) {
 	pConn, ok := p.ProtoConnectionMap[pConnKey]
 	if !ok {
 		// need to create new protocol connection
-		pConn, err = newPcpServerProtocolConnection(p.ProtocolID, normServiceIpString)
+		pConn, err = newPcpServerProtocolConnection(p, normServiceIpString)
 		if err != nil {
 			log.Println("Error creating Pcp Client Protocol Connection:", err)
 			return nil, err

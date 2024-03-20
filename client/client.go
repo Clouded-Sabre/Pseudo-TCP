@@ -1,8 +1,7 @@
-// client.go
-
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"time"
@@ -12,9 +11,15 @@ import (
 )
 
 func main() {
-	pcpCleintObj := client.NewPcpClient(config.ProtocolID)
+	// Define command-line flags
+	sourceIP := flag.String("sourceIP", config.ClientIP, "Source IP address")
+	serverIP := flag.String("serverIP", config.ServerIP, "Server IP address")
+	serverPort := flag.Int("serverPort", config.ServerPort, "Server port")
+	flag.Parse()
+
+	pcpClientObj := client.NewPcpClient(config.ProtocolID)
 	// Dial to the server
-	conn, err := pcpCleintObj.DialPcp(config.ClientIP, config.ServerIP, config.ServerPort)
+	conn, err := pcpClientObj.DialPcp(*sourceIP, *serverIP, uint16(*serverPort))
 	if err != nil {
 		fmt.Println("Error connecting:", err)
 		return
@@ -26,7 +31,7 @@ func main() {
 	// Simulate data transmission
 	for i := 0; i < 5; i++ {
 		// Construct a packet
-		payload := []byte(fmt.Sprintf("Data packet %d", i))
+		payload := []byte(fmt.Sprintf("Data packet %d ", i))
 
 		// Send the packet to the server
 		conn.Write(payload)

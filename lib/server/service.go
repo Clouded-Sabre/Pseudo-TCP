@@ -151,13 +151,13 @@ func (s *Service) handleSynPacket(packet *lib.PacketVector) {
 
 	// Send SYN-ACK packet to the SYN packet sender
 	// Construct a SYN-ACK packet
-	newConn.lastAckNumber = packet.Data.SequenceNumber + 1
-	synAckPacket := lib.NewPcpPacket(uint16(s.Port), packet.Data.SourcePort, 0, newConn.lastAckNumber, lib.SYNFlag|lib.ACKFlag, nil)
+	newConn.lastAckNumber = uint32(uint64(packet.Data.SequenceNumber) + 1)
+	synAckPacket := lib.NewPcpPacket(uint16(s.Port), packet.Data.SourcePort, newConn.nextSequenceNumber, newConn.lastAckNumber, lib.SYNFlag|lib.ACKFlag, nil)
 	fmt.Printf("%+v\n", synAckPacket)
 
 	// Send the SYN-ACK packet to the sender
 	s.OutputChan <- &lib.PacketVector{Data: synAckPacket, RemoteAddr: packet.RemoteAddr, LocalAddr: packet.LocalAddr}
-	newConn.nextSequenceNumber += 1
+	newConn.nextSequenceNumber = uint32(uint64(newConn.nextSequenceNumber) + 1) // implicit modulo op
 
 	newConn.OpenServerState = lib.SynAckSent // set 3-way handshake state
 

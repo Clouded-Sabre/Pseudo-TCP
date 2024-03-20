@@ -27,13 +27,14 @@ type Connection struct {
 }
 
 func newConnection(key string, pClientConn *pcpProtocolConnection, remoteAddr net.Addr, remotePort int, localAddr net.Addr, localPort int) (*Connection, error) {
+	isn, _ := lib.GenerateISN()
 	newConn := &Connection{
 		key:                key,
 		RemoteAddr:         remoteAddr,
 		RemotePort:         remotePort,
 		LocalAddr:          localAddr,
 		LocalPort:          localPort,
-		nextSequenceNumber: 0,
+		nextSequenceNumber: isn,
 		lastAckNumber:      0,
 		InputChannel:       make(chan *lib.PcpPacket),
 		readChannel:        make(chan []byte),
@@ -47,8 +48,8 @@ func newConnection(key string, pClientConn *pcpProtocolConnection, remoteAddr ne
 
 func (c *Connection) handleIncomingPackets() {
 	var (
-		packet                     *lib.PcpPacket
-		isACK, isFIN, isDataPacket bool
+		packet                            *lib.PcpPacket
+		isACK, isFIN, isRST, isDataPacket bool
 	)
 	// Create a loop to read from connection's input channel
 	for {
@@ -56,6 +57,7 @@ func (c *Connection) handleIncomingPackets() {
 		// Extract SYN and ACK flags from the packet
 		isACK = packet.Flags&lib.ACKFlag != 0
 		isFIN = packet.Flags&lib.FINFlag != 0
+		isRST = packet.Flags&lib.RSTFlag != 0
 		isDataPacket = len(packet.Payload) > 0
 		if isDataPacket {
 			// data packet received
@@ -82,7 +84,7 @@ func (c *Connection) handleIncomingPackets() {
 					// 4-way termination initiated from the client
 					c.terminationRespState = lib.CallerFinReceived
 					// Sent ACK back to the server
-					c.lastAckNumber = packet.SequenceNumber + 1
+					c.lastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
 					ackPacket := lib.NewPcpPacket(uint16(c.LocalPort), uint16(c.RemotePort), c.nextSequenceNumber, c.lastAckNumber, lib.ACKFlag, nil)
 					// Send the acknowledgment packet to the other end
 					c.OutputChan <- ackPacket
@@ -101,7 +103,7 @@ func (c *Connection) handleIncomingPackets() {
 					c.terminationRespState = lib.RespFinReceived
 					// Sent ACK back to the server
 					// Assemble ACK packet to be sent to the other end
-					c.lastAckNumber = packet.SequenceNumber + 1
+					c.lastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
 					ackPacket := lib.NewPcpPacket(uint16(c.LocalPort), uint16(c.RemotePort), c.nextSequenceNumber, c.lastAckNumber, lib.ACKFlag, nil)
 					// Send the acknowledgment packet to the other end
 					c.OutputChan <- ackPacket
@@ -114,6 +116,9 @@ func (c *Connection) handleIncomingPackets() {
 					c.terminationRespState = lib.RespFinSent
 				}
 				//ignore FIN packet in other scenario
+			}
+			if isRST {
+				log.Println(lib.Red + "Got RST packet from server!" + lib.Reset)
 			}
 		}
 
@@ -128,7 +133,7 @@ func (c *Connection) Close() error {
 	// Assemble FIN packet to be sent to the other end
 	finPacket := lib.NewPcpPacket(uint16(c.LocalPort), uint16(c.RemotePort), c.nextSequenceNumber, c.lastAckNumber, lib.FINFlag, nil)
 	c.OutputChan <- finPacket
-	c.nextSequenceNumber += 1
+	c.nextSequenceNumber = uint32(uint64(c.nextSequenceNumber) + 1) // implicit modulo op
 	// set 4-way termination state to CallerFINSent
 	c.terminationCallerState = lib.CallerFinSent
 
@@ -137,7 +142,7 @@ func (c *Connection) Close() error {
 
 func (c *Connection) acknowledge(packet *lib.PcpPacket) {
 	// prepare a PcpPacket for acknowledging the received packet
-	c.lastAckNumber = packet.SequenceNumber + uint32(len(packet.Payload))
+	c.lastAckNumber = uint32(uint64(packet.SequenceNumber) + uint64(len(packet.Payload)))
 	ackPacket := lib.NewPcpPacket(uint16(c.LocalPort), uint16(c.RemotePort), c.nextSequenceNumber, c.lastAckNumber, lib.ACKFlag, nil)
 
 	// Send the acknowledgment packet to the other end
@@ -190,7 +195,7 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 	log.Println("Sent payload:", string(payload))
 	// Construct a packet
 	packet := lib.NewPcpPacket(uint16(c.LocalPort), uint16(c.RemotePort), c.nextSequenceNumber, c.lastAckNumber, 0, payload)
-	c.nextSequenceNumber += uint32(len(packet.Payload))
+	c.nextSequenceNumber = uint32(uint64(c.nextSequenceNumber) + uint64(len(packet.Payload)))
 
 	c.OutputChan <- packet
 
