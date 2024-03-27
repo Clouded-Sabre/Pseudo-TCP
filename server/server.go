@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"time"
@@ -12,7 +13,16 @@ import (
 var (
 	pcpServerObj *server.PcpServer
 	err          error
+	serverIP     string
+	serverPort   int
 )
+
+func init() {
+	// Define CLI flags for server IP and port
+	flag.StringVar(&serverIP, "ip", "127.0.0.1", "Server IP address")
+	flag.IntVar(&serverPort, "port", 8080, "Server port number")
+	flag.Parse()
+}
 
 func main() {
 	// Create PCP server
@@ -28,13 +38,13 @@ func main() {
 	//signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 
 	// Start the PCP server
-	srv, err := pcpServerObj.ListenPcp(config.ServerIP, config.ServerPort)
+	srv, err := pcpServerObj.ListenPcp(serverIP, serverPort)
 	if err != nil {
-		log.Printf("PCP server error listening at %s:%d: %s", config.ServerIP, config.ServerPort, err)
+		log.Printf("PCP server error listening at %s:%d: %s", serverIP, serverPort, err)
 		return
 	}
 
-	log.Printf("PCP service started at %s:%d", config.ServerIP, config.ServerPort)
+	log.Printf("PCP service started at %s:%d", serverIP, serverPort)
 	// Handle Ctrl+C signal for graceful shutdown
 	/*go func() {
 		<-signalChan

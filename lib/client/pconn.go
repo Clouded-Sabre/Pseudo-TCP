@@ -5,6 +5,7 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"os/exec"
 	"strconv"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
@@ -69,24 +70,32 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*Connection, error) {
 	p.tempConnectionMap[connKey] = newConn
 
 	// Send SYN to server
-	synPacket := lib.NewPcpPacket(uint16(clientPort), uint16(serverPort), newConn.nextSequenceNumber, 0, lib.SYNFlag, nil)
+	synPacket := lib.NewPcpPacket(newConn.attrs.NextSequenceNumber, 0, lib.SYNFlag, nil, newConn.attrs)
 	p.OutputChan <- synPacket
-	newConn.nextSequenceNumber = uint32(uint64(newConn.nextSequenceNumber) + 1) // implicit modulo op
+	newConn.attrs.NextSequenceNumber = uint32(uint64(newConn.attrs.NextSequenceNumber) + 1) // implicit modulo op
 	log.Println("Initiated connection to server with connKey:", connKey)
 
 	// Wait for SYN-ACK
 	// Create a loop to read from connection's input channel till we see SYN-ACK packet from the other end
 	for {
-		packet := <-newConn.InputChannel
+		packet := <-newConn.attrs.InputChannel
 		if packet.Flags == lib.SYNFlag|lib.ACKFlag { // Verify if it's a SYN-ACK from the server
 			// Prepare ACK packet
-			newConn.lastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
-			ackPacket := lib.NewPcpPacket(uint16(clientPort), uint16(serverPort), newConn.nextSequenceNumber, newConn.lastAckNumber, lib.ACKFlag, nil)
-			newConn.OutputChan <- ackPacket
+			newConn.attrs.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
+			ackPacket := lib.NewPcpPacket(newConn.attrs.NextSequenceNumber, newConn.attrs.LastAckNumber, lib.ACKFlag, nil, newConn.attrs)
+			newConn.attrs.OutputChan <- ackPacket
 			//newConn.expectedAckNum = 2
 
 			// Connection established, remove newConn from tempClientConnections, and place it into clientConnections pool
 			delete(p.tempConnectionMap, connKey)
+
+			// Add iptables rule to drop RST packets
+			if err := addIptablesRule(p.ServerAddr.IP.To4().String(), serverPort); err != nil {
+				log.Println("Error adding iptables rule:", err)
+				return nil, err
+			}
+
+			newConn.attrs.IsOpenConnection = true
 			p.ConnectionMap[connKey] = newConn
 
 			// start go routine to handle incoming packets for new connection
@@ -95,6 +104,15 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*Connection, error) {
 			return newConn, nil
 		}
 	}
+}
+
+// addIptablesRule adds an iptables rule to drop RST packets originating from the given IP and port.
+func addIptablesRule(ip string, port int) error {
+	cmd := exec.Command("iptables", "-A", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-d", ip, "--dport", strconv.Itoa(port), "-j", "DROP")
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // handleServicePacket is the main service packet dispatches loop.
@@ -124,14 +142,14 @@ func (p *pcpProtocolConnection) handleIncomingPackets() {
 		}
 		log.Println("extracted PCP frame length is", len(pcpFrame), pcpFrame)
 		// check PCP packet checksum
-		if !lib.VerifyChecksum(pcpFrame, p.ServerAddr, p.LocalAddr, uint8(p.pcpClientObj.ProtocolID)) {
+		/*if !lib.VerifyChecksum(pcpFrame, p.ServerAddr, p.LocalAddr, uint8(p.pcpClientObj.ProtocolID)) {
 			log.Println("Packet checksum verification failed. Skip this packet.")
 			continue
-		}
+		}*/
 
 		// Extract destination port
 		packet := &lib.PcpPacket{}
-		packet.Unmarshal(pcpFrame)
+		packet.Unmarshal(pcpFrame, p.ServerAddr, p.LocalAddr)
 		fmt.Println("Received packet Length:", n)
 		fmt.Printf("Got packet:\n %+v\n", packet)
 
@@ -147,7 +165,7 @@ func (p *pcpProtocolConnection) handleIncomingPackets() {
 		conn, ok := p.ConnectionMap[connKey]
 		if ok {
 			// open connection. Dispatch the packet to the corresponding connection's input channel
-			conn.InputChannel <- packet
+			conn.attrs.InputChannel <- packet
 			continue
 		}
 
@@ -155,7 +173,7 @@ func (p *pcpProtocolConnection) handleIncomingPackets() {
 		tempConn, ok := p.tempConnectionMap[connKey]
 		if ok {
 			// forward to that connection's input channel
-			tempConn.InputChannel <- packet
+			tempConn.attrs.InputChannel <- packet
 			continue
 		}
 
@@ -167,12 +185,12 @@ func (p *pcpProtocolConnection) handleIncomingPackets() {
 func (p *pcpProtocolConnection) handleOutgoingPackets() {
 	for {
 		packet := <-p.OutputChan // Subscribe to p.OutputChan
-		if len(packet.Payload) > 0 {
-			fmt.Println("outgoing packet payload is", packet.Payload)
-		}
+		/*if len(packet.Data.Payload) > 0 {
+			fmt.Println("outgoing packet payload is", packet.Data.Payload)
+		}*/
 
 		// Marshal the packet into bytes
-		frameBytes := packet.Marshal(p.LocalAddr, p.ServerAddr, p.pcpClientObj.ProtocolID)
+		frameBytes := packet.Marshal(p.pcpClientObj.ProtocolID)
 		// Write the packet to the interface
 		_, err := p.pConn.Write(frameBytes)
 		if err != nil {
@@ -187,16 +205,16 @@ func (p *pcpProtocolConnection) handleCloseConnection() {
 	for {
 		conn := <-p.ConnCloseSignalChan
 		// clear it from p.ConnectionMap
-		_, ok := p.ConnectionMap[conn.key]
+		_, ok := p.ConnectionMap[conn.attrs.Key]
 		if !ok {
 			// connection does not exist in ConnectionMap
-			log.Printf("Pcp Client connection does not exist in %s:%d->%s:%d", conn.LocalAddr.(*net.IPAddr).IP.String(), conn.LocalPort, conn.RemoteAddr.(*net.IPAddr).IP.String(), conn.RemotePort)
+			log.Printf("Pcp Client connection does not exist in %s:%d->%s:%d", conn.attrs.LocalAddr.(*net.IPAddr).IP.String(), conn.attrs.LocalPort, conn.attrs.RemoteAddr.(*net.IPAddr).IP.String(), conn.attrs.RemotePort)
 			continue
 		}
 
 		// delete the clientConn from ConnectionMap
-		delete(p.ConnectionMap, conn.key)
-		log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.LocalAddr.(*net.IPAddr).IP.String(), conn.LocalPort, conn.RemoteAddr.(*net.IPAddr).IP.String(), conn.RemotePort)
+		delete(p.ConnectionMap, conn.attrs.Key)
+		log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.attrs.LocalAddr.(*net.IPAddr).IP.String(), conn.attrs.LocalPort, conn.attrs.RemoteAddr.(*net.IPAddr).IP.String(), conn.attrs.RemotePort)
 
 	}
 }
@@ -207,11 +225,11 @@ func (p *pcpProtocolConnection) getAvailableRandomClientPort() int {
 
 	// Populate the map with existing client ports
 	for _, conn := range p.ConnectionMap {
-		existingPorts[conn.LocalPort] = true
+		existingPorts[conn.attrs.LocalPort] = true
 	}
 
 	for _, conn := range p.tempConnectionMap {
-		existingPorts[conn.LocalPort] = true
+		existingPorts[conn.attrs.LocalPort] = true
 	}
 
 	// Generate a random port number until it's not in the existingPorts map

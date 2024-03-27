@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os/exec"
 	"strconv"
 
 	//"time"
@@ -21,7 +22,7 @@ type PcpProtocolConnection struct {
 	pcpServerObj       *PcpServer
 	ServerAddr         net.Addr
 	Connection         net.PacketConn
-	OutputChan         chan *lib.PacketVector
+	OutputChan         chan *lib.PcpPacket
 	ServiceMap         map[int]*Service
 	serviceCloseSignal chan *Service
 }
@@ -66,7 +67,7 @@ func newPcpServerProtocolConnection(p *PcpServer, serverIP string) (*PcpProtocol
 		pcpServerObj:       p,
 		ServerAddr:         serverAddr,
 		Connection:         protocolConn,
-		OutputChan:         make(chan *lib.PacketVector),
+		OutputChan:         make(chan *lib.PcpPacket),
 		ServiceMap:         make(map[int]*Service),
 		serviceCloseSignal: make(chan *Service),
 	}
@@ -93,15 +94,16 @@ func (p *PcpProtocolConnection) handlingIncomingPackets() {
 		copy(packetData, buffer[:n])
 
 		// check PCP packet checksum
-		if !lib.VerifyChecksum(packetData, addr, p.ServerAddr, p.pcpServerObj.ProtocolID) {
+		/*if !lib.VerifyChecksum(packetData, addr, p.ServerAddr, p.pcpServerObj.ProtocolID) {
 			log.Println("Packet checksum verification failed. Skip this packet.")
 			continue
-		}
+		}*/
 
 		// Extract destination port
 		packet := &lib.PcpPacket{}
-		packet.Unmarshal(packetData)
+		packet.Unmarshal(packetData, addr, p.ServerAddr)
 		destPort := packet.DestinationPort
+		//log.Printf("Got packet with options: %+v\n", packet.TcpOptions)
 
 		// Check if a connection is registered for the packet
 		config.Mu.Lock()
@@ -109,12 +111,12 @@ func (p *PcpProtocolConnection) handlingIncomingPackets() {
 		config.Mu.Unlock()
 
 		if !ok {
-			fmt.Println("No service registered for port:", destPort)
+			//fmt.Println("No service registered for port:", destPort)
 			continue
 		}
 
 		// Dispatch the packet to the corresponding service's input channel
-		service.InputChannel <- &lib.PacketVector{Data: packet, RemoteAddr: addr, LocalAddr: p.ServerAddr}
+		service.InputChannel <- packet
 	}
 }
 
@@ -123,11 +125,9 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 	for {
 		packet := <-p.OutputChan // Subscribe to p.OutputChan
 		// Marshal the packet into bytes
-		fmt.Printf("Sending payload: %+v\n", packet.Data)
-		frameBytes := packet.Data.Marshal(packet.LocalAddr, packet.RemoteAddr, p.pcpServerObj.ProtocolID)
-		fmt.Println("Frame Length:", len(frameBytes), frameBytes)
+		frameBytes := packet.Marshal(p.pcpServerObj.ProtocolID)
 		// Write the packet to the interface
-		_, err := p.Connection.WriteTo(frameBytes, packet.RemoteAddr)
+		_, err := p.Connection.WriteTo(frameBytes, packet.DestAddr)
 		if err != nil {
 			fmt.Println("Error writing packet:", err)
 			continue
@@ -179,20 +179,40 @@ func (p *PcpServer) ListenPcp(serviceIP string, port int) (*Service, error) {
 	}
 
 	// then we need to check if there is already a service listening at that serviceIP and port
-	srv, ok := pConn.ServiceMap[port]
+	_, ok = pConn.ServiceMap[port]
 	if !ok {
 		// need to create new service
-		srv, err = newService(pConn, serviceAddr, port, pConn.OutputChan)
+		// create new Pcp service
+		srv, err := newService(pConn, serviceAddr, port, pConn.OutputChan)
 		if err != nil {
 			log.Println("Error creating service:", err)
 			return nil, err
 		}
+
+		// Add iptables rule to drop RST packets created by system TCP/IP network stack
+		if err := addIptablesRule(serviceIP, port); err != nil {
+			log.Println("Error adding iptables rule:", err)
+			return nil, err
+		}
+
 		// add it to ServiceMap
 		pConn.ServiceMap[port] = srv
+
+		go srv.handleServicePackets()
+		go srv.handleCloseConnections()
+
+		return srv, nil
+	} else {
+		err = fmt.Errorf("%s:%d is already taken", serviceIP, port)
+		return nil, err
 	}
+}
 
-	go srv.handleServicePackets()
-	go srv.handleCloseConnections()
-
-	return srv, nil
+// addIptablesRule adds an iptables rule to drop RST packets originating from the given IP and port.
+func addIptablesRule(ip string, port int) error {
+	cmd := exec.Command("iptables", "-A", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-s", ip, "--sport", strconv.Itoa(port), "-j", "DROP")
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	return nil
 }

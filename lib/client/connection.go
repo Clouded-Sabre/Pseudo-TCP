@@ -3,43 +3,42 @@ package client
 import (
 	"fmt"
 	"log"
+	"math"
 	"net"
 
+	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 	"github.com/Clouded-Sabre/Pseudo-TCP/lib"
 )
 
 type Connection struct {
-	key                    string // connection key for easy reference
-	RemoteAddr             net.Addr
-	RemotePort             int
-	LocalAddr              net.Addr
-	LocalPort              int
-	nextSequenceNumber     uint32                 // the SEQ sequence number of the next outgoing packet
-	lastAckNumber          uint32                 // the last acknowleged incoming packet
-	InputChannel           chan *lib.PcpPacket    // per connection packet input channel
-	OutputChan             chan *lib.PcpPacket    // overall output channel shared by all connections
-	readChannel            chan []byte            // for connection read function
-	terminationCallerState uint                   // 4-way termination caller states
-	terminationRespState   uint                   // 4-way termination responder states
-	pcpClientConn          *pcpProtocolConnection // point back to parent
-	//expectedAckNum, expectedSeqNum uint32
-	writeOnHold bool // true if 4-way termination starts
+	attrs         *lib.Connection
+	pcpClientConn *pcpProtocolConnection // point back to parent
 }
 
 func newConnection(key string, pClientConn *pcpProtocolConnection, remoteAddr net.Addr, remotePort int, localAddr net.Addr, localPort int) (*Connection, error) {
 	isn, _ := lib.GenerateISN()
-	newConn := &Connection{
-		key:                key,
+	options := &lib.Options{
+		WindowScaleShiftCount: config.WindowScale,
+		MSS:                   config.PreferredMss,
+	}
+	newAttrs := &lib.Connection{
+		Key:                key,
 		RemoteAddr:         remoteAddr,
 		RemotePort:         remotePort,
 		LocalAddr:          localAddr,
 		LocalPort:          localPort,
-		nextSequenceNumber: isn,
-		lastAckNumber:      0,
+		NextSequenceNumber: isn,
+		LastAckNumber:      0,
+		WindowSize:         math.MaxUint16,
 		InputChannel:       make(chan *lib.PcpPacket),
-		readChannel:        make(chan []byte),
+		ReadChannel:        make(chan []byte),
 		OutputChan:         pClientConn.OutputChan,
-		pcpClientConn:      pClientConn,
+		// all the rest variables keep there init value
+		TcpOptions: options,
+	}
+	newConn := &Connection{
+		attrs:         newAttrs,
+		pcpClientConn: pClientConn,
 		// all the rest variables keep there init value
 	}
 
@@ -53,7 +52,7 @@ func (c *Connection) handleIncomingPackets() {
 	)
 	// Create a loop to read from connection's input channel
 	for {
-		packet = <-c.InputChannel
+		packet = <-c.attrs.InputChannel
 		// Extract SYN and ACK flags from the packet
 		isACK = packet.Flags&lib.ACKFlag != 0
 		isFIN = packet.Flags&lib.FINFlag != 0
@@ -65,13 +64,13 @@ func (c *Connection) handleIncomingPackets() {
 		} else { // ACK only or FIN packet
 			if isACK {
 				// check if 4-way termination is in process
-				if c.terminationCallerState == lib.CallerFinSent {
+				if c.attrs.TerminationCallerState == lib.CallerFinSent {
 					// set the state to callerACKReceived and wait for FIN
-					c.terminationCallerState = lib.CallerAckReceived
+					c.attrs.TerminationCallerState = lib.CallerAckReceived
 				}
-				if c.terminationRespState == lib.RespFinSent {
+				if c.attrs.TerminationRespState == lib.RespFinSent {
 					// 4-way termination completed
-					c.terminationRespState = lib.RespAckReceived
+					c.attrs.TerminationRespState = lib.RespAckReceived
 					// sent the close signal to pConnClient to clear the connection
 					c.pcpClientConn.ConnCloseSignalChan <- c
 					return // this will terminate this go routine gracefully
@@ -79,41 +78,41 @@ func (c *Connection) handleIncomingPackets() {
 				// ignore ACK for data packet
 			}
 			if isFIN {
-				if c.terminationCallerState == lib.CallerAckReceived {
+				if c.attrs.TerminationCallerState == lib.CallerAckReceived {
 					log.Println("FIN from server received.")
 					// 4-way termination initiated from the client
-					c.terminationRespState = lib.CallerFinReceived
+					c.attrs.TerminationRespState = lib.CallerFinReceived
 					// Sent ACK back to the server
-					c.lastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
-					ackPacket := lib.NewPcpPacket(uint16(c.LocalPort), uint16(c.RemotePort), c.nextSequenceNumber, c.lastAckNumber, lib.ACKFlag, nil)
+					c.attrs.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
+					ackPacket := lib.NewPcpPacket(c.attrs.NextSequenceNumber, c.attrs.LastAckNumber, lib.ACKFlag, nil, c.attrs)
 					// Send the acknowledgment packet to the other end
-					c.OutputChan <- ackPacket
+					c.attrs.OutputChan <- ackPacket
 
 					log.Println("ACK to FIN from server sent.")
 					// set 4-way termination state to CallerFINSent
-					c.terminationCallerState = lib.CallerAckSent
+					c.attrs.TerminationCallerState = lib.CallerAckSent
 					// sent the close signal to pConnClient to clear the connection
 					c.pcpClientConn.ConnCloseSignalChan <- c
 					return // this will terminate this go routine gracefully
 				}
-				if c.terminationRespState == 0 && c.terminationCallerState == 0 {
+				if c.attrs.TerminationRespState == 0 && c.attrs.TerminationCallerState == 0 {
 					// put write channel on hold so that no data will interfere with the termination process
-					c.writeOnHold = true
+					c.attrs.WriteOnHold = true
 					// 4-way termination initiated from the server
-					c.terminationRespState = lib.RespFinReceived
+					c.attrs.TerminationRespState = lib.RespFinReceived
 					// Sent ACK back to the server
 					// Assemble ACK packet to be sent to the other end
-					c.lastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
-					ackPacket := lib.NewPcpPacket(uint16(c.LocalPort), uint16(c.RemotePort), c.nextSequenceNumber, c.lastAckNumber, lib.ACKFlag, nil)
+					c.attrs.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
+					ackPacket := lib.NewPcpPacket(c.attrs.NextSequenceNumber, c.attrs.LastAckNumber, lib.ACKFlag, nil, c.attrs)
 					// Send the acknowledgment packet to the other end
-					c.OutputChan <- ackPacket
+					c.attrs.OutputChan <- ackPacket
 					//c.nextSequenceNumber += 1
 
 					// sent fin packet to the server
 					// Assemble ACK packet to be sent to the other end
-					finPacket := lib.NewPcpPacket(uint16(c.LocalPort), uint16(c.RemotePort), c.nextSequenceNumber, c.lastAckNumber, lib.FINFlag, nil)
-					c.OutputChan <- finPacket
-					c.terminationRespState = lib.RespFinSent
+					finPacket := lib.NewPcpPacket(c.attrs.NextSequenceNumber, c.attrs.LastAckNumber, lib.FINFlag, nil, c.attrs)
+					c.attrs.OutputChan <- finPacket
+					c.attrs.TerminationRespState = lib.RespFinSent
 				}
 				//ignore FIN packet in other scenario
 			}
@@ -129,24 +128,24 @@ func (c *Connection) handleIncomingPackets() {
 // sending FIN packet to the other end
 func (c *Connection) Close() error {
 	// put write channel on hold so that no data packet interfere with termination process
-	c.writeOnHold = true
+	c.attrs.WriteOnHold = true
 	// Assemble FIN packet to be sent to the other end
-	finPacket := lib.NewPcpPacket(uint16(c.LocalPort), uint16(c.RemotePort), c.nextSequenceNumber, c.lastAckNumber, lib.FINFlag, nil)
-	c.OutputChan <- finPacket
-	c.nextSequenceNumber = uint32(uint64(c.nextSequenceNumber) + 1) // implicit modulo op
+	finPacket := lib.NewPcpPacket(c.attrs.NextSequenceNumber, c.attrs.LastAckNumber, lib.FINFlag, nil, c.attrs)
+	c.attrs.OutputChan <- finPacket
+	c.attrs.NextSequenceNumber = uint32(uint64(c.attrs.NextSequenceNumber) + 1) // implicit modulo op
 	// set 4-way termination state to CallerFINSent
-	c.terminationCallerState = lib.CallerFinSent
+	c.attrs.TerminationCallerState = lib.CallerFinSent
 
 	return nil
 }
 
 func (c *Connection) acknowledge(packet *lib.PcpPacket) {
 	// prepare a PcpPacket for acknowledging the received packet
-	c.lastAckNumber = uint32(uint64(packet.SequenceNumber) + uint64(len(packet.Payload)))
-	ackPacket := lib.NewPcpPacket(uint16(c.LocalPort), uint16(c.RemotePort), c.nextSequenceNumber, c.lastAckNumber, lib.ACKFlag, nil)
+	c.attrs.LastAckNumber = uint32(uint64(packet.SequenceNumber) + uint64(len(packet.Payload)))
+	ackPacket := lib.NewPcpPacket(c.attrs.NextSequenceNumber, c.attrs.LastAckNumber, lib.ACKFlag, nil, c.attrs)
 
 	// Send the acknowledgment packet to the other end
-	c.OutputChan <- ackPacket
+	c.attrs.OutputChan <- ackPacket
 }
 
 // Read function for Pcp connection
@@ -154,16 +153,19 @@ func (c *Connection) handleDataPacket(packet *lib.PcpPacket) {
 	// Extract SYN and ACK flags from the packet
 	//isACK := packet.Flags&ACKFlag != 0
 	// check SEQ and ACK
-	if packet.SequenceNumber < c.lastAckNumber {
+	if packet.SequenceNumber < c.attrs.LastAckNumber {
 		// out of order packet received ignore it
-		fmt.Println("last acknowledged SEQ:", c.lastAckNumber, ", but got incoming SEQ:", packet.SequenceNumber)
-		fmt.Println("Received out-of-order data packet. Ignore it\n", packet)
+		fmt.Println("last acknowledged SEQ:", c.attrs.LastAckNumber, ", but got incoming SEQ:", packet.SequenceNumber)
+		fmt.Println("Received out-of-order data packet. Just resent the last ACK message.\n", packet)
+		ackPacket := lib.NewPcpPacket(c.attrs.NextSequenceNumber, c.attrs.LastAckNumber, lib.ACKFlag, nil, c.attrs)
+		// Send the acknowledgment packet to the other end
+		c.attrs.OutputChan <- ackPacket
 		return
 	}
 	// we ignore ACK info in the received data packet for now
 
 	// put packet payload to read channel
-	c.readChannel <- packet.Payload
+	c.attrs.ReadChannel <- packet.Payload
 
 	// send ACK packet back to the server
 	c.acknowledge(packet)
@@ -171,7 +173,7 @@ func (c *Connection) handleDataPacket(packet *lib.PcpPacket) {
 
 // connection read function to mimick net lib TCP read function
 func (c *Connection) Read(buffer []byte) (int, error) {
-	payload := <-c.readChannel
+	payload := <-c.attrs.ReadChannel
 	payloadLength := len(payload)
 	if payloadLength > len(buffer) {
 		err := fmt.Errorf("buffer length (%d) is too short to hold received payload (length %d)", len(buffer), payloadLength)
@@ -186,18 +188,18 @@ func (c *Connection) Read(buffer []byte) (int, error) {
 func (c *Connection) Write(buffer []byte) (int, error) {
 	payload := make([]byte, len(buffer))
 
-	if c.writeOnHold {
-		err := fmt.Errorf("Connection termination in process")
+	if c.attrs.WriteOnHold {
+		err := fmt.Errorf("connection termination in process")
 		return 0, err
 	}
 	// make a copy so that buffer can be overwritten
 	copy(payload, buffer)
 	log.Println("Sent payload:", string(payload))
 	// Construct a packet
-	packet := lib.NewPcpPacket(uint16(c.LocalPort), uint16(c.RemotePort), c.nextSequenceNumber, c.lastAckNumber, 0, payload)
-	c.nextSequenceNumber = uint32(uint64(c.nextSequenceNumber) + uint64(len(packet.Payload)))
+	packet := lib.NewPcpPacket(c.attrs.NextSequenceNumber, c.attrs.LastAckNumber, lib.ACKFlag, payload, c.attrs)
+	c.attrs.NextSequenceNumber = uint32(uint64(c.attrs.NextSequenceNumber) + uint64(len(packet.Payload)))
 
-	c.OutputChan <- packet
+	c.attrs.OutputChan <- packet
 
 	return len(payload), nil
 }

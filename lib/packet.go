@@ -13,25 +13,43 @@ const (
 
 // PcpPacket represents a packet in your custom protocol
 type PcpPacket struct {
+	SrcAddr, DestAddr net.Addr
 	SourcePort        uint16 // SourcePort represents the source port
 	DestinationPort   uint16 // DestinationPort represents the destination port
 	SequenceNumber    uint32 // SequenceNumber represents the sequence number
 	AcknowledgmentNum uint32 // AcknowledgmentNum represents the acknowledgment number
-	//DataLength        uint16 // DataLength represents the length of the payload data
-	WindowSize    uint16 // WindowSize specifies the number of bytes the receiver is willing to receive
-	Flags         uint8  // Flags represent various control flags
-	UrgentPointer uint16 // UrgentPointer indicates the end of the urgent data (empty for now)
-	Options       []byte // Options represent TCP options (empty for now)
-	Checksum      uint16 // Checksum is the checksum of the packet
-	Payload       []byte // Payload represents the payload data
+	WindowSize        uint16 // WindowSize specifies the number of bytes the receiver is willing to receive
+	Flags             uint8  // Flags represent various control flags
+	UrgentPointer     uint16 // UrgentPointer indicates the end of the urgent data (empty for now)
+	Checksum          uint16 // Checksum is the checksum of the packet
+	Payload           []byte // Payload represents the payload data
+	TcpOptions        *Options
+	IsOpenConnection  bool // only used in outgoing packet to denote if the connection is open or in 3-way handshake stage
 }
 
 // Marshal converts a PcpPacket to a byte slice
-func (p *PcpPacket) Marshal(srcAddr, dstAddr net.Addr, protocolId uint8) []byte {
+func (p *PcpPacket) Marshal(protocolId uint8) []byte {
 	// Calculate the length of the options field (including padding)
-	optionsLength := len(p.Options)
+	optionsLength := 0
+	optionsPresent := false
+	if !p.IsOpenConnection && p.TcpOptions.WindowScaleShiftCount > 0 { // Window Scaling is enabled
+		// Window scaling option: kind (1 byte), length (1 byte), shift count (1 byte)
+		optionsLength += 3
+		optionsPresent = true
+	}
+	if !p.IsOpenConnection && p.TcpOptions.MSS > 0 { // MSS is enabled
+		// MSS option: kind (1 byte), length (1 byte), MSS value (2 bytes)
+		optionsLength += 4
+		optionsPresent = true
+	}
+	if !p.IsOpenConnection && p.TcpOptions.SupportSack {
+		// MSS option: kind (1 byte), length (1 byte)
+		optionsLength += 2
+		optionsPresent = true
+	}
+
 	padding := 0
-	if optionsLength%4 != 0 {
+	if optionsPresent && optionsLength%4 != 0 {
 		padding = 4 - (optionsLength % 4)
 	}
 	totalLength := HeaderSize + optionsLength + padding
@@ -46,7 +64,7 @@ func (p *PcpPacket) Marshal(srcAddr, dstAddr net.Addr, protocolId uint8) []byte 
 	binary.BigEndian.PutUint32(frame[8:12], p.AcknowledgmentNum)
 
 	// Calculate Data Offset and Reserved field (DO and RSV)
-	doAndRsv := uint8(HeaderSize/4) << 4
+	doAndRsv := uint8(totalLength/4) << 4
 
 	// Write DO and RSV into the 12th byte
 	frame[12] = doAndRsv
@@ -58,12 +76,39 @@ func (p *PcpPacket) Marshal(srcAddr, dstAddr net.Addr, protocolId uint8) []byte 
 	// leave frame[16:18] as all zero for now
 	binary.BigEndian.PutUint16(frame[18:20], p.UrgentPointer)
 
-	// Copy options into frame
-	copy(frame[HeaderSize:HeaderSize+optionsLength], p.Options)
+	// Construct options
+	optionOffset := HeaderSize
+	if !p.IsOpenConnection && p.TcpOptions.WindowScaleShiftCount > 0 {
+		// Window scaling option: kind (1 byte), length (1 byte), shift count (1 byte)
+		frame[optionOffset] = 3   // Kind: Window Scale
+		frame[optionOffset+1] = 3 // Length: 3 bytes
+		frame[optionOffset+2] = p.TcpOptions.WindowScaleShiftCount
+		optionOffset += 3
+	}
+	if !p.IsOpenConnection && p.TcpOptions.MSS > 0 {
+		// MSS option: kind (1 byte), length (1 byte), MSS value (2 bytes)
+		frame[optionOffset] = 2   // Kind: Maximum Segment Size
+		frame[optionOffset+1] = 4 // Length: 4 bytes
+		binary.BigEndian.PutUint16(frame[optionOffset+2:optionOffset+4], p.TcpOptions.MSS)
+		optionOffset += 4
+	}
+	if !p.IsOpenConnection && p.TcpOptions.SupportSack {
+		// MSS option: kind (1 byte), length (1 byte)
+		frame[optionOffset] = 4   // Kind: SACK permitted
+		frame[optionOffset+1] = 2 // Length: 2 bytes
+		optionOffset += 2
+	}
+
+	// Append padding if necessary
+	if optionsPresent {
+		for i := 0; i < padding; i++ {
+			frame[optionOffset+i] = 1 // NOP option
+		}
+	}
 
 	pcpFrameLength := totalLength + len(p.Payload)
 	// Calculate checksum over the pseudo-header, TCP header, and payload
-	pseudoHeader := assemblePseudoHeader(srcAddr, dstAddr, protocolId, uint16(pcpFrameLength))
+	pseudoHeader := assemblePseudoHeader(p.SrcAddr, p.DestAddr, protocolId, uint16(pcpFrameLength))
 	data := append(pseudoHeader, append(frame, p.Payload...)...)
 	checksum := CalculateChecksum(data)
 	binary.BigEndian.PutUint16(frame[16:18], checksum)
@@ -75,7 +120,9 @@ func (p *PcpPacket) Marshal(srcAddr, dstAddr net.Addr, protocolId uint8) []byte 
 }
 
 // Unmarshal converts a byte slice to a PcpPacket
-func (p *PcpPacket) Unmarshal(data []byte) {
+func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) {
+	p.SrcAddr = srcAddr
+	p.DestAddr = destAddr
 	p.SourcePort = binary.BigEndian.Uint16(data[0:2])
 	p.DestinationPort = binary.BigEndian.Uint16(data[2:4])
 	p.SequenceNumber = binary.BigEndian.Uint32(data[4:8])
@@ -89,8 +136,47 @@ func (p *PcpPacket) Unmarshal(data []byte) {
 	optionsLength := int(do) - HeaderSize
 
 	// Extract options from the data
-	p.Options = make([]byte, optionsLength)
-	copy(p.Options, data[HeaderSize:HeaderSize+optionsLength])
+	options := data[HeaderSize : HeaderSize+optionsLength]
+
+	if p.TcpOptions == nil {
+		p.TcpOptions = &Options{} // all attributes set to zero for which means disabled
+	}
+	// Parse options to extract Window Scale and MSS values
+	var (
+		optionLength, optionKind byte
+	)
+	for i := 0; i < optionsLength-1; {
+		optionKind = options[i]
+		//fmt.Println("Scan to option kind", optionKind)
+
+		if optionKind == 0 {
+			break // padding reached
+		} else {
+			switch optionKind {
+			case 1: // no op
+				optionLength = 1
+			case 3: // Window Scale
+				optionLength = options[i+1]
+				if optionLength == 3 && i+2 < optionsLength {
+					p.TcpOptions.WindowScaleShiftCount = options[i+2]
+				}
+			case 2: // Maximum Segment Size (MSS)
+				optionLength = options[i+1]
+				if optionLength == 4 && i+4 < optionsLength {
+					p.TcpOptions.MSS = binary.BigEndian.Uint16(options[i+2 : i+4])
+				}
+			case 4: // SACK support
+				optionLength = options[i+1]
+				if optionLength == 2 {
+					p.TcpOptions.SupportSack = true
+				}
+			default:
+				optionLength = options[i+1]
+			}
+			// Move to the next option
+			i += int(optionLength)
+		}
+	}
 
 	// Extract payload from the data
 	p.Payload = data[HeaderSize+optionsLength:]
@@ -99,51 +185,21 @@ func (p *PcpPacket) Unmarshal(data []byte) {
 	p.Checksum = binary.BigEndian.Uint16(data[16:18]) // Assuming checksum field is at byte 16 and 17
 }
 
-func NewPcpPacket(sourcePort, destinationPort uint16, seqNum, ackNum uint32, flags uint8, data []byte) *PcpPacket {
+func NewPcpPacket(seqNum, ackNum uint32, flags uint8, data []byte, conn *Connection) *PcpPacket {
 	return &PcpPacket{
-		SourcePort:        sourcePort,
-		DestinationPort:   destinationPort,
+		SrcAddr:           conn.LocalAddr,
+		DestAddr:          conn.RemoteAddr,
+		SourcePort:        uint16(conn.LocalPort),
+		DestinationPort:   uint16(conn.RemotePort),
 		SequenceNumber:    seqNum,
 		AcknowledgmentNum: ackNum,
 		Flags:             flags,
+		WindowSize:        conn.WindowSize,
 		Payload:           data,
+		IsOpenConnection:  conn.IsOpenConnection,
+		TcpOptions:        conn.TcpOptions,
 	}
 }
-
-// PacketVector represents a vector containing packet data along with metadata.
-type PacketVector struct {
-	Data                  *PcpPacket // Packet data
-	RemoteAddr, LocalAddr net.Addr   // Source address of the packet
-}
-
-/*func CalculateChecksum(frame []byte) uint16 {
-	// Initialize sum to zero (32-bit for potential overflow handling)
-	sum := uint32(0)
-
-	// Process 16-bit words (2 bytes each)
-	for i := 0; i < len(frame); i += 2 {
-		// Extract 16-bit word from frame and convert to uint32
-		word := uint32(binary.BigEndian.Uint16(frame[i : i+2]))
-		// Add the word to the sum
-		sum += word
-	}
-
-	// If the total length is odd, add padding (zero byte)
-	if len(frame)%2 != 0 {
-		sum += uint32(frame[len(frame)-1]) << 8 // Pad with the last byte shifted by 8 bits
-	}
-
-	// Handle potential carry from addition (one's complement addition)
-	for sum>>16 > 0 {
-		// Isolate the carry bit and add it to the lower 16 bits (wrap around)
-		sum = (sum & 0xffff) + (sum >> 16)
-	}
-
-	// Take one's complement of the final sum
-	checksum := ^uint16(sum)
-
-	return checksum
-}*/
 
 func CalculateChecksum(buffer []byte) uint16 {
 	var cksum uint32 = 0
@@ -183,6 +239,7 @@ func VerifyChecksum(data []byte, srcAddr, dstAddr net.Addr, protocolId uint8) bo
 
 	// Restore the original checksum field in data
 	binary.BigEndian.PutUint16(data[16:18], receivedChecksum)
+	//log.Printf(Red+"Calculated Checksum: %x, Extracted Checksum: %x"+Reset, calculatedChecksum, receivedChecksum)
 
 	// Compare the received checksum with the calculated checksum
 	return receivedChecksum == calculatedChecksum
