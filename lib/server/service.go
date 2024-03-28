@@ -13,13 +13,13 @@ type Service struct {
 	pcpProtocolConnection *PcpProtocolConnection // point back to parent pcp server
 	ServiceAddr           net.Addr
 	Port                  int
-	InputChannel          chan *lib.PcpPacket    // channel for incoming packets of the whole services (including packets for all connections)
-	OutputChan            chan *lib.PcpPacket    // output channel for outgoing packets
-	connectionMap         map[string]*Connection // open connections
-	tempConnMap           map[string]*Connection // temporary connection map for completing 3-way handshake
-	newConnChannel        chan *Connection       // new connection all be placed here are 3-way handshake
-	ConnCloseSignal       chan *Connection       // signal for connection close
-	serviceCloseSignal    chan struct{}          // signal for closing service
+	InputChannel          chan *lib.PcpPacket        // channel for incoming packets of the whole services (including packets for all connections)
+	OutputChan            chan *lib.PcpPacket        // output channel for outgoing packets
+	connectionMap         map[string]*lib.Connection // open connections
+	tempConnMap           map[string]*lib.Connection // temporary connection map for completing 3-way handshake
+	newConnChannel        chan *lib.Connection       // new connection all be placed here are 3-way handshake
+	ConnCloseSignal       chan *lib.Connection       // signal for connection close
+	serviceCloseSignal    chan struct{}              // signal for closing service
 }
 
 // NewService creates a new service listening on the specified port.
@@ -30,37 +30,37 @@ func newService(pcpProtocolConn *PcpProtocolConnection, serviceAddr net.Addr, po
 		Port:                  port,
 		InputChannel:          make(chan *lib.PcpPacket),
 		OutputChan:            outputChan,
-		connectionMap:         make(map[string]*Connection),
-		tempConnMap:           make(map[string]*Connection),
-		newConnChannel:        make(chan *Connection),
-		ConnCloseSignal:       make(chan *Connection),
+		connectionMap:         make(map[string]*lib.Connection),
+		tempConnMap:           make(map[string]*lib.Connection),
+		newConnChannel:        make(chan *lib.Connection),
+		ConnCloseSignal:       make(chan *lib.Connection),
 		serviceCloseSignal:    make(chan struct{}),
 	}, nil
 }
 
 // Accept accepts incoming connection requests.
-func (s *Service) Accept() *Connection {
+func (s *Service) Accept() *lib.Connection {
 	for {
 		// Wait for new connection to come
 		newConn := <-s.newConnChannel
 
 		// Check if the connection exists in the temporary connection map
-		_, ok := s.tempConnMap[newConn.attrs.Key]
+		_, ok := s.tempConnMap[newConn.Key]
 		if !ok {
-			log.Printf("Received ACK packet for non-existent connection: %s. Ignore it!\n", newConn.attrs.Key)
+			log.Printf("Received ACK packet for non-existent connection: %s. Ignore it!\n", newConn.Key)
 			continue
 		}
 
 		// Remove the connection from the temporary connection map
-		delete(s.tempConnMap, newConn.attrs.Key)
+		delete(s.tempConnMap, newConn.Key)
 
 		// adding the connection to ConnectionMap
-		s.connectionMap[newConn.attrs.Key] = newConn
+		s.connectionMap[newConn.Key] = newConn
 
 		// start go routine to handle the connection traffic
-		go newConn.handleIncomingPackets()
+		go newConn.HandleIncomingPackets()
 
-		log.Printf("New connection is ready: %s\n", newConn.attrs.Key)
+		log.Printf("New connection is ready: %s\n", newConn.Key)
 
 		return newConn
 	}
@@ -101,7 +101,7 @@ func (s *Service) handleDataPacket(packet *lib.PcpPacket) {
 	conn, ok := s.connectionMap[connKey]
 	if ok {
 		// Dispatch the packet to the corresponding connection's input channel
-		conn.attrs.InputChannel <- packet
+		conn.InputChannel <- packet
 		return
 	}
 
@@ -109,7 +109,7 @@ func (s *Service) handleDataPacket(packet *lib.PcpPacket) {
 	tempConn, ok := s.tempConnMap[connKey]
 	if ok {
 		// Dispatch the packet to the corresponding connection's input channel
-		tempConn.attrs.InputChannel <- packet
+		tempConn.InputChannel <- packet
 		return
 	}
 
@@ -134,7 +134,8 @@ func (s *Service) handleSynPacket(packet *lib.PcpPacket) {
 	}
 
 	// Create a new temporary connection object for the 3-way handshake
-	newConn, err := newConnection(connKey, s, sourceAddr, int(sourcePort), s.ServiceAddr, s.Port)
+	//newConn, err := newConnection(connKey, s, sourceAddr, int(sourcePort), s.ServiceAddr, s.Port)
+	newConn, err := lib.NewConnection(connKey, sourceAddr, int(sourcePort), s.ServiceAddr, s.Port, s.OutputChan, s.ConnCloseSignal, s.newConnChannel)
 	if err != nil {
 		log.Printf("Error creating new connection for %s: %s\n", connKey, err)
 		return
@@ -146,36 +147,36 @@ func (s *Service) handleSynPacket(packet *lib.PcpPacket) {
 	// TCP options support
 	// MSS support negotiation
 	if packet.TcpOptions.MSS > 0 {
-		if packet.TcpOptions.MSS < newConn.attrs.TcpOptions.MSS {
-			newConn.attrs.TcpOptions.MSS = packet.TcpOptions.MSS // default value is config.PreferredMSS
+		if packet.TcpOptions.MSS < newConn.TcpOptions.MSS {
+			newConn.TcpOptions.MSS = packet.TcpOptions.MSS // default value is config.PreferredMSS
 		}
 	} else {
-		newConn.attrs.TcpOptions.MSS = 0 // disble MSS
+		newConn.TcpOptions.MSS = 0 // disble MSS
 	}
 
 	// Window Scaling support
 	if packet.TcpOptions.WindowScaleShiftCount == 0 {
-		newConn.attrs.TcpOptions.WindowScaleShiftCount = 0 // Disable it
+		newConn.TcpOptions.WindowScaleShiftCount = 0 // Disable it
 	}
 
 	// SACK support
 	if !packet.TcpOptions.SupportSack {
-		newConn.attrs.TcpOptions.SupportSack = false // Disable it
+		newConn.TcpOptions.SupportSack = false // Disable it
 	}
 
 	// start the temp connection's goroutine to handle 3-way handshaking process
-	go newConn.handle3WayHandshake()
+	go newConn.Handle3WayHandshake()
 
 	newConn.OpenServerState = lib.SynReceived // set 3-way handshake state
 
 	// Send SYN-ACK packet to the SYN packet sender
 	// Construct a SYN-ACK packet
-	newConn.attrs.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
-	synAckPacket := lib.NewPcpPacket(newConn.attrs.NextSequenceNumber, newConn.attrs.LastAckNumber, lib.SYNFlag|lib.ACKFlag, nil, newConn.attrs)
+	newConn.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
+	synAckPacket := lib.NewPcpPacket(newConn.NextSequenceNumber, newConn.LastAckNumber, lib.SYNFlag|lib.ACKFlag, nil, newConn)
 
 	// Send the SYN-ACK packet to the sender
 	s.OutputChan <- synAckPacket
-	newConn.attrs.NextSequenceNumber = uint32(uint64(newConn.attrs.NextSequenceNumber) + 1) // implicit modulo op
+	newConn.NextSequenceNumber = uint32(uint64(newConn.NextSequenceNumber) + 1) // implicit modulo op
 
 	newConn.OpenServerState = lib.SynAckSent // set 3-way handshake state
 
@@ -187,16 +188,16 @@ func (s *Service) handleCloseConnections() {
 	for {
 		conn := <-s.ConnCloseSignal
 		// clear it from p.ConnectionMap
-		_, ok := s.connectionMap[conn.attrs.Key] // just make sure it really in ConnectionMap for debug purpose
+		_, ok := s.connectionMap[conn.Key] // just make sure it really in ConnectionMap for debug purpose
 		if !ok {
 			// connection does not exist in ConnectionMap
-			log.Printf("Pcp connection does not exist in %s:%d->%s:%d", conn.attrs.LocalAddr.(*net.IPAddr).IP.String(), conn.attrs.LocalPort, conn.attrs.RemoteAddr.(*net.IPAddr).IP.String(), conn.attrs.RemotePort)
+			log.Printf("Pcp connection does not exist in %s:%d->%s:%d", conn.LocalAddr.(*net.IPAddr).IP.String(), conn.LocalPort, conn.RemoteAddr.(*net.IPAddr).IP.String(), conn.RemotePort)
 			continue
 		}
 
 		// delete the clientConn from ConnectionMap
-		delete(s.connectionMap, conn.attrs.Key)
-		log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.attrs.LocalAddr.(*net.IPAddr).IP.String(), conn.attrs.LocalPort, conn.attrs.RemoteAddr.(*net.IPAddr).IP.String(), conn.attrs.RemotePort)
+		delete(s.connectionMap, conn.Key)
+		log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.LocalAddr.(*net.IPAddr).IP.String(), conn.LocalPort, conn.RemoteAddr.(*net.IPAddr).IP.String(), conn.RemotePort)
 	}
 }
 

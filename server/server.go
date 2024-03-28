@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
+	"github.com/Clouded-Sabre/Pseudo-TCP/lib"
 	"github.com/Clouded-Sabre/Pseudo-TCP/lib/server"
 )
 
@@ -61,7 +62,7 @@ func main() {
 	}
 }
 
-func handleConnection(conn *server.Connection) {
+func handleConnection(conn *lib.Connection) {
 	buffer := make([]byte, 1024)
 	for {
 		n, err := conn.Read(buffer)

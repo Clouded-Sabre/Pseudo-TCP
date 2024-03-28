@@ -18,9 +18,9 @@ type pcpProtocolConnection struct {
 	ServerAddr, LocalAddr *net.IPAddr
 	pConn                 *net.IPConn
 	OutputChan            chan *lib.PcpPacket
-	ConnectionMap         map[string]*Connection
-	tempConnectionMap     map[string]*Connection
-	ConnCloseSignalChan   chan *Connection
+	ConnectionMap         map[string]*lib.Connection
+	tempConnectionMap     map[string]*lib.Connection
+	ConnCloseSignalChan   chan *lib.Connection
 }
 
 func newPcpProtocolConnection(p *pcpClient, serverAddr, localAddr *net.IPAddr) (*pcpProtocolConnection, error) {
@@ -38,9 +38,9 @@ func newPcpProtocolConnection(p *pcpClient, serverAddr, localAddr *net.IPAddr) (
 		ServerAddr:          serverAddr,
 		pConn:               pConn,
 		OutputChan:          make(chan *lib.PcpPacket),
-		ConnectionMap:       make(map[string]*Connection),
-		tempConnectionMap:   make(map[string]*Connection),
-		ConnCloseSignalChan: make(chan *Connection),
+		ConnectionMap:       make(map[string]*lib.Connection),
+		tempConnectionMap:   make(map[string]*lib.Connection),
+		ConnCloseSignalChan: make(chan *lib.Connection),
 	}
 
 	go pConnection.handleIncomingPackets()
@@ -52,7 +52,7 @@ func newPcpProtocolConnection(p *pcpClient, serverAddr, localAddr *net.IPAddr) (
 	return pConnection, nil
 }
 
-func (p *pcpProtocolConnection) dial(serverPort int) (*Connection, error) {
+func (p *pcpProtocolConnection) dial(serverPort int) (*lib.Connection, error) {
 	// Choose a random client port
 	clientPort := p.getAvailableRandomClientPort()
 
@@ -60,7 +60,7 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*Connection, error) {
 	connKey := fmt.Sprintf("%d:%d", clientPort, serverPort)
 
 	// Create a new temporary connection object for the 3-way handshake
-	newConn, err := newConnection(connKey, p, p.ServerAddr, int(serverPort), p.LocalAddr, clientPort)
+	newConn, err := lib.NewConnection(connKey, p.ServerAddr, int(serverPort), p.LocalAddr, clientPort, p.OutputChan, p.ConnCloseSignalChan, nil)
 	if err != nil {
 		fmt.Printf("Error creating new connection to %s:%d because of error: %s\n", p.ServerAddr.IP.To4().String(), serverPort, err)
 		return nil, err
@@ -70,20 +70,20 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*Connection, error) {
 	p.tempConnectionMap[connKey] = newConn
 
 	// Send SYN to server
-	synPacket := lib.NewPcpPacket(newConn.attrs.NextSequenceNumber, 0, lib.SYNFlag, nil, newConn.attrs)
+	synPacket := lib.NewPcpPacket(newConn.NextSequenceNumber, 0, lib.SYNFlag, nil, newConn)
 	p.OutputChan <- synPacket
-	newConn.attrs.NextSequenceNumber = uint32(uint64(newConn.attrs.NextSequenceNumber) + 1) // implicit modulo op
+	newConn.NextSequenceNumber = uint32(uint64(newConn.NextSequenceNumber) + 1) // implicit modulo op
 	log.Println("Initiated connection to server with connKey:", connKey)
 
 	// Wait for SYN-ACK
 	// Create a loop to read from connection's input channel till we see SYN-ACK packet from the other end
 	for {
-		packet := <-newConn.attrs.InputChannel
+		packet := <-newConn.InputChannel
 		if packet.Flags == lib.SYNFlag|lib.ACKFlag { // Verify if it's a SYN-ACK from the server
 			// Prepare ACK packet
-			newConn.attrs.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
-			ackPacket := lib.NewPcpPacket(newConn.attrs.NextSequenceNumber, newConn.attrs.LastAckNumber, lib.ACKFlag, nil, newConn.attrs)
-			newConn.attrs.OutputChan <- ackPacket
+			newConn.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
+			ackPacket := lib.NewPcpPacket(newConn.NextSequenceNumber, newConn.LastAckNumber, lib.ACKFlag, nil, newConn)
+			newConn.OutputChan <- ackPacket
 			//newConn.expectedAckNum = 2
 
 			// Connection established, remove newConn from tempClientConnections, and place it into clientConnections pool
@@ -95,11 +95,11 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*Connection, error) {
 				return nil, err
 			}
 
-			newConn.attrs.IsOpenConnection = true
+			newConn.IsOpenConnection = true
 			p.ConnectionMap[connKey] = newConn
 
 			// start go routine to handle incoming packets for new connection
-			go newConn.handleIncomingPackets()
+			go newConn.HandleIncomingPackets()
 
 			return newConn, nil
 		}
@@ -165,7 +165,7 @@ func (p *pcpProtocolConnection) handleIncomingPackets() {
 		conn, ok := p.ConnectionMap[connKey]
 		if ok {
 			// open connection. Dispatch the packet to the corresponding connection's input channel
-			conn.attrs.InputChannel <- packet
+			conn.InputChannel <- packet
 			continue
 		}
 
@@ -173,7 +173,7 @@ func (p *pcpProtocolConnection) handleIncomingPackets() {
 		tempConn, ok := p.tempConnectionMap[connKey]
 		if ok {
 			// forward to that connection's input channel
-			tempConn.attrs.InputChannel <- packet
+			tempConn.InputChannel <- packet
 			continue
 		}
 
@@ -205,16 +205,16 @@ func (p *pcpProtocolConnection) handleCloseConnection() {
 	for {
 		conn := <-p.ConnCloseSignalChan
 		// clear it from p.ConnectionMap
-		_, ok := p.ConnectionMap[conn.attrs.Key]
+		_, ok := p.ConnectionMap[conn.Key]
 		if !ok {
 			// connection does not exist in ConnectionMap
-			log.Printf("Pcp Client connection does not exist in %s:%d->%s:%d", conn.attrs.LocalAddr.(*net.IPAddr).IP.String(), conn.attrs.LocalPort, conn.attrs.RemoteAddr.(*net.IPAddr).IP.String(), conn.attrs.RemotePort)
+			log.Printf("Pcp Client connection does not exist in %s:%d->%s:%d", conn.LocalAddr.(*net.IPAddr).IP.String(), conn.LocalPort, conn.RemoteAddr.(*net.IPAddr).IP.String(), conn.RemotePort)
 			continue
 		}
 
 		// delete the clientConn from ConnectionMap
-		delete(p.ConnectionMap, conn.attrs.Key)
-		log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.attrs.LocalAddr.(*net.IPAddr).IP.String(), conn.attrs.LocalPort, conn.attrs.RemoteAddr.(*net.IPAddr).IP.String(), conn.attrs.RemotePort)
+		delete(p.ConnectionMap, conn.Key)
+		log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.LocalAddr.(*net.IPAddr).IP.String(), conn.LocalPort, conn.RemoteAddr.(*net.IPAddr).IP.String(), conn.RemotePort)
 
 	}
 }
@@ -225,11 +225,11 @@ func (p *pcpProtocolConnection) getAvailableRandomClientPort() int {
 
 	// Populate the map with existing client ports
 	for _, conn := range p.ConnectionMap {
-		existingPorts[conn.attrs.LocalPort] = true
+		existingPorts[conn.LocalPort] = true
 	}
 
 	for _, conn := range p.tempConnectionMap {
-		existingPorts[conn.attrs.LocalPort] = true
+		existingPorts[conn.LocalPort] = true
 	}
 
 	// Generate a random port number until it's not in the existingPorts map

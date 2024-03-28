@@ -3,6 +3,8 @@ package client
 import (
 	"fmt"
 	"net"
+
+	"github.com/Clouded-Sabre/Pseudo-TCP/lib"
 )
 
 // pcp protocol client struct
@@ -29,7 +31,7 @@ func NewPcpClient(protocolId uint8) *pcpClient {
 }
 
 // dialPcp simulates the TCP dial function interface for PCP.
-func (p *pcpClient) DialPcp(localIP string, serverIP string, serverPort uint16) (*Connection, error) {
+func (p *pcpClient) DialPcp(localIP string, serverIP string, serverPort uint16) (*lib.Connection, error) {
 	// first normalize IP address string before making key
 	serverAddr, err := net.ResolveIPAddr("ip", serverIP)
 	if err != nil {
