@@ -4,7 +4,9 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"net"
+	"time"
 )
 
 const (
@@ -45,6 +47,11 @@ func (p *PcpPacket) Marshal(protocolId uint8) []byte {
 	if !p.IsOpenConnection && p.TcpOptions.SupportSack {
 		// MSS option: kind (1 byte), length (1 byte)
 		optionsLength += 2
+		optionsPresent = true
+	}
+	if p.TcpOptions.TimestampEnabled {
+		// Timestamp option: kind (1 byte), length (1 byte), timestamp value (4 bytes), echo reply value (4 bytes)
+		optionsLength += 10
 		optionsPresent = true
 	}
 
@@ -97,6 +104,17 @@ func (p *PcpPacket) Marshal(protocolId uint8) []byte {
 		frame[optionOffset] = 4   // Kind: SACK permitted
 		frame[optionOffset+1] = 2 // Length: 2 bytes
 		optionOffset += 2
+	}
+	if p.TcpOptions.TimestampEnabled {
+		// Timestamp option: kind (1 byte), length (1 byte), timestamp value (4 bytes), echo reply value (4 bytes)
+		frame[optionOffset] = 8    // Kind: Timestamp
+		frame[optionOffset+1] = 10 // Length: 10 bytes (timestamp value + echo reply value)
+		// Write timestamp value (current time) and echo reply value
+		timestamp := time.Now().UnixMicro()
+		echoReplyValue := p.TcpOptions.TsEchoReplyValue
+		binary.BigEndian.PutUint32(frame[optionOffset+2:optionOffset+6], uint32(timestamp))
+		binary.BigEndian.PutUint32(frame[optionOffset+6:optionOffset+10], uint32(echoReplyValue))
+		optionOffset += 10
 	}
 
 	// Append padding if necessary
@@ -157,18 +175,29 @@ func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) {
 				optionLength = 1
 			case 3: // Window Scale
 				optionLength = options[i+1]
-				if optionLength == 3 && i+2 < optionsLength {
+				if optionLength == 3 && i+3 <= optionsLength {
 					p.TcpOptions.WindowScaleShiftCount = options[i+2]
 				}
 			case 2: // Maximum Segment Size (MSS)
 				optionLength = options[i+1]
-				if optionLength == 4 && i+4 < optionsLength {
+				if optionLength == 4 && i+4 <= optionsLength {
 					p.TcpOptions.MSS = binary.BigEndian.Uint16(options[i+2 : i+4])
 				}
 			case 4: // SACK support
 				optionLength = options[i+1]
 				if optionLength == 2 {
 					p.TcpOptions.SupportSack = true
+				}
+			case 8: // Timestamp option
+				optionLength = options[i+1]
+				if optionLength == 10 && i+10 <= optionsLength {
+					// Extract timestamp value and echo reply value
+					timestamp := binary.BigEndian.Uint32(options[i+2 : i+6])
+					echoReplyValue := binary.BigEndian.Uint32(options[i+6 : i+10])
+					p.TcpOptions.TimestampEnabled = true
+					p.TcpOptions.Timestamp = timestamp
+					p.TcpOptions.TsEchoReplyValue = echoReplyValue
+					log.Printf("Got TSval:%d and TsErv:%d", timestamp, echoReplyValue)
 				}
 			default:
 				optionLength = options[i+1]
@@ -186,6 +215,19 @@ func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) {
 }
 
 func NewPcpPacket(seqNum, ackNum uint32, flags uint8, data []byte, conn *Connection) *PcpPacket {
+	// Create a copy of the Options struct
+	var tcpOptionsCopy *Options
+	if conn.TcpOptions != nil {
+		tcpOptionsCopy = &Options{
+			WindowScaleShiftCount: conn.TcpOptions.WindowScaleShiftCount,
+			MSS:                   conn.TcpOptions.MSS,
+			SupportSack:           conn.TcpOptions.SupportSack,
+			TimestampEnabled:      conn.TcpOptions.TimestampEnabled,
+			TsEchoReplyValue:      conn.TcpOptions.TsEchoReplyValue,
+			Timestamp:             conn.TcpOptions.Timestamp,
+		}
+	}
+
 	return &PcpPacket{
 		SrcAddr:           conn.LocalAddr,
 		DestAddr:          conn.RemoteAddr,
@@ -197,7 +239,7 @@ func NewPcpPacket(seqNum, ackNum uint32, flags uint8, data []byte, conn *Connect
 		WindowSize:        conn.WindowSize,
 		Payload:           data,
 		IsOpenConnection:  conn.IsOpenConnection,
-		TcpOptions:        conn.TcpOptions,
+		TcpOptions:        tcpOptionsCopy,
 	}
 }
 

@@ -38,9 +38,6 @@ func NewPcpServer(protocolId uint8) (*PcpServer, error) {
 
 	fmt.Println("Pcp protocol client started")
 
-	// Start a goroutine to periodically check protocolConn and connection health
-	//go checkServiceHealth(services)
-
 	return pcpServerObj, nil
 }
 
@@ -59,9 +56,6 @@ func newPcpServerProtocolConnection(p *PcpServer, serverIP string) (*PcpProtocol
 	//defer protocolConn.Close()
 
 	fmt.Println("Pcp protocol Server started")
-
-	// Start a goroutine to periodically check service health
-	//go checkServiceHealth(services)
 
 	pcpObj := &PcpProtocolConnection{
 		pcpServerObj:       p,
@@ -134,24 +128,6 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 		}
 	}
 }
-
-// checkServiceHealth periodically checks the health of registered services
-// and terminates any services whose parent process has terminated.
-/*func checkServiceHealth(services map[int]*lib.Service) {
-	for {
-		for port, srv := range services {
-			// Check if the parent process is alive
-			if !srv.IsParentAlive() {
-				fmt.Println("Parent process terminated for service on port:", port)
-				// Terminate the service
-				srv.Stop()
-				delete(services, port)
-			}
-		}
-		// Sleep for some duration before checking again
-		time.Sleep(5 * time.Second)
-	}
-}*/
 
 // ListenPcp starts listening for incoming packets on the service's port.
 func (p *PcpServer) ListenPcp(serviceIP string, port int) (*Service, error) {

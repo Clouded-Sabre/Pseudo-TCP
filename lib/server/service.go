@@ -164,6 +164,10 @@ func (s *Service) handleSynPacket(packet *lib.PcpPacket) {
 		newConn.TcpOptions.SupportSack = false // Disable it
 	}
 
+	// timestamp support
+	newConn.TcpOptions.TimestampEnabled = packet.TcpOptions.TimestampEnabled
+	newConn.TcpOptions.TsEchoReplyValue = packet.TcpOptions.Timestamp
+
 	// start the temp connection's goroutine to handle 3-way handshaking process
 	go newConn.Handle3WayHandshake()
 

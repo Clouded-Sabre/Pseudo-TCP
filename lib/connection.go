@@ -38,12 +38,16 @@ type Connection struct {
 	connCloseSignalChan chan *Connection // send close connection signal to parent service or pConnection to clear it
 	newConnChannel      chan *Connection // server only. send new connection signal to parent service to signal successful 3-way handshake
 	OpenServerState     uint             // server only. 3-way handshake server states
+	closeSigal          chan struct{}    // used to send close signal to HandleIncomingPackets go routine to stop when keepalive failed
 }
 
 type Options struct {
 	WindowScaleShiftCount uint8  // TCP Window scaling, < 14 which mean WindowSize * 2^14
 	MSS                   uint16 // max tcp segment size
 	SupportSack           bool   // SACK support. No real support because no retransmission happens
+	TimestampEnabled      bool   // timestamp support
+	TsEchoReplyValue      uint32
+	Timestamp             uint32
 }
 
 func NewConnection(key string, remoteAddr net.Addr, remotePort int, localAddr net.Addr, localPort int, outputChan chan *PcpPacket, connCloseSignalChan, newConnChannel chan *Connection) (*Connection, error) {
@@ -52,6 +56,7 @@ func NewConnection(key string, remoteAddr net.Addr, remotePort int, localAddr ne
 		WindowScaleShiftCount: config.WindowScale,
 		MSS:                   config.PreferredMss,
 		SupportSack:           true,
+		TimestampEnabled:      true,
 	}
 	newConn := &Connection{
 		Key:                key,
@@ -73,6 +78,7 @@ func NewConnection(key string, remoteAddr net.Addr, remotePort int, localAddr ne
 
 		connCloseSignalChan: connCloseSignalChan,
 		newConnChannel:      newConnChannel,
+		closeSigal:          make(chan struct{}),
 	}
 
 	if config.KeepAliveEnabled {
@@ -90,84 +96,96 @@ func (c *Connection) HandleIncomingPackets() {
 	)
 	// Create a loop to read from connection's input channel
 	for {
-		packet = <-c.InputChannel
-		// reset the keepalive timer
-		if config.KeepAliveEnabled {
-			c.KeepaliveTimer.Reset(c.IdleTimeout)
+		select {
+		case <-c.closeSigal:
+			// connection idle timed out. quit this go routine
+			return
+		case packet = <-c.InputChannel:
+			// reset the keepalive timer
+			if config.KeepAliveEnabled {
+				c.KeepaliveTimer.Reset(c.IdleTimeout)
+				c.TimeoutCount = 0
+			}
+
+			// Parse TCP options to update timestamp parameters
+			if packet.TcpOptions != nil && packet.TcpOptions.TimestampEnabled {
+				// Update timestamp parameters
+				c.TcpOptions.TsEchoReplyValue = packet.TcpOptions.Timestamp
+			}
+
+			// Extract SYN and ACK flags from the packet
+			isACK = packet.Flags&ACKFlag != 0
+			isFIN = packet.Flags&FINFlag != 0
+			isRST = packet.Flags&RSTFlag != 0
+			isDataPacket = len(packet.Payload) > 0
+			if isDataPacket {
+				// data packet received
+				c.handleDataPacket(packet)
+			} else { // ACK only or FIN packet
+				if isACK {
+					// check if 4-way termination is in process
+					if c.TerminationCallerState == CallerFinSent {
+						log.Println("Got ACK from 4-way responder. Wait for FIN from responder")
+						// set the state to callerACKReceived and wait for FIN
+						c.TerminationCallerState = CallerAckReceived
+					}
+					if c.TerminationRespState == RespFinSent {
+						log.Println("Got ACK from 4-way caller. 4-way completed successfully")
+						// 4-way termination completed
+						c.TerminationRespState = RespAckReceived
+						// sent the close signal to pConnClient to clear the connection
+						c.connCloseSignalChan <- c
+						return // this will terminate this go routine gracefully
+					}
+					// ignore ACK for data packet
+				}
+				if isFIN {
+					if c.TerminationCallerState == CallerAckReceived {
+						log.Println("Got FIN from 4-way responder.")
+						// 4-way termination initiated from the client
+						c.TerminationRespState = CallerFinReceived
+						// Sent ACK back to the server
+						c.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
+						ackPacket := NewPcpPacket(c.NextSequenceNumber, c.LastAckNumber, ACKFlag, nil, c)
+						// Send the acknowledgment packet to the other end
+						c.OutputChan <- ackPacket
+
+						log.Println("ACK to FIN from 4-way responder sent.")
+						// set 4-way termination state to CallerFINSent
+						c.TerminationCallerState = CallerAckSent
+						// sent the close signal to pConnClient to clear the connection
+						c.connCloseSignalChan <- c
+						return // this will terminate this go routine gracefully
+					}
+					if c.TerminationRespState == 0 && c.TerminationCallerState == 0 {
+						log.Println("Got FIN from 4-way caller.")
+						// put write channel on hold so that no data will interfere with the termination process
+						c.WriteOnHold = true
+						// 4-way termination initiated from the server
+						c.TerminationRespState = RespFinReceived
+						// Sent ACK back to the server
+						// Assemble ACK packet to be sent to the other end
+						c.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1) // implicit modulo included
+						ackPacket := NewPcpPacket(c.NextSequenceNumber, c.LastAckNumber, ACKFlag, nil, c)
+						// Send the acknowledgment packet to the other end
+						c.OutputChan <- ackPacket
+						//c.nextSequenceNumber += 1
+						log.Println("Sent ACK to FIN to 4-way caller.")
+
+						// sent FIN packet to the server
+						// Assemble FIN packet to be sent to the other end
+						finPacket := NewPcpPacket(c.NextSequenceNumber, c.LastAckNumber, FINFlag, nil, c)
+						c.OutputChan <- finPacket
+						c.TerminationRespState = RespFinSent
+						log.Println("Sent my FIN to 4-way caller.")
+					}
+					//ignore FIN packet in other scenario
+				}
+				if isRST {
+					log.Println(Red + "Got RST packet from the other end!" + Reset)
+				}
+			}
 		}
-		// Extract SYN and ACK flags from the packet
-		isACK = packet.Flags&ACKFlag != 0
-		isFIN = packet.Flags&FINFlag != 0
-		isRST = packet.Flags&RSTFlag != 0
-		isDataPacket = len(packet.Payload) > 0
-		if isDataPacket {
-			// data packet received
-			c.handleDataPacket(packet)
-		} else { // ACK only or FIN packet
-			if isACK {
-				// check if 4-way termination is in process
-				if c.TerminationCallerState == CallerFinSent {
-					log.Println("Got ACK from 4-way responder. Wait for FIN from responder")
-					// set the state to callerACKReceived and wait for FIN
-					c.TerminationCallerState = CallerAckReceived
-				}
-				if c.TerminationRespState == RespFinSent {
-					log.Println("Got ACK from 4-way caller. 4-way completed successfully")
-					// 4-way termination completed
-					c.TerminationRespState = RespAckReceived
-					// sent the close signal to pConnClient to clear the connection
-					c.connCloseSignalChan <- c
-					return // this will terminate this go routine gracefully
-				}
-				// ignore ACK for data packet
-			}
-			if isFIN {
-				if c.TerminationCallerState == CallerAckReceived {
-					log.Println("Got FIN from 4-way responder.")
-					// 4-way termination initiated from the client
-					c.TerminationRespState = CallerFinReceived
-					// Sent ACK back to the server
-					c.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
-					ackPacket := NewPcpPacket(c.NextSequenceNumber, c.LastAckNumber, ACKFlag, nil, c)
-					// Send the acknowledgment packet to the other end
-					c.OutputChan <- ackPacket
-
-					log.Println("ACK to FIN from 4-way responder sent.")
-					// set 4-way termination state to CallerFINSent
-					c.TerminationCallerState = CallerAckSent
-					// sent the close signal to pConnClient to clear the connection
-					c.connCloseSignalChan <- c
-					return // this will terminate this go routine gracefully
-				}
-				if c.TerminationRespState == 0 && c.TerminationCallerState == 0 {
-					log.Println("Got FIN from 4-way caller.")
-					// put write channel on hold so that no data will interfere with the termination process
-					c.WriteOnHold = true
-					// 4-way termination initiated from the server
-					c.TerminationRespState = RespFinReceived
-					// Sent ACK back to the server
-					// Assemble ACK packet to be sent to the other end
-					c.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1) // implicit modulo included
-					ackPacket := NewPcpPacket(c.NextSequenceNumber, c.LastAckNumber, ACKFlag, nil, c)
-					// Send the acknowledgment packet to the other end
-					c.OutputChan <- ackPacket
-					//c.nextSequenceNumber += 1
-					log.Println("Sent ACK to FIN to 4-way caller.")
-
-					// sent FIN packet to the server
-					// Assemble FIN packet to be sent to the other end
-					finPacket := NewPcpPacket(c.NextSequenceNumber, c.LastAckNumber, FINFlag, nil, c)
-					c.OutputChan <- finPacket
-					c.TerminationRespState = RespFinSent
-					log.Println("Sent my FIN to 4-way caller.")
-				}
-				//ignore FIN packet in other scenario
-			}
-			if isRST {
-				log.Println(Red + "Got RST packet from the other end!" + Reset)
-			}
-		}
-
 	}
 }
 
@@ -205,6 +223,11 @@ func (c *Connection) Handle3WayHandshake() {
 			if c.TcpOptions.WindowScaleShiftCount > 0 {
 				fmt.Println("Set Window Size with Scaling support!")
 				c.WindowSize = config.WindowSizeWithScale
+			}
+
+			// handle TCP option timestamp
+			if c.TcpOptions.TimestampEnabled {
+				c.TcpOptions.TsEchoReplyValue = packet.TcpOptions.Timestamp
 			}
 
 			return // this will terminate this go routine
@@ -338,7 +361,12 @@ func (c *Connection) startKeepaliveTimer() {
 	// Start the keepalive timer
 	c.KeepaliveTimer = time.AfterFunc(timeout, func() {
 		if c.TimeoutCount == c.MaxKeepaliveAttempts {
-			c.IsDead = true
+			log.Printf("Connection %s idle timed out. Close it.\n", c.Key)
+			// connection idle timed out. Close HandleIncomingPackets go routine first
+			c.closeSigal <- struct{}{}
+			// then send close connection signal to parent to clear connection resource
+			c.connCloseSignalChan <- c
+
 			return
 		}
 		c.sendKeepalivePacket()

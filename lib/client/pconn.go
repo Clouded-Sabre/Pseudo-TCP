@@ -84,7 +84,6 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*lib.Connection, error) {
 			newConn.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
 			ackPacket := lib.NewPcpPacket(newConn.NextSequenceNumber, newConn.LastAckNumber, lib.ACKFlag, nil, newConn)
 			newConn.OutputChan <- ackPacket
-			//newConn.expectedAckNum = 2
 
 			// Connection established, remove newConn from tempClientConnections, and place it into clientConnections pool
 			delete(p.tempConnectionMap, connKey)
@@ -96,6 +95,7 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*lib.Connection, error) {
 			}
 
 			newConn.IsOpenConnection = true
+			newConn.TcpOptions.TimestampEnabled = packet.TcpOptions.TimestampEnabled
 			p.ConnectionMap[connKey] = newConn
 
 			// start go routine to handle incoming packets for new connection
