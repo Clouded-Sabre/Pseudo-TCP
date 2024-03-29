@@ -1,6 +1,7 @@
 package lib
 
 import (
+	"crypto/rand"
 	"fmt"
 	"log"
 	"math"
@@ -48,6 +49,17 @@ type Options struct {
 	TimestampEnabled      bool   // timestamp support
 	TsEchoReplyValue      uint32
 	Timestamp             uint32
+	InSACKOption          SACKOption // option kind 5 for incoming packets
+	OutSACKOption         SACKOption // option kind 5 for outgoing packets
+}
+
+type SACKBlock struct {
+	LeftEdge  uint32 // Left edge of the SACK block
+	RightEdge uint32 // Right edge of the SACK block
+}
+
+type SACKOption struct {
+	Blocks []SACKBlock // Slice of SACK blocks
 }
 
 func NewConnection(key string, remoteAddr net.Addr, remotePort int, localAddr net.Addr, localPort int, outputChan chan *PcpPacket, connCloseSignalChan, newConnChannel chan *Connection) (*Connection, error) {
@@ -118,6 +130,11 @@ func (c *Connection) HandleIncomingPackets() {
 			isFIN = packet.Flags&FINFlag != 0
 			isRST = packet.Flags&RSTFlag != 0
 			isDataPacket = len(packet.Payload) > 0
+
+			if c.TcpOptions.SupportSack && len(packet.TcpOptions.InSACKOption.Blocks) > 0 {
+				c.resendLostPacket(packet)
+			}
+
 			if isDataPacket {
 				// data packet received
 				c.handleDataPacket(packet)
@@ -238,7 +255,19 @@ func (c *Connection) Handle3WayHandshake() {
 // Acknowledge received data packet
 func (c *Connection) acknowledge(packet *PcpPacket) {
 	// prepare a PcpPacket for acknowledging the received packet
-	c.LastAckNumber = uint32(uint64(packet.SequenceNumber) + uint64(len(packet.Payload)))
+	if c.TcpOptions.SupportSack && packet.SequenceNumber > c.LastAckNumber {
+		// gap appears. There is out-of-order or lost packet
+		// update OutSACKOption if SACK enabled
+		sackBlocks := make([]SACKBlock, 0)
+		sackBlocks = append(sackBlocks, SACKBlock{LeftEdge: packet.SequenceNumber, RightEdge: uint32(uint64(packet.SequenceNumber) + uint64(len(packet.Payload)))})
+		c.TcpOptions.OutSACKOption.Blocks = sackBlocks
+	} else {
+		if packet.SequenceNumber >= c.LastAckNumber {
+			c.LastAckNumber = uint32(uint64(packet.SequenceNumber) + uint64(len(packet.Payload)))
+		} // if packet.SequenceNumber < c.LastAckNumber, just resend the last ACK
+		c.TcpOptions.OutSACKOption.Blocks = nil
+	}
+
 	ackPacket := NewPcpPacket(c.NextSequenceNumber, c.LastAckNumber, ACKFlag, nil, c)
 
 	// Send the acknowledgment packet to the other end
@@ -250,19 +279,11 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 	// Extract SYN and ACK flags from the packet
 	//isACK := packet.Flags&ACKFlag != 0
 	// check SEQ and ACK
-	if packet.SequenceNumber < c.LastAckNumber {
-		// out of order packet received ignore it
-		fmt.Println("last acknowledged SEQ:", c.LastAckNumber, ", but got incoming SEQ:", packet.SequenceNumber)
-		fmt.Println("Received out-of-order data packet. Just resent the last ACK message.\n", packet)
-		ackPacket := NewPcpPacket(c.NextSequenceNumber, c.LastAckNumber, ACKFlag, nil, c)
-		// Send the acknowledgment packet to the other end
-		c.OutputChan <- ackPacket
-		return
-	}
-	// we ignore ACK info in the received data packet for now
 
-	// put packet payload to read channel
-	c.ReadChannel <- packet.Payload
+	if packet.SequenceNumber >= c.LastAckNumber { // throw away out-of-order packets
+		// put packet payload to read channel
+		c.ReadChannel <- packet.Payload
+	}
 
 	// send ACK packet back to the server
 	c.acknowledge(packet)
@@ -335,6 +356,26 @@ func (c *Connection) Close() error {
 	c.TerminationCallerState = CallerFinSent
 
 	return nil
+}
+
+func (c *Connection) resendLostPacket(packet *PcpPacket) {
+	// we are not really resending lost packet, just pretend to resend a garbage packet of the same length
+	length := packet.TcpOptions.InSACKOption.Blocks[0].LeftEdge - packet.AcknowledgmentNum
+	if length <= 0 {
+		return
+	}
+	// Create a byte slice with the specified length
+	randomBytes := make([]byte, length)
+	// Read random bytes into the slice
+	_, err := rand.Read(randomBytes)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	resendPacket := NewPcpPacket(packet.AcknowledgmentNum, c.LastAckNumber, ACKFlag, randomBytes, c)
+	c.OutputChan <- resendPacket
+	fmt.Println("Resent lost packet...")
 }
 
 func (c *Connection) sendKeepalivePacket() {

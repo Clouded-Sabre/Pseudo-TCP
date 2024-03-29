@@ -49,6 +49,13 @@ func (p *PcpPacket) Marshal(protocolId uint8) []byte {
 		optionsLength += 2
 		optionsPresent = true
 	}
+	if p.IsOpenConnection && p.TcpOptions.SupportSack {
+		if len(p.TcpOptions.OutSACKOption.Blocks) > 0 {
+			// SACK option kind 5: kind (1 byte), length (1 byte), SACK blocks
+			optionsLength += 2 + len(p.TcpOptions.OutSACKOption.Blocks)*8 // 8 bytes per SACK block
+			optionsPresent = true
+		}
+	}
 	if p.TcpOptions.TimestampEnabled {
 		// Timestamp option: kind (1 byte), length (1 byte), timestamp value (4 bytes), echo reply value (4 bytes)
 		optionsLength += 10
@@ -104,6 +111,20 @@ func (p *PcpPacket) Marshal(protocolId uint8) []byte {
 		frame[optionOffset] = 4   // Kind: SACK permitted
 		frame[optionOffset+1] = 2 // Length: 2 bytes
 		optionOffset += 2
+	}
+	if p.IsOpenConnection && p.TcpOptions.SupportSack {
+		if len(p.TcpOptions.OutSACKOption.Blocks) > 0 {
+			// SACK option kind 5: kind (1 byte), length (1 byte), SACK blocks
+			frame[optionOffset] = 5                                                    // Kind: SACK
+			frame[optionOffset+1] = byte(2 + len(p.TcpOptions.OutSACKOption.Blocks)*8) // Length: variable
+			optionOffset += 2
+			// Write SACK blocks
+			for _, block := range p.TcpOptions.OutSACKOption.Blocks {
+				binary.BigEndian.PutUint32(frame[optionOffset:optionOffset+4], block.LeftEdge)
+				binary.BigEndian.PutUint32(frame[optionOffset+4:optionOffset+8], block.RightEdge)
+				optionOffset += 8
+			}
+		}
 	}
 	if p.TcpOptions.TimestampEnabled {
 		// Timestamp option: kind (1 byte), length (1 byte), timestamp value (4 bytes), echo reply value (4 bytes)
@@ -188,6 +209,21 @@ func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) {
 				if optionLength == 2 {
 					p.TcpOptions.SupportSack = true
 				}
+			case 5: // SACK option
+				optionLength = options[i+1]
+				if optionLength > 2 && i+int(optionLength) <= optionsLength {
+					// Parse SACK blocks
+					sackBlocks := make([]SACKBlock, 0)
+					for j := i + 2; j < i+int(optionLength); j += 8 {
+						leftEdge := binary.BigEndian.Uint32(options[j : j+4])
+						rightEdge := binary.BigEndian.Uint32(options[j+4 : j+8])
+						sackBlocks = append(sackBlocks, SACKBlock{LeftEdge: leftEdge, RightEdge: rightEdge})
+					}
+					if p.TcpOptions.InSACKOption.Blocks == nil {
+						p.TcpOptions.InSACKOption.Blocks = make([]SACKBlock, 0)
+					}
+					p.TcpOptions.InSACKOption.Blocks = append(p.TcpOptions.InSACKOption.Blocks, sackBlocks...)
+				}
 			case 8: // Timestamp option
 				optionLength = options[i+1]
 				if optionLength == 10 && i+10 <= optionsLength {
@@ -216,7 +252,7 @@ func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) {
 
 func NewPcpPacket(seqNum, ackNum uint32, flags uint8, data []byte, conn *Connection) *PcpPacket {
 	// Create a copy of the Options struct
-	var tcpOptionsCopy *Options
+	/*var tcpOptionsCopy *Options
 	if conn.TcpOptions != nil {
 		tcpOptionsCopy = &Options{
 			WindowScaleShiftCount: conn.TcpOptions.WindowScaleShiftCount,
@@ -226,7 +262,7 @@ func NewPcpPacket(seqNum, ackNum uint32, flags uint8, data []byte, conn *Connect
 			TsEchoReplyValue:      conn.TcpOptions.TsEchoReplyValue,
 			Timestamp:             conn.TcpOptions.Timestamp,
 		}
-	}
+	}*/
 
 	return &PcpPacket{
 		SrcAddr:           conn.LocalAddr,
@@ -239,7 +275,8 @@ func NewPcpPacket(seqNum, ackNum uint32, flags uint8, data []byte, conn *Connect
 		WindowSize:        conn.WindowSize,
 		Payload:           data,
 		IsOpenConnection:  conn.IsOpenConnection,
-		TcpOptions:        tcpOptionsCopy,
+		TcpOptions:        conn.TcpOptions,
+		//TcpOptions:        tcpOptionsCopy,
 	}
 }
 
