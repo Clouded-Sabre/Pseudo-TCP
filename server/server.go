@@ -63,7 +63,7 @@ func main() {
 }
 
 func handleConnection(conn *lib.Connection) {
-	buffer := make([]byte, 1024)
+	buffer := make([]byte, config.PreferredMss)
 	for {
 		n, err := conn.Read(buffer)
 		if err != nil {

@@ -44,7 +44,7 @@ func main() {
 	conn.Write(payload)
 	log.Println("Packet sent:", string(payload))
 
-	buffer := make([]byte, 1204)
+	buffer := make([]byte, config.PreferredMss)
 	for {
 		n, err := conn.Read(buffer)
 		if err != nil {

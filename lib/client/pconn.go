@@ -121,7 +121,7 @@ func (p *pcpProtocolConnection) handleIncomingPackets() {
 		err error
 		n   int
 	)
-	buffer := make([]byte, 1024)
+	buffer := make([]byte, config.PreferredMss)
 	// main loop for incoming packets
 	for {
 		n, err = p.pConn.Read(buffer)

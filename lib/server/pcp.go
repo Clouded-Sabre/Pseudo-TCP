@@ -75,7 +75,7 @@ func newPcpServerProtocolConnection(p *PcpServer, serverIP string) (*PcpProtocol
 
 func (p *PcpProtocolConnection) handlingIncomingPackets() {
 	// Continuously read from the protocolConn
-	buffer := make([]byte, 1024)
+	buffer := make([]byte, config.PreferredMss)
 	for {
 		n, addr, err := p.Connection.ReadFrom(buffer)
 		if err != nil {
