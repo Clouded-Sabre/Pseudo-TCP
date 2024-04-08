@@ -1,3 +1,5 @@
 client/client
 server/server
 server/server_amd64
+server/config.yaml
+client/config.yaml

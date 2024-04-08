@@ -121,7 +121,7 @@ func (p *pcpProtocolConnection) handleIncomingPackets() {
 		err error
 		n   int
 	)
-	buffer := make([]byte, config.PreferredMss)
+	buffer := make([]byte, config.AppConfig.PreferredMSS)
 	// main loop for incoming packets
 	for {
 		n, err = p.pConn.Read(buffer)
@@ -140,7 +140,7 @@ func (p *pcpProtocolConnection) handleIncomingPackets() {
 			log.Println("Received IP frame is il-formated. Ignore it!")
 			continue
 		}
-		log.Println("extracted PCP frame length is", len(pcpFrame), pcpFrame)
+		//log.Println("extracted PCP frame length is", len(pcpFrame), pcpFrame)
 		// check PCP packet checksum
 		/*if !lib.VerifyChecksum(pcpFrame, p.ServerAddr, p.LocalAddr, uint8(p.pcpClientObj.ProtocolID)) {
 			log.Println("Packet checksum verification failed. Skip this packet.")
@@ -150,8 +150,8 @@ func (p *pcpProtocolConnection) handleIncomingPackets() {
 		// Extract destination port
 		packet := &lib.PcpPacket{}
 		packet.Unmarshal(pcpFrame, p.ServerAddr, p.LocalAddr)
-		fmt.Println("Received packet Length:", n)
-		fmt.Printf("Got packet:\n %+v\n", packet)
+		//fmt.Println("Received packet Length:", n)
+		//fmt.Printf("Got packet:\n %+v\n", packet)
 
 		// Extract destination IP and port from the packet
 		sourcePort := packet.SourcePort
@@ -183,20 +183,51 @@ func (p *pcpProtocolConnection) handleIncomingPackets() {
 
 // handleOutgoingPackets handles outgoing packets by writing them to the interface.
 func (p *pcpProtocolConnection) handleOutgoingPackets() {
+	count := 0
+	var lostCount = 0
+	packetLost := false
 	for {
 		packet := <-p.OutputChan // Subscribe to p.OutputChan
 		/*if len(packet.Data.Payload) > 0 {
 			fmt.Println("outgoing packet payload is", packet.Data.Payload)
 		}*/
+		fmt.Println("PTC got packet.")
 
-		// Marshal the packet into bytes
-		frameBytes := packet.Marshal(p.pcpClientObj.ProtocolID)
-		// Write the packet to the interface
-		_, err := p.pConn.Write(frameBytes)
-		if err != nil {
-			fmt.Println("Error writing packet:", err)
-			continue
+		if packet.IsOpenConnection && config.AppConfig.PacketLostSimulation {
+			if count == 0 {
+				lostCount = rand.Intn(10)
+			}
+			if count == lostCount {
+				log.Println("Packet", count, "is lost")
+				lostCount = 100
+				packetLost = true
+			}
 		}
+
+		if !packetLost {
+			// Marshal the packet into bytes
+			frameBytes := packet.Marshal(p.pcpClientObj.ProtocolID)
+			// Write the packet to the interface
+			_, err := p.pConn.Write(frameBytes)
+			if err != nil {
+				log.Println("Error writing packet:", err, "Skip this packet.")
+			}
+		}
+
+		// add packet to the connection's ResendPackets to wait for acknowledgement from peer or resend if lost
+		if len(packet.Payload) > 0 {
+			// if the packet is already in ResendPackets, it is a resend packet. Ignore it. Otherwise, add it to
+			if _, found := packet.Conn.ResendPackets.GetSentPacket(packet.SequenceNumber); !found {
+				packet.Conn.ResendPackets.AddSentPacket(packet)
+			} else {
+				fmt.Println("this is a resent packet. Do not put it into ResendPackets")
+			}
+		}
+
+		if packet.IsOpenConnection && config.AppConfig.PacketLostSimulation {
+			count = (count + 1) % 10
+		}
+		packetLost = false
 	}
 }
 
@@ -235,7 +266,7 @@ func (p *pcpProtocolConnection) getAvailableRandomClientPort() int {
 	// Generate a random port number until it's not in the existingPorts map
 	var randomPort int
 	for {
-		randomPort = rand.Intn(config.ClientPortUpper-config.ClientPortLower) + config.ClientPortLower
+		randomPort = rand.Intn(config.AppConfig.ClientPortUpper-config.AppConfig.ClientPortLower) + config.AppConfig.ClientPortLower
 		if !existingPorts[randomPort] {
 			break
 		}

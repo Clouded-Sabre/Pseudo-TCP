@@ -11,13 +11,16 @@ import (
 )
 
 func main() {
+	// load config
+	config.AppConfig, _ = config.ReadConfig()
+
 	// Define command-line flags
-	sourceIP := flag.String("sourceIP", config.ClientIP, "Source IP address")
-	serverIP := flag.String("serverIP", config.ServerIP, "Server IP address")
-	serverPort := flag.Int("serverPort", config.ServerPort, "Server port")
+	sourceIP := flag.String("sourceIP", config.AppConfig.ClientIP, "Source IP address")
+	serverIP := flag.String("serverIP", config.AppConfig.ServerIP, "Server IP address")
+	serverPort := flag.Int("serverPort", config.AppConfig.ServerPort, "Server port")
 	flag.Parse()
 
-	pcpClientObj := client.NewPcpClient(config.ProtocolID)
+	pcpClientObj := client.NewPcpClient(uint8(config.AppConfig.ProtocolID))
 	// Dial to the server
 	conn, err := pcpClientObj.DialPcp(*sourceIP, *serverIP, uint16(*serverPort))
 	if err != nil {
@@ -29,11 +32,12 @@ func main() {
 	fmt.Println("PCP connection established!")
 
 	// Simulate data transmission
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 10; i++ {
 		// Construct a packet
-		payload := []byte(fmt.Sprintf("Data packet %d ", i))
+		payload := []byte(fmt.Sprintf("Data packet %d \n", i))
 
 		// Send the packet to the server
+		fmt.Println("Sending packet", i)
 		conn.Write(payload)
 		log.Printf("Packet %d sent.\n", i)
 
@@ -44,7 +48,7 @@ func main() {
 	conn.Write(payload)
 	log.Println("Packet sent:", string(payload))
 
-	buffer := make([]byte, config.PreferredMss)
+	buffer := make([]byte, config.AppConfig.PreferredMSS)
 	for {
 		n, err := conn.Read(buffer)
 		if err != nil {

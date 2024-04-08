@@ -26,8 +26,11 @@ func init() {
 }
 
 func main() {
+	// load config
+	config.AppConfig, _ = config.ReadConfig()
+
 	// Create PCP server
-	pcpServerObj, err = server.NewPcpServer(config.ProtocolID)
+	pcpServerObj, err = server.NewPcpServer(uint8(config.AppConfig.ProtocolID))
 	if err != nil {
 		log.Println("Error creating PCP server:", err)
 		return
@@ -63,7 +66,7 @@ func main() {
 }
 
 func handleConnection(conn *lib.Connection) {
-	buffer := make([]byte, config.PreferredMss)
+	buffer := make([]byte, config.AppConfig.PreferredMSS)
 	for {
 		n, err := conn.Read(buffer)
 		if err != nil {
@@ -77,7 +80,7 @@ func handleConnection(conn *lib.Connection) {
 	}
 
 	// Simulate data transmission
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 10; i++ {
 		// Construct a packet
 		payload := []byte(fmt.Sprintf("Data packet %d", i))
 

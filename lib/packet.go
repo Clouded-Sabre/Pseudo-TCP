@@ -4,8 +4,9 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
-	"log"
 	"net"
+	"sort"
+	"sync"
 	"time"
 )
 
@@ -26,7 +27,8 @@ type PcpPacket struct {
 	Checksum          uint16 // Checksum is the checksum of the packet
 	Payload           []byte // Payload represents the payload data
 	TcpOptions        *Options
-	IsOpenConnection  bool // only used in outgoing packet to denote if the connection is open or in 3-way handshake stage
+	IsOpenConnection  bool        // only used in outgoing packet to denote if the connection is open or in 3-way handshake stage
+	Conn              *Connection // used for outgoing packets only to denote which connection it belongs to
 }
 
 // Marshal converts a PcpPacket to a byte slice
@@ -60,6 +62,10 @@ func (p *PcpPacket) Marshal(protocolId uint8) []byte {
 		// Timestamp option: kind (1 byte), length (1 byte), timestamp value (4 bytes), echo reply value (4 bytes)
 		optionsLength += 10
 		optionsPresent = true
+	}
+
+	if optionsPresent && optionsLength > TcpOptionsMaxLength {
+		optionsLength = TcpOptionsMaxLength // TCP option's max length is 40
 	}
 
 	padding := 0
@@ -120,6 +126,9 @@ func (p *PcpPacket) Marshal(protocolId uint8) []byte {
 			optionOffset += 2
 			// Write SACK blocks
 			for _, block := range p.TcpOptions.OutSACKOption.Blocks {
+				if optionOffset+8 >= HeaderSize+TcpOptionsMaxLength {
+					break
+				}
 				binary.BigEndian.PutUint32(frame[optionOffset:optionOffset+4], block.LeftEdge)
 				binary.BigEndian.PutUint32(frame[optionOffset+4:optionOffset+8], block.RightEdge)
 				optionOffset += 8
@@ -127,15 +136,17 @@ func (p *PcpPacket) Marshal(protocolId uint8) []byte {
 		}
 	}
 	if p.TcpOptions.TimestampEnabled {
-		// Timestamp option: kind (1 byte), length (1 byte), timestamp value (4 bytes), echo reply value (4 bytes)
-		frame[optionOffset] = 8    // Kind: Timestamp
-		frame[optionOffset+1] = 10 // Length: 10 bytes (timestamp value + echo reply value)
-		// Write timestamp value (current time) and echo reply value
-		timestamp := time.Now().UnixMicro()
-		echoReplyValue := p.TcpOptions.TsEchoReplyValue
-		binary.BigEndian.PutUint32(frame[optionOffset+2:optionOffset+6], uint32(timestamp))
-		binary.BigEndian.PutUint32(frame[optionOffset+6:optionOffset+10], uint32(echoReplyValue))
-		optionOffset += 10
+		if optionOffset+10 < HeaderSize+TcpOptionsMaxLength {
+			// Timestamp option: kind (1 byte), length (1 byte), timestamp value (4 bytes), echo reply value (4 bytes)
+			frame[optionOffset] = 8    // Kind: Timestamp
+			frame[optionOffset+1] = 10 // Length: 10 bytes (timestamp value + echo reply value)
+			// Write timestamp value (current time) and echo reply value
+			timestamp := time.Now().UnixMicro()
+			echoReplyValue := p.TcpOptions.TsEchoReplyValue
+			binary.BigEndian.PutUint32(frame[optionOffset+2:optionOffset+6], uint32(timestamp))
+			binary.BigEndian.PutUint32(frame[optionOffset+6:optionOffset+10], uint32(echoReplyValue))
+			optionOffset += 10
+		}
 	}
 
 	// Append padding if necessary
@@ -233,7 +244,7 @@ func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) {
 					p.TcpOptions.TimestampEnabled = true
 					p.TcpOptions.Timestamp = timestamp
 					p.TcpOptions.TsEchoReplyValue = echoReplyValue
-					log.Printf("Got TSval:%d and TsErv:%d", timestamp, echoReplyValue)
+					//log.Printf("Got TSval:%d and TsErv:%d", timestamp, echoReplyValue)
 				}
 			default:
 				optionLength = options[i+1]
@@ -277,6 +288,7 @@ func NewPcpPacket(seqNum, ackNum uint32, flags uint8, data []byte, conn *Connect
 		IsOpenConnection:  conn.IsOpenConnection,
 		TcpOptions:        conn.TcpOptions,
 		//TcpOptions:        tcpOptionsCopy,
+		Conn: conn,
 	}
 }
 
@@ -366,4 +378,117 @@ func GenerateISN() (uint32, error) {
 		return 0, err
 	}
 	return isn, nil
+}
+
+// PacketInfo represents information about a sent packet
+type PacketInfo struct {
+	LastSentTime time.Time // Time the packet was last sent
+	ResendCount  int       // Number of times the packet has been resent
+	Data         *PcpPacket
+}
+
+type ResendPackets struct {
+	mutex   sync.Mutex
+	packets map[uint32]PacketInfo
+}
+
+func NewResendPackets() *ResendPackets {
+	return &ResendPackets{
+		packets: make(map[uint32]PacketInfo),
+	}
+}
+
+// Function to add a sent packet to the map
+func (r *ResendPackets) AddSentPacket(packet *PcpPacket) {
+	fmt.Println("got here!!!!!")
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	r.packets[packet.SequenceNumber] = PacketInfo{
+		LastSentTime: time.Now(),
+		ResendCount:  0, // Initial resend count is 1
+		Data:         packet,
+	}
+}
+
+// Function to update information about a sent packet
+func (r *ResendPackets) GetSentPacket(seqNum uint32) (*PacketInfo, bool) {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	if packetInfo, ok := r.packets[seqNum]; ok {
+		return &packetInfo, true
+	} else {
+		return nil, false
+	}
+}
+
+// Function to update information about a sent packet
+func (r *ResendPackets) UpdateSentPacket(seqNum uint32) error {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	if packetInfo, ok := r.packets[seqNum]; ok {
+		packetInfo.LastSentTime = time.Now()
+		packetInfo.ResendCount++
+		// Update other relevant fields as needed
+		r.packets[seqNum] = packetInfo
+		return nil
+	} else {
+		err := fmt.Errorf("corresponding packet not found")
+		return err
+	}
+}
+
+// Function to remove a sent packet from the map
+func (r *ResendPackets) RemoveSentPacket(seqNum uint32) {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	delete(r.packets, seqNum)
+}
+
+type PacketGapMap struct {
+	mutex   sync.Mutex
+	packets map[uint32]*PcpPacket
+}
+
+func NewPacketGapMap() *PacketGapMap {
+	return &PacketGapMap{
+		packets: make(map[uint32]*PcpPacket),
+	}
+}
+
+func (pgm *PacketGapMap) AddPacket(packet *PcpPacket) {
+	pgm.mutex.Lock()
+	defer pgm.mutex.Unlock()
+	pgm.packets[packet.SequenceNumber] = packet
+}
+
+func (pgm *PacketGapMap) RemovePacket(seqNum uint32) {
+	pgm.mutex.Lock()
+	defer pgm.mutex.Unlock()
+	delete(pgm.packets, seqNum)
+}
+
+func (pgm *PacketGapMap) GetPacket(seqNum uint32) (*PcpPacket, bool) {
+	pgm.mutex.Lock()
+	defer pgm.mutex.Unlock()
+	packet, found := pgm.packets[seqNum]
+	return packet, found
+}
+
+// Method to retrieve packets from PacketGapMap in ascending order by SEQ
+func (pgm *PacketGapMap) getPacketsInAscendingOrder() []*PcpPacket {
+	pgm.mutex.Lock()
+	defer pgm.mutex.Unlock()
+
+	// Create a slice to store packets
+	packets := make([]*PcpPacket, 0, len(pgm.packets))
+	for _, packet := range pgm.packets {
+		packets = append(packets, packet)
+	}
+
+	// Sort the packets in ascending order by SEQ
+	sort.Slice(packets, func(i, j int) bool {
+		return packets[i].SequenceNumber < packets[j].SequenceNumber
+	})
+
+	return packets
 }

@@ -1,11 +1,11 @@
 package lib
 
 import (
-	"crypto/rand"
 	"fmt"
 	"log"
 	"math"
 	"net"
+	"sort"
 	"time"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
@@ -35,6 +35,10 @@ type Connection struct {
 	MaxKeepaliveAttempts   int             // Maximum number of keepalive attempts before marking the connection as dead
 	IsKeepAliveInProgress  bool            // denote if keepalive probe is in process or not
 	IsDead                 bool            // mark the connection is idle timed out and failed keepalive probe
+	ResendPackets          ResendPackets   // data structure to hold sent packets which are not acknowledged yet
+	ResendInterval         time.Duration   // packet resend interval
+	resendTimer            *time.Timer     // resend timer to trigger resending packet every ResendInterval
+	RevPacketCache         PacketGapMap    // Cache for received packets who has gap before it due to packet loss or out-of-order
 
 	connCloseSignalChan chan *Connection // send close connection signal to parent service or pConnection to clear it
 	newConnChannel      chan *Connection // server only. send new connection signal to parent service to signal successful 3-way handshake
@@ -65,8 +69,8 @@ type SACKOption struct {
 func NewConnection(key string, remoteAddr net.Addr, remotePort int, localAddr net.Addr, localPort int, outputChan chan *PcpPacket, connCloseSignalChan, newConnChannel chan *Connection) (*Connection, error) {
 	isn, _ := GenerateISN()
 	options := &Options{
-		WindowScaleShiftCount: config.WindowScale,
-		MSS:                   config.PreferredMss,
+		WindowScaleShiftCount: uint8(config.AppConfig.WindowScale),
+		MSS:                   uint16(config.AppConfig.PreferredMSS),
 		SupportSack:           true,
 		TimestampEnabled:      true,
 	}
@@ -84,19 +88,25 @@ func NewConnection(key string, remoteAddr net.Addr, remotePort int, localAddr ne
 		OutputChan:         outputChan,
 		// all the rest variables keep there init value
 		TcpOptions:           options,
-		IdleTimeout:          time.Second * config.IdleTimeout,
-		KeepaliveInterval:    time.Second * config.KeepaliveInterval,
-		MaxKeepaliveAttempts: config.MaxKeepaliveAttempts,
+		IdleTimeout:          time.Second * time.Duration(config.AppConfig.IdleTimeout),
+		KeepaliveInterval:    time.Second * time.Duration(config.AppConfig.KeepaliveInterval),
+		MaxKeepaliveAttempts: config.AppConfig.MaxKeepaliveAttempts,
+		ResendPackets:        *NewResendPackets(),
+		ResendInterval:       time.Duration(config.AppConfig.ResendInterval) * time.Millisecond,
+		RevPacketCache:       *NewPacketGapMap(),
 
 		connCloseSignalChan: connCloseSignalChan,
 		newConnChannel:      newConnChannel,
 		closeSigal:          make(chan struct{}),
 	}
 
-	if config.KeepAliveEnabled {
-		newConn.KeepaliveTimer = time.NewTimer(config.KeepaliveInterval)
+	if config.AppConfig.KeepAliveEnabled {
+		newConn.KeepaliveTimer = time.NewTimer(time.Duration(config.AppConfig.KeepaliveInterval))
 		newConn.startKeepaliveTimer()
 	}
+
+	// Start the resend timer
+	newConn.startResendTimer()
 
 	return newConn, nil
 }
@@ -114,7 +124,7 @@ func (c *Connection) HandleIncomingPackets() {
 			return
 		case packet = <-c.InputChannel:
 			// reset the keepalive timer
-			if config.KeepAliveEnabled {
+			if config.AppConfig.KeepAliveEnabled {
 				c.KeepaliveTimer.Reset(c.IdleTimeout)
 				c.TimeoutCount = 0
 			}
@@ -131,8 +141,9 @@ func (c *Connection) HandleIncomingPackets() {
 			isRST = packet.Flags&RSTFlag != 0
 			isDataPacket = len(packet.Payload) > 0
 
-			if c.TcpOptions.SupportSack && len(packet.TcpOptions.InSACKOption.Blocks) > 0 {
-				c.resendLostPacket(packet)
+			// update ResendPackets if it's ACK packet
+			if isACK {
+				c.UpdateResendPacketsOnAck(packet)
 			}
 
 			if isDataPacket {
@@ -239,7 +250,7 @@ func (c *Connection) Handle3WayHandshake() {
 			// handle TCP option negotiation
 			if c.TcpOptions.WindowScaleShiftCount > 0 {
 				fmt.Println("Set Window Size with Scaling support!")
-				c.WindowSize = config.WindowSizeWithScale
+				c.WindowSize = uint16(config.AppConfig.WindowSizeWithScale)
 			}
 
 			// handle TCP option timestamp
@@ -253,40 +264,59 @@ func (c *Connection) Handle3WayHandshake() {
 }
 
 // Acknowledge received data packet
-func (c *Connection) acknowledge(packet *PcpPacket) {
+func (c *Connection) acknowledge() {
 	// prepare a PcpPacket for acknowledging the received packet
-	if c.TcpOptions.SupportSack && packet.SequenceNumber > c.LastAckNumber {
-		// gap appears. There is out-of-order or lost packet
-		// update OutSACKOption if SACK enabled
-		sackBlocks := make([]SACKBlock, 0)
-		sackBlocks = append(sackBlocks, SACKBlock{LeftEdge: packet.SequenceNumber, RightEdge: uint32(uint64(packet.SequenceNumber) + uint64(len(packet.Payload)))})
-		c.TcpOptions.OutSACKOption.Blocks = sackBlocks
-	} else {
-		if packet.SequenceNumber >= c.LastAckNumber {
-			c.LastAckNumber = uint32(uint64(packet.SequenceNumber) + uint64(len(packet.Payload)))
-		} // if packet.SequenceNumber < c.LastAckNumber, just resend the last ACK
-		c.TcpOptions.OutSACKOption.Blocks = nil
-	}
-
 	ackPacket := NewPcpPacket(c.NextSequenceNumber, c.LastAckNumber, ACKFlag, nil, c)
-
 	// Send the acknowledgment packet to the other end
 	c.OutputChan <- ackPacket
 }
 
 // Handle data packet function for Pcp connection
 func (c *Connection) handleDataPacket(packet *PcpPacket) {
-	// Extract SYN and ACK flags from the packet
-	//isACK := packet.Flags&ACKFlag != 0
-	// check SEQ and ACK
+	// if the packet is already acknowledged by peer, ignore it
+	if packet.SequenceNumber < c.LastAckNumber {
+		return
+	}
+	// if the packet is already in RevPacketCache, ignore it
+	if _, found := c.RevPacketCache.GetPacket(packet.SequenceNumber); found {
+		return
+	}
 
-	if packet.SequenceNumber >= c.LastAckNumber { // throw away out-of-order packets
-		// put packet payload to read channel
-		c.ReadChannel <- packet.Payload
+	if c.TcpOptions.SupportSack {
+		c.LastAckNumber, c.TcpOptions.OutSACKOption.Blocks = c.UpdateACKAndSACK(packet)
+		// Insert the current packet into RevPacketCache
+		c.RevPacketCache.AddPacket(packet)
+
+		// Create a slice to hold packets to delete
+		var packetsToDelete []uint32
+
+		// Scan through packets in RevPacketCache
+		for _, cachedPacket := range c.RevPacketCache.getPacketsInAscendingOrder() {
+			// If a packet's SEQ < c.LastSequenceNumber, put it into ReadChannel
+			if cachedPacket.SequenceNumber < c.LastAckNumber {
+				c.ReadChannel <- cachedPacket.Payload
+				// Add the packet's sequence number to the list of packets to delete
+				packetsToDelete = append(packetsToDelete, cachedPacket.SequenceNumber)
+			} else {
+				// If the packet's SEQ is not less than c.LastSequenceNumber, break the loop
+				break
+			}
+		}
+
+		// Delete packets from RevPacketCache after the loop has finished
+		for _, seqNum := range packetsToDelete {
+			c.RevPacketCache.RemovePacket(seqNum)
+		}
+	} else { // SACK support is disabled
+		if packet.SequenceNumber >= c.LastAckNumber { // throw away out-of-order or lost packets
+			// put packet payload to read channel
+			c.ReadChannel <- packet.Payload
+			c.LastAckNumber = uint32(uint64(packet.AcknowledgmentNum) + uint64(len(packet.Payload)))
+		}
 	}
 
 	// send ACK packet back to the server
-	c.acknowledge(packet)
+	c.acknowledge()
 }
 
 func (c *Connection) Read(buffer []byte) (int, error) {
@@ -314,6 +344,8 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 
 	totalBytesWritten := 0
 
+	fmt.Println("submitting Outgoing packet")
+
 	// Iterate over the buffer and split it into segments if necessary
 	for len(buffer) > 0 {
 		// Determine the length of the current segment
@@ -330,6 +362,7 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 		packet := NewPcpPacket(c.NextSequenceNumber, c.LastAckNumber, ACKFlag, payload, c)
 		c.NextSequenceNumber = uint32(uint64(c.NextSequenceNumber) + uint64(segmentLength)) // Update sequence number. Implicit modulo included
 		c.OutputChan <- packet
+		fmt.Println("buffer length is", len(buffer))
 
 		// Adjust buffer to exclude the sent segment
 		buffer = buffer[segmentLength:]
@@ -358,24 +391,61 @@ func (c *Connection) Close() error {
 	return nil
 }
 
-func (c *Connection) resendLostPacket(packet *PcpPacket) {
-	// we are not really resending lost packet, just pretend to resend a garbage packet of the same length
-	length := packet.TcpOptions.InSACKOption.Blocks[0].LeftEdge - packet.AcknowledgmentNum
-	if length <= 0 {
-		return
-	}
-	// Create a byte slice with the specified length
-	randomBytes := make([]byte, length)
-	// Read random bytes into the slice
-	_, err := rand.Read(randomBytes)
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
+// Function to resend lost packets based on SACK blocks and resend packet information
+func (c *Connection) resendLostPacket() {
+	now := time.Now()
+	packetsToRemove := make([]uint32, 0)
+
+	for seqNum, packetInfo := range c.ResendPackets.packets {
+		if packetInfo.ResendCount < config.AppConfig.MaxResendCount {
+			// Check if the packet has been marked as lost based on SACK blocks
+			lost := true
+			for _, sackBlock := range c.TcpOptions.InSACKOption.Blocks {
+				if seqNum >= sackBlock.LeftEdge && seqNum <= sackBlock.RightEdge {
+					lost = false
+					packetsToRemove = append(packetsToRemove, seqNum)
+					break
+				}
+			}
+
+			// If the packet is marked as lost, check if it's time to resend
+			if lost {
+				if now.Sub(packetInfo.LastSentTime) >= c.ResendInterval {
+					// Resend the packet
+					log.Println("One Packet resent!")
+					c.OutputChan <- packetInfo.Data
+					// Update resend information
+					c.ResendPackets.UpdateSentPacket(seqNum)
+				}
+			}
+		} else {
+			// Mark the packet for removal if it has been resent too many times
+			packetsToRemove = append(packetsToRemove, seqNum)
+		}
 	}
 
-	resendPacket := NewPcpPacket(packet.AcknowledgmentNum, c.LastAckNumber, ACKFlag, randomBytes, c)
-	c.OutputChan <- resendPacket
-	fmt.Println("Resent lost packet...")
+	// Remove the marked packets outside of the loop
+	for _, seqNum := range packetsToRemove {
+		c.ResendPackets.RemoveSentPacket(seqNum)
+	}
+}
+
+// Method to start the resend timer
+func (c *Connection) startResendTimer() {
+	c.resendTimer = time.NewTimer(c.ResendInterval)
+	go func() {
+		defer c.resendTimer.Stop()
+		for {
+			select {
+			case <-c.resendTimer.C:
+				c.resendLostPacket()
+				c.resendTimer.Reset(c.ResendInterval)
+			case <-c.closeSigal:
+				c.resendTimer.Stop()
+				return
+			}
+		}
+	}()
 }
 
 func (c *Connection) sendKeepalivePacket() {
@@ -416,4 +486,137 @@ func (c *Connection) startKeepaliveTimer() {
 		// Reset the timer to send the next keepalive packet after keepaliveInterval
 		c.startKeepaliveTimer()
 	})
+}
+
+func (c *Connection) UpdateACKAndSACK(packet *PcpPacket) (uint32, []SACKBlock) {
+	lastACKNum := c.LastAckNumber
+	sackBlocks := c.TcpOptions.OutSACKOption.Blocks
+	receivedSEQ := packet.SequenceNumber
+	payloadLength := len(packet.Payload)
+	if receivedSEQ < lastACKNum {
+		// Ignore the packet because we have already received and acknowledged the packet
+		return lastACKNum, sackBlocks
+	}
+
+	if receivedSEQ == lastACKNum {
+		// Update last ACK number
+		lastACKNum = uint32(uint64(lastACKNum) + uint64(payloadLength))
+
+		// Update SACK blocks if necessary
+		if len(sackBlocks) > 0 {
+			// since sackBlocks is ordered block, we can simple check if the new lastACKNum
+			// touches block 0's leftEdge
+			if lastACKNum == sackBlocks[0].LeftEdge {
+				// Extend the existing block
+				lastACKNum = sackBlocks[0].RightEdge
+				// Remove the block as it's fully acknowledged
+				sackBlocks = removeSACKBlock(sackBlocks, 0)
+			}
+		}
+
+		return lastACKNum, sackBlocks
+	}
+
+	// receivedSEQ > lastACKNum
+	// Update SACK blocks if necessary
+	newLeftEdge := receivedSEQ
+	newRightEdge := uint32(uint64(receivedSEQ) + uint64(payloadLength))
+
+	var mergedBlocks []SACKBlock
+	var insertPosfound bool
+
+	// Iterate through existing SACK blocks to find appropriate actions
+	for i, block := range sackBlocks {
+		// Case a: If newSEQ and newSEQ+payloadLength fall within an existing block, ignore the packet
+		if newLeftEdge >= block.LeftEdge && newRightEdge <= block.RightEdge {
+			// ignore the packet and return unchanged value
+			return lastACKNum, sackBlocks
+		}
+
+		// Case b: If newSEQ touches rightEdge of one block and newSEQ+payloadLength touches another block's leftEdge, merge blocks
+		if i+1 < len(sackBlocks) {
+			if newLeftEdge == block.RightEdge && newRightEdge == sackBlocks[i+1].LeftEdge {
+				// Extend the current block to cover both blocks i and i+1
+				sackBlocks[i].RightEdge = sackBlocks[i+1].RightEdge
+				// Remove block i+1
+				sackBlocks = removeSACKBlock(sackBlocks, i+1)
+
+				return lastACKNum, sackBlocks
+			}
+		}
+
+		// Case c: If only newSEQ touches rightEdge of one block, expand the block's rightEdge
+		if newLeftEdge == block.RightEdge {
+			sackBlocks[i].RightEdge = newRightEdge
+			return lastACKNum, sackBlocks
+		}
+
+		// Case d: If only newSEQ+payloadLength touches a block's leftEdge, expand the block's leftEdge
+		if newRightEdge == block.LeftEdge {
+			sackBlocks[i].LeftEdge = newLeftEdge
+			return lastACKNum, sackBlocks
+		}
+
+		// case e: need to insert a new block somewhere among the blocks
+		if i+1 < len(sackBlocks) {
+			if newLeftEdge > block.RightEdge && newRightEdge < sackBlocks[i+1].LeftEdge {
+				mergedBlocks = append(sackBlocks[:i+1], append([]SACKBlock{{LeftEdge: newLeftEdge, RightEdge: newRightEdge}}, sackBlocks[i+1:]...)...)
+				insertPosfound = true
+				break
+			}
+		}
+	}
+
+	// If no action was taken, create a new block
+	if !insertPosfound {
+		// append the new block to the end of the blocks
+		sackBlocks = append(sackBlocks, SACKBlock{LeftEdge: newLeftEdge, RightEdge: newRightEdge})
+	} else if len(mergedBlocks) > 0 {
+		// insert the new block
+		sackBlocks = mergedBlocks
+	}
+
+	return lastACKNum, sackBlocks
+}
+
+// Function to remove a SACK block from the slice
+func removeSACKBlock(blocks []SACKBlock, index int) []SACKBlock {
+	// If the block to be removed is the last element
+	if index == len(blocks)-1 {
+		return blocks[:len(blocks)-1]
+	}
+	// Otherwise, remove the block normally
+	copy(blocks[index:], blocks[index+1:])
+	return blocks[:len(blocks)-1]
+}
+
+func (c *Connection) UpdateResendPacketsOnAck(packet *PcpPacket) {
+	// Sort SACK blocks by LeftEdge
+	sort.Slice(c.TcpOptions.InSACKOption.Blocks, func(i, j int) bool {
+		return c.TcpOptions.InSACKOption.Blocks[i].LeftEdge < c.TcpOptions.InSACKOption.Blocks[j].LeftEdge
+	})
+
+	// Create a list to store resend packet's SEQ in ascending order
+	var seqToRemove []uint32
+
+	// Iterate through ResendPackets
+	for seqNum := range c.ResendPackets.packets {
+		// Check if the sequence number falls within any SACK block
+		for _, sackBlock := range c.TcpOptions.InSACKOption.Blocks {
+			if seqNum >= sackBlock.LeftEdge && seqNum <= sackBlock.RightEdge {
+				// If the sequence number is within a SACK block, mark it for removal
+				seqToRemove = append(seqToRemove, seqNum)
+				break
+			}
+		}
+		// or, if seqNum < packet.AckNum, also remove it
+		if seqNum < packet.AcknowledgmentNum {
+			seqToRemove = append(seqToRemove, seqNum)
+		}
+	}
+
+	// Remove marked packets from ResendPackets
+	for _, seqNum := range seqToRemove {
+		c.ResendPackets.RemoveSentPacket(seqNum)
+	}
 }

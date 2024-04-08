@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"log"
+	"math/rand"
 	"net"
 	"os/exec"
 	"strconv"
@@ -75,7 +76,7 @@ func newPcpServerProtocolConnection(p *PcpServer, serverIP string) (*PcpProtocol
 
 func (p *PcpProtocolConnection) handlingIncomingPackets() {
 	// Continuously read from the protocolConn
-	buffer := make([]byte, config.PreferredMss)
+	buffer := make([]byte, config.AppConfig.PreferredMSS)
 	for {
 		n, addr, err := p.Connection.ReadFrom(buffer)
 		if err != nil {
@@ -116,16 +117,44 @@ func (p *PcpProtocolConnection) handlingIncomingPackets() {
 
 // handleOutgoingPackets handles outgoing packets by writing them to the interface.
 func (p *PcpProtocolConnection) handleOutgoingPackets() {
+	count := 0
+	var lostCount = 0
+	packetLost := false
 	for {
 		packet := <-p.OutputChan // Subscribe to p.OutputChan
-		// Marshal the packet into bytes
-		frameBytes := packet.Marshal(p.pcpServerObj.ProtocolID)
-		// Write the packet to the interface
-		_, err := p.Connection.WriteTo(frameBytes, packet.DestAddr)
-		if err != nil {
-			fmt.Println("Error writing packet:", err)
-			continue
+		if packet.IsOpenConnection && config.AppConfig.PacketLostSimulation {
+			if count == 0 {
+				lostCount = rand.Intn(10)
+			}
+			if count == lostCount {
+				lostCount = 100
+				log.Println("Packet", count, "is lost")
+				packetLost = true
+			}
 		}
+
+		if !packetLost {
+			// Marshal the packet into bytes
+			frameBytes := packet.Marshal(p.pcpServerObj.ProtocolID)
+			// Write the packet to the interface
+			_, err := p.Connection.WriteTo(frameBytes, packet.DestAddr)
+			if err != nil {
+				fmt.Println("Error writing packet:", err, "Skip this packet.")
+			}
+		}
+
+		// add packet to the connection's ResendPackets to wait for acknowledgement from peer
+		if len(packet.Payload) > 0 {
+			// if the packet is already in RevPacketCache, it is a resend packet. Ignore it. Otherwise, add it to
+			if _, found := packet.Conn.ResendPackets.GetSentPacket(packet.SequenceNumber); !found {
+				packet.Conn.ResendPackets.AddSentPacket(packet)
+			}
+		}
+
+		if packet.IsOpenConnection && config.AppConfig.PacketLostSimulation {
+			count = (count + 1) % 10
+		}
+		packetLost = false
 	}
 }
 
