@@ -144,7 +144,7 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 		}
 
 		// add packet to the connection's ResendPackets to wait for acknowledgement from peer
-		if len(packet.Payload) > 0 {
+		if packet.Conn.TcpOptions.SackEnabled && len(packet.Payload) > 0 {
 			// if the packet is already in RevPacketCache, it is a resend packet. Ignore it. Otherwise, add it to
 			if _, found := packet.Conn.ResendPackets.GetSentPacket(packet.SequenceNumber); !found {
 				packet.Conn.ResendPackets.AddSentPacket(packet)

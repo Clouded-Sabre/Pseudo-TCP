@@ -46,12 +46,12 @@ func (p *PcpPacket) Marshal(protocolId uint8) []byte {
 		optionsLength += 4
 		optionsPresent = true
 	}
-	if !p.IsOpenConnection && p.TcpOptions.SupportSack {
+	if !p.IsOpenConnection && p.TcpOptions.PermitSack {
 		// MSS option: kind (1 byte), length (1 byte)
 		optionsLength += 2
 		optionsPresent = true
 	}
-	if p.IsOpenConnection && p.TcpOptions.SupportSack {
+	if p.IsOpenConnection && p.TcpOptions.SackEnabled {
 		if len(p.TcpOptions.OutSACKOption.Blocks) > 0 {
 			// SACK option kind 5: kind (1 byte), length (1 byte), SACK blocks
 			optionsLength += 2 + len(p.TcpOptions.OutSACKOption.Blocks)*8 // 8 bytes per SACK block
@@ -112,13 +112,13 @@ func (p *PcpPacket) Marshal(protocolId uint8) []byte {
 		binary.BigEndian.PutUint16(frame[optionOffset+2:optionOffset+4], p.TcpOptions.MSS)
 		optionOffset += 4
 	}
-	if !p.IsOpenConnection && p.TcpOptions.SupportSack {
-		// MSS option: kind (1 byte), length (1 byte)
+	if !p.IsOpenConnection && p.TcpOptions.PermitSack {
+		// SACK permit option: kind (1 byte), length (1 byte)
 		frame[optionOffset] = 4   // Kind: SACK permitted
 		frame[optionOffset+1] = 2 // Length: 2 bytes
 		optionOffset += 2
 	}
-	if p.IsOpenConnection && p.TcpOptions.SupportSack {
+	if p.IsOpenConnection && p.TcpOptions.SackEnabled {
 		if len(p.TcpOptions.OutSACKOption.Blocks) > 0 {
 			// SACK option kind 5: kind (1 byte), length (1 byte), SACK blocks
 			frame[optionOffset] = 5                                                    // Kind: SACK
@@ -218,7 +218,7 @@ func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) {
 			case 4: // SACK support
 				optionLength = options[i+1]
 				if optionLength == 2 {
-					p.TcpOptions.SupportSack = true
+					p.TcpOptions.PermitSack = true
 				}
 			case 5: // SACK option
 				optionLength = options[i+1]
@@ -400,7 +400,6 @@ func NewResendPackets() *ResendPackets {
 
 // Function to add a sent packet to the map
 func (r *ResendPackets) AddSentPacket(packet *PcpPacket) {
-	fmt.Println("got here!!!!!")
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 	r.packets[packet.SequenceNumber] = PacketInfo{

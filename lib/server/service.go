@@ -160,9 +160,8 @@ func (s *Service) handleSynPacket(packet *lib.PcpPacket) {
 	}
 
 	// SACK support
-	if !packet.TcpOptions.SupportSack {
-		newConn.TcpOptions.SupportSack = false // Disable it
-	}
+	newConn.TcpOptions.PermitSack = newConn.TcpOptions.PermitSack && packet.TcpOptions.PermitSack    // both sides need to permit SACK
+	newConn.TcpOptions.SackEnabled = newConn.TcpOptions.PermitSack && newConn.TcpOptions.SackEnabled // Sack Option support also needs to be manually enabled
 
 	// timestamp support
 	newConn.TcpOptions.TimestampEnabled = packet.TcpOptions.TimestampEnabled

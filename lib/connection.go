@@ -49,7 +49,8 @@ type Connection struct {
 type Options struct {
 	WindowScaleShiftCount uint8  // TCP Window scaling, < 14 which mean WindowSize * 2^14
 	MSS                   uint16 // max tcp segment size
-	SupportSack           bool   // SACK support. No real support because no retransmission happens
+	PermitSack            bool   // SACK permit support. No real support because no retransmission happens
+	SackEnabled           bool   // enable SACK option kind 5 or not
 	TimestampEnabled      bool   // timestamp support
 	TsEchoReplyValue      uint32
 	Timestamp             uint32
@@ -71,7 +72,8 @@ func NewConnection(key string, remoteAddr net.Addr, remotePort int, localAddr ne
 	options := &Options{
 		WindowScaleShiftCount: uint8(config.AppConfig.WindowScale),
 		MSS:                   uint16(config.AppConfig.PreferredMSS),
-		SupportSack:           true,
+		PermitSack:            config.AppConfig.SackPermitSupport,
+		SackEnabled:           config.AppConfig.SackOptionSupport,
 		TimestampEnabled:      true,
 	}
 	newConn := &Connection{
@@ -104,9 +106,6 @@ func NewConnection(key string, remoteAddr net.Addr, remotePort int, localAddr ne
 		newConn.KeepaliveTimer = time.NewTimer(time.Duration(config.AppConfig.KeepaliveInterval))
 		newConn.startKeepaliveTimer()
 	}
-
-	// Start the resend timer
-	newConn.startResendTimer()
 
 	return newConn, nil
 }
@@ -258,6 +257,12 @@ func (c *Connection) Handle3WayHandshake() {
 				c.TcpOptions.TsEchoReplyValue = packet.TcpOptions.Timestamp
 			}
 
+			//start resend timer if SACK enabled
+			if c.TcpOptions.SackEnabled {
+				// Start the resend timer
+				c.StartResendTimer()
+			}
+
 			return // this will terminate this go routine
 		}
 	}
@@ -273,16 +278,17 @@ func (c *Connection) acknowledge() {
 
 // Handle data packet function for Pcp connection
 func (c *Connection) handleDataPacket(packet *PcpPacket) {
-	// if the packet is already acknowledged by peer, ignore it
+	// if the packet was already acknowledged by us, ignore it
 	if packet.SequenceNumber < c.LastAckNumber {
 		return
 	}
-	// if the packet is already in RevPacketCache, ignore it
-	if _, found := c.RevPacketCache.GetPacket(packet.SequenceNumber); found {
-		return
-	}
 
-	if c.TcpOptions.SupportSack {
+	if c.TcpOptions.SackEnabled {
+		// if the packet is already in RevPacketCache, ignore it
+		if _, found := c.RevPacketCache.GetPacket(packet.SequenceNumber); found {
+			return
+		}
+
 		c.LastAckNumber, c.TcpOptions.OutSACKOption.Blocks = c.UpdateACKAndSACK(packet)
 		// Insert the current packet into RevPacketCache
 		c.RevPacketCache.AddPacket(packet)
@@ -308,10 +314,10 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 			c.RevPacketCache.RemovePacket(seqNum)
 		}
 	} else { // SACK support is disabled
-		if packet.SequenceNumber >= c.LastAckNumber { // throw away out-of-order or lost packets
+		if isGreaterOrEqual(packet.SequenceNumber, c.LastAckNumber) { // throw away out-of-order or lost packets
 			// put packet payload to read channel
 			c.ReadChannel <- packet.Payload
-			c.LastAckNumber = uint32(uint64(packet.AcknowledgmentNum) + uint64(len(packet.Payload)))
+			c.LastAckNumber = uint32(uint64(packet.SequenceNumber) + uint64(len(packet.Payload)))
 		}
 	}
 
@@ -344,7 +350,7 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 
 	totalBytesWritten := 0
 
-	fmt.Println("submitting Outgoing packet")
+	//fmt.Println("submitting Outgoing packet")
 
 	// Iterate over the buffer and split it into segments if necessary
 	for len(buffer) > 0 {
@@ -362,7 +368,7 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 		packet := NewPcpPacket(c.NextSequenceNumber, c.LastAckNumber, ACKFlag, payload, c)
 		c.NextSequenceNumber = uint32(uint64(c.NextSequenceNumber) + uint64(segmentLength)) // Update sequence number. Implicit modulo included
 		c.OutputChan <- packet
-		fmt.Println("buffer length is", len(buffer))
+		//fmt.Println("buffer length is", len(buffer))
 
 		// Adjust buffer to exclude the sent segment
 		buffer = buffer[segmentLength:]
@@ -401,7 +407,7 @@ func (c *Connection) resendLostPacket() {
 			// Check if the packet has been marked as lost based on SACK blocks
 			lost := true
 			for _, sackBlock := range c.TcpOptions.InSACKOption.Blocks {
-				if seqNum >= sackBlock.LeftEdge && seqNum <= sackBlock.RightEdge {
+				if isGreaterOrEqual(seqNum, sackBlock.LeftEdge) && isLessOrEqual(seqNum, sackBlock.RightEdge) {
 					lost = false
 					packetsToRemove = append(packetsToRemove, seqNum)
 					break
@@ -431,7 +437,7 @@ func (c *Connection) resendLostPacket() {
 }
 
 // Method to start the resend timer
-func (c *Connection) startResendTimer() {
+func (c *Connection) StartResendTimer() {
 	c.resendTimer = time.NewTimer(c.ResendInterval)
 	go func() {
 		defer c.resendTimer.Stop()
@@ -493,7 +499,7 @@ func (c *Connection) UpdateACKAndSACK(packet *PcpPacket) (uint32, []SACKBlock) {
 	sackBlocks := c.TcpOptions.OutSACKOption.Blocks
 	receivedSEQ := packet.SequenceNumber
 	payloadLength := len(packet.Payload)
-	if receivedSEQ < lastACKNum {
+	if isLess(receivedSEQ, lastACKNum) {
 		// Ignore the packet because we have already received and acknowledged the packet
 		return lastACKNum, sackBlocks
 	}
@@ -528,7 +534,7 @@ func (c *Connection) UpdateACKAndSACK(packet *PcpPacket) (uint32, []SACKBlock) {
 	// Iterate through existing SACK blocks to find appropriate actions
 	for i, block := range sackBlocks {
 		// Case a: If newSEQ and newSEQ+payloadLength fall within an existing block, ignore the packet
-		if newLeftEdge >= block.LeftEdge && newRightEdge <= block.RightEdge {
+		if isGreaterOrEqual(newLeftEdge, block.LeftEdge) && isLessOrEqual(newRightEdge, block.RightEdge) {
 			// ignore the packet and return unchanged value
 			return lastACKNum, sackBlocks
 		}
@@ -559,7 +565,7 @@ func (c *Connection) UpdateACKAndSACK(packet *PcpPacket) (uint32, []SACKBlock) {
 
 		// case e: need to insert a new block somewhere among the blocks
 		if i+1 < len(sackBlocks) {
-			if newLeftEdge > block.RightEdge && newRightEdge < sackBlocks[i+1].LeftEdge {
+			if isGreater(newLeftEdge, block.RightEdge) && isLess(newRightEdge, sackBlocks[i+1].LeftEdge) {
 				mergedBlocks = append(sackBlocks[:i+1], append([]SACKBlock{{LeftEdge: newLeftEdge, RightEdge: newRightEdge}}, sackBlocks[i+1:]...)...)
 				insertPosfound = true
 				break
@@ -593,7 +599,7 @@ func removeSACKBlock(blocks []SACKBlock, index int) []SACKBlock {
 func (c *Connection) UpdateResendPacketsOnAck(packet *PcpPacket) {
 	// Sort SACK blocks by LeftEdge
 	sort.Slice(c.TcpOptions.InSACKOption.Blocks, func(i, j int) bool {
-		return c.TcpOptions.InSACKOption.Blocks[i].LeftEdge < c.TcpOptions.InSACKOption.Blocks[j].LeftEdge
+		return isLess(c.TcpOptions.InSACKOption.Blocks[i].LeftEdge, c.TcpOptions.InSACKOption.Blocks[j].LeftEdge)
 	})
 
 	// Create a list to store resend packet's SEQ in ascending order
@@ -603,14 +609,14 @@ func (c *Connection) UpdateResendPacketsOnAck(packet *PcpPacket) {
 	for seqNum := range c.ResendPackets.packets {
 		// Check if the sequence number falls within any SACK block
 		for _, sackBlock := range c.TcpOptions.InSACKOption.Blocks {
-			if seqNum >= sackBlock.LeftEdge && seqNum <= sackBlock.RightEdge {
+			if isGreaterOrEqual(seqNum, sackBlock.LeftEdge) && isLessOrEqual(seqNum, sackBlock.RightEdge) {
 				// If the sequence number is within a SACK block, mark it for removal
 				seqToRemove = append(seqToRemove, seqNum)
 				break
 			}
 		}
 		// or, if seqNum < packet.AckNum, also remove it
-		if seqNum < packet.AcknowledgmentNum {
+		if isLess(seqNum, packet.AcknowledgmentNum) {
 			seqToRemove = append(seqToRemove, seqNum)
 		}
 	}
@@ -619,4 +625,37 @@ func (c *Connection) UpdateResendPacketsOnAck(packet *PcpPacket) {
 	for _, seqNum := range seqToRemove {
 		c.ResendPackets.RemoveSentPacket(seqNum)
 	}
+}
+
+// SEQ compare function with SEQ wraparound in mind
+func isGreater(seq1, seq2 uint32) bool {
+	// Calculate direct difference
+	var diff, wrapdiff, distance int64
+	diff = int64(seq1) - int64(seq2)
+	if diff < 0 {
+		diff = -diff
+	}
+	wrapdiff = int64(math.MaxUint32 + 1 - diff)
+
+	// Choose the shorter distance
+	if diff < wrapdiff {
+		distance = diff
+	} else {
+		distance = wrapdiff
+	}
+
+	// Check if the first sequence number is "greater"
+	return (distance+int64(seq2))%(math.MaxUint32+1) == int64(seq1)
+}
+
+func isGreaterOrEqual(seq1, seq2 uint32) bool {
+	return isGreater(seq1, seq2) || (seq1 == seq2)
+}
+
+func isLess(seq1, seq2 uint32) bool {
+	return !isGreater(seq1, seq2)
+}
+
+func isLessOrEqual(seq1, seq2 uint32) bool {
+	return isLess(seq1, seq2) || (seq1 == seq2)
 }

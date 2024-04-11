@@ -29,6 +29,8 @@ type Config struct {
 	PacketLostSimulation bool   `yaml:"packet_lost_simulation"`
 	MaxResendCount       int    `yaml:"max_resend_count"` // max resend tries
 	ResendInterval       int    `yaml:"resend_interval"`  // packet resend interval in number of mini-seconds
+	SackPermitSupport    bool   `yaml:"sack_permit_support"`
+	SackOptionSupport    bool   `yaml:"sack_option_support"`
 }
 
 var AppConfig *Config

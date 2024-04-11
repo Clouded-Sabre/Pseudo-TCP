@@ -14,3 +14,5 @@ keep_alive_enabled: true
 packet_lost_simulation: true
 max_resend_count: 5
 resend_interval: 200
+sack_permit_support: true
+sack_option_support: true

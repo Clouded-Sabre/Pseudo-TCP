@@ -96,10 +96,19 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*lib.Connection, error) {
 
 			newConn.IsOpenConnection = true
 			newConn.TcpOptions.TimestampEnabled = packet.TcpOptions.TimestampEnabled
+			// Sack permit and SackOption support
+			newConn.TcpOptions.PermitSack = newConn.TcpOptions.PermitSack && packet.TcpOptions.PermitSack    // both sides need to permit SACK
+			newConn.TcpOptions.SackEnabled = newConn.TcpOptions.PermitSack && newConn.TcpOptions.SackEnabled // Sack Option support also needs to be manually enabled
+
 			p.ConnectionMap[connKey] = newConn
 
 			// start go routine to handle incoming packets for new connection
 			go newConn.HandleIncomingPackets()
+			// start ResendTimer if Sack Enabled
+			if newConn.TcpOptions.SackEnabled {
+				// Start the resend timer
+				newConn.StartResendTimer()
+			}
 
 			return newConn, nil
 		}
@@ -191,7 +200,7 @@ func (p *pcpProtocolConnection) handleOutgoingPackets() {
 		/*if len(packet.Data.Payload) > 0 {
 			fmt.Println("outgoing packet payload is", packet.Data.Payload)
 		}*/
-		fmt.Println("PTC got packet.")
+		//fmt.Println("PTC got packet.")
 
 		if packet.IsOpenConnection && config.AppConfig.PacketLostSimulation {
 			if count == 0 {
@@ -215,12 +224,12 @@ func (p *pcpProtocolConnection) handleOutgoingPackets() {
 		}
 
 		// add packet to the connection's ResendPackets to wait for acknowledgement from peer or resend if lost
-		if len(packet.Payload) > 0 {
+		if packet.Conn.TcpOptions.SackEnabled && len(packet.Payload) > 0 {
 			// if the packet is already in ResendPackets, it is a resend packet. Ignore it. Otherwise, add it to
 			if _, found := packet.Conn.ResendPackets.GetSentPacket(packet.SequenceNumber); !found {
 				packet.Conn.ResendPackets.AddSentPacket(packet)
 			} else {
-				fmt.Println("this is a resent packet. Do not put it into ResendPackets")
+				//fmt.Println("this is a resent packet. Do not put it into ResendPackets")
 			}
 		}
 
