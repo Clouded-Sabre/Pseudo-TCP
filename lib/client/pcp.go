@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 	"github.com/Clouded-Sabre/Pseudo-TCP/lib"
 )
 
@@ -21,6 +22,8 @@ func NewPcpClient(protocolId uint8) *pcpClient {
 	protoConnectionMap := make(map[string]*pcpProtocolConnection)
 
 	pcpClientObj := &pcpClient{ProtocolID: protocolId, ProtoConnectionMap: protoConnectionMap}
+
+	lib.Pool = lib.NewPayloadPool(config.AppConfig.PayloadPoolSize, config.AppConfig.PreferredMSS)
 
 	fmt.Println("Pcp protocol client started")
 

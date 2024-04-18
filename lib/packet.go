@@ -4,35 +4,34 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"net"
 	"sort"
 	"sync"
 	"time"
 )
 
-const (
-	HeaderSize = 20 // HeaderSize is the size of the header in bytes (assumes option field is not used). Adjust as per your header size
-)
-
 // PcpPacket represents a packet in your custom protocol
 type PcpPacket struct {
-	SrcAddr, DestAddr net.Addr
-	SourcePort        uint16 // SourcePort represents the source port
-	DestinationPort   uint16 // DestinationPort represents the destination port
-	SequenceNumber    uint32 // SequenceNumber represents the sequence number
-	AcknowledgmentNum uint32 // AcknowledgmentNum represents the acknowledgment number
-	WindowSize        uint16 // WindowSize specifies the number of bytes the receiver is willing to receive
-	Flags             uint8  // Flags represent various control flags
-	UrgentPointer     uint16 // UrgentPointer indicates the end of the urgent data (empty for now)
-	Checksum          uint16 // Checksum is the checksum of the packet
-	Payload           []byte // Payload represents the payload data
-	TcpOptions        *Options
-	IsOpenConnection  bool        // only used in outgoing packet to denote if the connection is open or in 3-way handshake stage
-	Conn              *Connection // used for outgoing packets only to denote which connection it belongs to
+	SrcAddr, DestAddr  net.Addr
+	SourcePort         uint16 // SourcePort represents the source port
+	DestinationPort    uint16 // DestinationPort represents the destination port
+	SequenceNumber     uint32 // SequenceNumber represents the sequence number
+	AcknowledgmentNum  uint32 // AcknowledgmentNum represents the acknowledgment number
+	WindowSize         uint16 // WindowSize specifies the number of bytes the receiver is willing to receive
+	Flags              uint8  // Flags represent various control flags
+	UrgentPointer      uint16 // UrgentPointer indicates the end of the urgent data (empty for now)
+	Checksum           uint16 // Checksum is the checksum of the packet
+	Payload            []byte // Payload represents the payload data
+	TcpOptions         *Options
+	IsOpenConnection   bool        // only used in outgoing packet to denote if the connection is open or in 3-way handshake stage
+	Conn               *Connection // used for outgoing packets only to denote which connection it belongs to
+	chunk              *Chunk      // point to memory chunk used to store payload
+	IsKeepAliveMassege bool        // denote if this is a keepalive massage. If yes, don't put it into Connection's ResendPackets
 }
 
 // Marshal converts a PcpPacket to a byte slice
-func (p *PcpPacket) Marshal(protocolId uint8) []byte {
+func (p *PcpPacket) Marshal(protocolId uint8, buffer []byte) (int, error) {
 	// Calculate the length of the options field (including padding)
 	optionsLength := 0
 	optionsPresent := false
@@ -72,10 +71,17 @@ func (p *PcpPacket) Marshal(protocolId uint8) []byte {
 	if optionsPresent && optionsLength%4 != 0 {
 		padding = 4 - (optionsLength % 4)
 	}
-	totalLength := HeaderSize + optionsLength + padding
+	totalHeaderLength := TcpHeaderLength + optionsLength + padding
+
+	pcpFrameLength := totalHeaderLength + len(p.Payload)
+	if pcpFrameLength+TcpPseudoHeaderLength > len(buffer) {
+		err := fmt.Errorf("buffer size (%d) is too small to hold the frame (%d) + TcpPseudoHeader", len(buffer), pcpFrameLength)
+		return 0, err
+	}
 
 	// Allocate space for the frame
-	frame := make([]byte, totalLength)
+	//frame := make([]byte, totalHeaderLength)
+	frame := buffer[TcpPseudoHeaderLength:]
 
 	// Write header fields
 	binary.BigEndian.PutUint16(frame[0:2], p.SourcePort)
@@ -84,7 +90,7 @@ func (p *PcpPacket) Marshal(protocolId uint8) []byte {
 	binary.BigEndian.PutUint32(frame[8:12], p.AcknowledgmentNum)
 
 	// Calculate Data Offset and Reserved field (DO and RSV)
-	doAndRsv := uint8(totalLength/4) << 4
+	doAndRsv := uint8(totalHeaderLength/4) << 4
 
 	// Write DO and RSV into the 12th byte
 	frame[12] = doAndRsv
@@ -93,11 +99,12 @@ func (p *PcpPacket) Marshal(protocolId uint8) []byte {
 	frame[13] = p.Flags
 
 	binary.BigEndian.PutUint16(frame[14:16], p.WindowSize)
-	// leave frame[16:18] as all zero for now
+	// leave frame[16:18] (checksum) as all zero for now
+	binary.BigEndian.PutUint16(frame[16:18], 0)
 	binary.BigEndian.PutUint16(frame[18:20], p.UrgentPointer)
 
 	// Construct options
-	optionOffset := HeaderSize
+	optionOffset := TcpHeaderLength
 	if !p.IsOpenConnection && p.TcpOptions.WindowScaleShiftCount > 0 {
 		// Window scaling option: kind (1 byte), length (1 byte), shift count (1 byte)
 		frame[optionOffset] = 3   // Kind: Window Scale
@@ -126,7 +133,7 @@ func (p *PcpPacket) Marshal(protocolId uint8) []byte {
 			optionOffset += 2
 			// Write SACK blocks
 			for _, block := range p.TcpOptions.OutSACKOption.Blocks {
-				if optionOffset+8 >= HeaderSize+TcpOptionsMaxLength {
+				if optionOffset+8 >= TcpHeaderLength+TcpOptionsMaxLength {
 					break
 				}
 				binary.BigEndian.PutUint32(frame[optionOffset:optionOffset+4], block.LeftEdge)
@@ -136,7 +143,7 @@ func (p *PcpPacket) Marshal(protocolId uint8) []byte {
 		}
 	}
 	if p.TcpOptions.TimestampEnabled {
-		if optionOffset+10 < HeaderSize+TcpOptionsMaxLength {
+		if optionOffset+10 < TcpHeaderLength+TcpOptionsMaxLength {
 			// Timestamp option: kind (1 byte), length (1 byte), timestamp value (4 bytes), echo reply value (4 bytes)
 			frame[optionOffset] = 8    // Kind: Timestamp
 			frame[optionOffset+1] = 10 // Length: 10 bytes (timestamp value + echo reply value)
@@ -156,21 +163,27 @@ func (p *PcpPacket) Marshal(protocolId uint8) []byte {
 		}
 	}
 
-	pcpFrameLength := totalLength + len(p.Payload)
 	// Calculate checksum over the pseudo-header, TCP header, and payload
-	pseudoHeader := assemblePseudoHeader(p.SrcAddr, p.DestAddr, protocolId, uint16(pcpFrameLength))
-	data := append(pseudoHeader, append(frame, p.Payload...)...)
-	checksum := CalculateChecksum(data)
+	err := assemblePseudoHeader(buffer[:TcpPseudoHeaderLength], p.SrcAddr, p.DestAddr, protocolId, uint16(pcpFrameLength))
+	if err != nil {
+		log.Fatal(err)
+	}
+	// Append payload to the frame
+	if len(p.Payload) > 0 {
+		copy(frame[totalHeaderLength:], p.Payload)
+	}
+
+	checksum := CalculateChecksum(buffer[:TcpPseudoHeaderLength+pcpFrameLength])
 	binary.BigEndian.PutUint16(frame[16:18], checksum)
 
-	// Append payload to the frame
-	frame = append(frame, p.Payload...)
-
-	return frame
+	return pcpFrameLength, nil
 }
 
 // Unmarshal converts a byte slice to a PcpPacket
-func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) {
+func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) error {
+	if len(data) < TcpHeaderLength {
+		return fmt.Errorf("the length(%d) of data is too short to be unmarshalled", len(data))
+	}
 	p.SrcAddr = srcAddr
 	p.DestAddr = destAddr
 	p.SourcePort = binary.BigEndian.Uint16(data[0:2])
@@ -183,10 +196,13 @@ func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) {
 
 	// Calculate the Data Offset (DO) to determine the options length
 	do := (data[12] >> 4) * 4
-	optionsLength := int(do) - HeaderSize
+	optionsLength := int(do) - TcpHeaderLength
+	if optionsLength < 0 {
+		return fmt.Errorf("packet unmarshall: The length(%d) of option is less than 0", optionsLength)
+	}
 
 	// Extract options from the data
-	options := data[HeaderSize : HeaderSize+optionsLength]
+	options := data[TcpHeaderLength : TcpHeaderLength+optionsLength]
 
 	if p.TcpOptions == nil {
 		p.TcpOptions = &Options{} // all attributes set to zero for which means disabled
@@ -255,10 +271,18 @@ func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) {
 	}
 
 	// Extract payload from the data
-	p.Payload = data[HeaderSize+optionsLength:]
+	if len(data[TcpHeaderLength+optionsLength:]) > 0 {
+		p.GetChunk() // allocate chunk from pool
+		p.chunk.Copy(data[TcpHeaderLength+optionsLength:])
+		p.Payload = p.chunk.Data[:p.chunk.Length]
+	} else {
+		p.Payload = nil
+	}
+	//p.Payload = data[HeaderSize+optionsLength:]
 
 	// Retrieve the checksum from the packet
 	p.Checksum = binary.BigEndian.Uint16(data[16:18]) // Assuming checksum field is at byte 16 and 17
+	return nil
 }
 
 func NewPcpPacket(seqNum, ackNum uint32, flags uint8, data []byte, conn *Connection) *PcpPacket {
@@ -274,8 +298,7 @@ func NewPcpPacket(seqNum, ackNum uint32, flags uint8, data []byte, conn *Connect
 			Timestamp:             conn.TcpOptions.Timestamp,
 		}
 	}*/
-
-	return &PcpPacket{
+	newPacket := &PcpPacket{
 		SrcAddr:           conn.LocalAddr,
 		DestAddr:          conn.RemoteAddr,
 		SourcePort:        uint16(conn.LocalPort),
@@ -284,12 +307,28 @@ func NewPcpPacket(seqNum, ackNum uint32, flags uint8, data []byte, conn *Connect
 		AcknowledgmentNum: ackNum,
 		Flags:             flags,
 		WindowSize:        conn.WindowSize,
-		Payload:           data,
-		IsOpenConnection:  conn.IsOpenConnection,
-		TcpOptions:        conn.TcpOptions,
+		//Payload:           data,
+		IsOpenConnection: conn.IsOpenConnection,
+		TcpOptions:       conn.TcpOptions,
 		//TcpOptions:        tcpOptionsCopy,
 		Conn: conn,
 	}
+	if len(data) > 0 {
+		newPacket.GetChunk()
+		newPacket.chunk.Copy(data)
+		newPacket.Payload = newPacket.chunk.Data[:newPacket.chunk.Length]
+	}
+	return newPacket
+}
+
+func (p *PcpPacket) ReturnChunk() {
+	if p.chunk != nil {
+		Pool.ReturnPayload(p.chunk)
+	}
+}
+
+func (p *PcpPacket) GetChunk() {
+	p.chunk = Pool.GetPayload()
 }
 
 func CalculateChecksum(buffer []byte) uint16 {
@@ -315,21 +354,31 @@ func CalculateChecksum(buffer []byte) uint16 {
 }
 
 func VerifyChecksum(data []byte, srcAddr, dstAddr net.Addr, protocolId uint8) bool {
+	// Please note that the first TcpPseudoHeaderLength bytes of data is reserved for TCP Pseudo header
+	if len(data) < TcpHeaderLength+TcpPseudoHeaderLength {
+		log.Printf("The received packet's total length is too short(%d)\n", len(data))
+		return false
+	}
+	frame := data[TcpPseudoHeaderLength:]
 	// Retrieve the checksum from the packet
-	receivedChecksum := binary.BigEndian.Uint16(data[16:18]) // Assuming checksum field is at byte 16 and 17
+	receivedChecksum := binary.BigEndian.Uint16(frame[16:18]) // Assuming checksum field is at byte 16 and 17
 
 	// Zero out the checksum field in data for calculation
-	binary.BigEndian.PutUint16(data[16:18], 0)
+	binary.BigEndian.PutUint16(frame[16:18], 0)
 
 	// Calculate checksum over the pseudo-header, TCP header, and payload
-	pcpFrameLength := uint16(len(data))
-	pseudoHeader := assemblePseudoHeader(srcAddr, dstAddr, protocolId, pcpFrameLength)
-	checksumData := append(pseudoHeader, data...)
+	pcpFrameLength := uint16(len(frame))
+	err := assemblePseudoHeader(data[:TcpPseudoHeaderLength], srcAddr, dstAddr, protocolId, pcpFrameLength)
+	if err != nil {
+		log.Println("error in assembling pseudo tcp header:", err)
+		return false
+	}
+	//checksumData := append(pseudoHeader, data...)
 	// Calculate the checksum
-	calculatedChecksum := CalculateChecksum(checksumData)
+	calculatedChecksum := CalculateChecksum(data)
 
 	// Restore the original checksum field in data
-	binary.BigEndian.PutUint16(data[16:18], receivedChecksum)
+	binary.BigEndian.PutUint16(frame[16:18], receivedChecksum)
 	//log.Printf(Red+"Calculated Checksum: %x, Extracted Checksum: %x"+Reset, calculatedChecksum, receivedChecksum)
 
 	// Compare the received checksum with the calculated checksum
@@ -337,23 +386,26 @@ func VerifyChecksum(data []byte, srcAddr, dstAddr net.Addr, protocolId uint8) bo
 }
 
 // assemblePseudoHeader assembles the pseudo-header for checksum calculation
-func assemblePseudoHeader(srcAddr, dstAddr net.Addr, protocolId uint8, pcpFrameLength uint16) []byte {
-	pseudoHeader := make([]byte, 12)
+func assemblePseudoHeader(buffer []byte, srcAddr, dstAddr net.Addr, protocolId uint8, pcpFrameLength uint16) error {
+	if len(buffer) != TcpPseudoHeaderLength {
+		return fmt.Errorf("tcp pseudo header Buffer length(%d) is not TcpPseudoHeaderLength", len(buffer))
+	}
 	srcIP := srcAddr.(*net.IPAddr).IP.To4() // Type assertion to get the IPv4 address
 	dstIP := dstAddr.(*net.IPAddr).IP.To4() // Type assertion to get the IPv4 address
-	binary.BigEndian.PutUint32(pseudoHeader[0:4], binary.BigEndian.Uint32(srcIP))
-	binary.BigEndian.PutUint32(pseudoHeader[4:8], binary.BigEndian.Uint32(dstIP))
+	binary.BigEndian.PutUint32(buffer[0:4], binary.BigEndian.Uint32(srcIP))
+	binary.BigEndian.PutUint32(buffer[4:8], binary.BigEndian.Uint32(dstIP))
 	// leave byte 8 (Fixed 8 bits) as all zero as byte 8
-	pseudoHeader[9] = protocolId
-	binary.BigEndian.PutUint16(pseudoHeader[10:12], pcpFrameLength)
-	return pseudoHeader
+	buffer[8] = 0
+	buffer[9] = protocolId
+	binary.BigEndian.PutUint16(buffer[10:12], pcpFrameLength)
+	return nil
 }
 
 // Function to extract payload from an IP packet
-func ExtractIpPayload(ipFrame []byte) ([]byte, error) {
+func ExtractIpPayload(ipFrame []byte) (int, error) {
 	// Check if the minimum size of the IP header is present
 	if len(ipFrame) < 20 {
-		return nil, fmt.Errorf("invalid IP packet: insufficient header length")
+		return 0, fmt.Errorf("invalid IP packet: insufficient header length")
 	}
 
 	// Determine the length of the IP header (in 32-bit words)
@@ -361,13 +413,13 @@ func ExtractIpPayload(ipFrame []byte) ([]byte, error) {
 
 	// Check if the packet length is valid
 	if len(ipFrame) < headerLen {
-		return nil, fmt.Errorf("invalid IP packet: insufficient packet length")
+		return 0, fmt.Errorf("invalid IP packet: insufficient packet length")
 	}
 
 	// Extract the payload by skipping past the IP header
-	payload := ipFrame[headerLen:]
+	//payload := ipFrame[headerLen:]
 
-	return payload, nil
+	return headerLen, nil
 }
 
 func GenerateISN() (uint32, error) {
@@ -440,7 +492,14 @@ func (r *ResendPackets) UpdateSentPacket(seqNum uint32) error {
 func (r *ResendPackets) RemoveSentPacket(seqNum uint32) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
+	packet, ok := r.packets[seqNum]
+	if !ok {
+		return
+	}
 	delete(r.packets, seqNum)
+	// now that we delete packet from SentPackets, we no longer
+	// need it so it's time to return its chunk
+	packet.Data.ReturnChunk()
 }
 
 type PacketGapMap struct {
@@ -463,6 +522,10 @@ func (pgm *PacketGapMap) AddPacket(packet *PcpPacket) {
 func (pgm *PacketGapMap) RemovePacket(seqNum uint32) {
 	pgm.mutex.Lock()
 	defer pgm.mutex.Unlock()
+	_, ok := pgm.packets[seqNum]
+	if !ok {
+		return
+	}
 	delete(pgm.packets, seqNum)
 }
 

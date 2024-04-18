@@ -6,6 +6,7 @@ import (
 	"math"
 	"net"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
@@ -22,13 +23,16 @@ type Connection struct {
 	WindowSize             uint16
 	InputChannel           chan *PcpPacket // per connection packet input channel
 	OutputChan             chan *PcpPacket // overall output channel shared by all connections
-	ReadChannel            chan []byte     // for connection read function
+	ReadChannel            chan *PcpPacket // for connection read function
 	TerminationCallerState uint            // 4-way termination caller states
 	TerminationRespState   uint            // 4-way termination responder states
+	InitClientState        uint            // 3-way handshake state of the client
+	InitServerState        uint            // 3-way handshake state of the Server
 	TcpOptions             *Options        // tcp options
 	WriteOnHold            bool            // true if 4-way termination starts
 	IsOpenConnection       bool            //false if in 3-way handshake
 	KeepaliveTimer         *time.Timer     // Timer for keepalive mechanism
+	KeepaliveTimerMutex    sync.Mutex      // mutex for KeepaliveTimer
 	IdleTimeout            time.Duration   // Idle timeout duration
 	TimeoutCount           int             // Timeout count for keepalive
 	KeepaliveInterval      time.Duration   // Interval between keepalive attempts
@@ -38,11 +42,11 @@ type Connection struct {
 	ResendPackets          ResendPackets   // data structure to hold sent packets which are not acknowledged yet
 	ResendInterval         time.Duration   // packet resend interval
 	resendTimer            *time.Timer     // resend timer to trigger resending packet every ResendInterval
+	resendTimerMutex       sync.Mutex      // mutex for resendTimer
 	RevPacketCache         PacketGapMap    // Cache for received packets who has gap before it due to packet loss or out-of-order
 
 	connCloseSignalChan chan *Connection // send close connection signal to parent service or pConnection to clear it
 	newConnChannel      chan *Connection // server only. send new connection signal to parent service to signal successful 3-way handshake
-	OpenServerState     uint             // server only. 3-way handshake server states
 	closeSigal          chan struct{}    // used to send close signal to HandleIncomingPackets go routine to stop when keepalive failed
 }
 
@@ -86,7 +90,7 @@ func NewConnection(key string, remoteAddr net.Addr, remotePort int, localAddr ne
 		LastAckNumber:      0,
 		WindowSize:         math.MaxUint16,
 		InputChannel:       make(chan *PcpPacket),
-		ReadChannel:        make(chan []byte),
+		ReadChannel:        make(chan *PcpPacket),
 		OutputChan:         outputChan,
 		// all the rest variables keep there init value
 		TcpOptions:           options,
@@ -119,12 +123,15 @@ func (c *Connection) HandleIncomingPackets() {
 	for {
 		select {
 		case <-c.closeSigal:
-			// connection idle timed out. quit this go routine
+			// connection close signal received. quit this go routine
+			log.Printf("Closing HandleIncomingPackets for connection %s\n", c.Key)
 			return
 		case packet = <-c.InputChannel:
 			// reset the keepalive timer
 			if config.AppConfig.KeepAliveEnabled {
+				c.KeepaliveTimerMutex.Lock()
 				c.KeepaliveTimer.Reset(c.IdleTimeout)
+				c.KeepaliveTimerMutex.Unlock()
 				c.TimeoutCount = 0
 			}
 
@@ -160,8 +167,9 @@ func (c *Connection) HandleIncomingPackets() {
 						log.Println("Got ACK from 4-way caller. 4-way completed successfully")
 						// 4-way termination completed
 						c.TerminationRespState = RespAckReceived
-						// sent the close signal to pConnClient to clear the connection
-						c.connCloseSignalChan <- c
+						// clear connection resources
+						c.ClearConnResource()
+						log.Println("HandleIncomingPackets stops now.")
 						return // this will terminate this go routine gracefully
 					}
 					// ignore ACK for data packet
@@ -180,8 +188,9 @@ func (c *Connection) HandleIncomingPackets() {
 						log.Println("ACK to FIN from 4-way responder sent.")
 						// set 4-way termination state to CallerFINSent
 						c.TerminationCallerState = CallerAckSent
-						// sent the close signal to pConnClient to clear the connection
-						c.connCloseSignalChan <- c
+						// clear connection resource and close
+						c.ClearConnResource()
+						log.Println("HandleIncomingPackets stops now.")
 						return // this will terminate this go routine gracefully
 					}
 					if c.TerminationRespState == 0 && c.TerminationCallerState == 0 {
@@ -235,15 +244,15 @@ func (c *Connection) Handle3WayHandshake() {
 		// If it's a ACK only packet, handle it
 		if !isSYN && isACK {
 			// Check if the connection's 3-way handshake state is correct
-			if c.OpenServerState+1 != AckReceived {
-				log.Printf("3-way handshake state of connection %s is %d, but we received ACK message. Ignore!\n", c.Key, c.OpenServerState)
+			if c.InitServerState+1 != AckReceived {
+				log.Printf("3-way handshake state of connection %s is %d, but we received ACK message. Ignore!\n", c.Key, c.InitServerState)
 				continue
 			}
 			// 3-way handshaking completed successfully
 			// send signal to service for new connection established
 			c.newConnChannel <- c
 			//c.expectedSeqNum don't change
-			c.OpenServerState = 0 // reset it
+			c.InitServerState = 0 // reset it
 			c.IsOpenConnection = true
 
 			// handle TCP option negotiation
@@ -280,12 +289,15 @@ func (c *Connection) acknowledge() {
 func (c *Connection) handleDataPacket(packet *PcpPacket) {
 	// if the packet was already acknowledged by us, ignore it
 	if packet.SequenceNumber < c.LastAckNumber {
+		// received packet which we already received and put into readchannel. Ignore it.
+		packet.ReturnChunk()
 		return
 	}
 
 	if c.TcpOptions.SackEnabled {
 		// if the packet is already in RevPacketCache, ignore it
 		if _, found := c.RevPacketCache.GetPacket(packet.SequenceNumber); found {
+			packet.ReturnChunk()
 			return
 		}
 
@@ -300,7 +312,7 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 		for _, cachedPacket := range c.RevPacketCache.getPacketsInAscendingOrder() {
 			// If a packet's SEQ < c.LastSequenceNumber, put it into ReadChannel
 			if cachedPacket.SequenceNumber < c.LastAckNumber {
-				c.ReadChannel <- cachedPacket.Payload
+				c.ReadChannel <- cachedPacket
 				// Add the packet's sequence number to the list of packets to delete
 				packetsToDelete = append(packetsToDelete, cachedPacket.SequenceNumber)
 			} else {
@@ -311,13 +323,18 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 
 		// Delete packets from RevPacketCache after the loop has finished
 		for _, seqNum := range packetsToDelete {
-			c.RevPacketCache.RemovePacket(seqNum)
+			c.RevPacketCache.RemovePacket(seqNum) // remove the packet from RevPacketCache but do not return the chunk yet
+			// chunk will be returned after being read from ReadChannel
 		}
 	} else { // SACK support is disabled
 		if isGreaterOrEqual(packet.SequenceNumber, c.LastAckNumber) { // throw away out-of-order or lost packets
 			// put packet payload to read channel
-			c.ReadChannel <- packet.Payload
+			c.ReadChannel <- packet
 			c.LastAckNumber = uint32(uint64(packet.SequenceNumber) + uint64(len(packet.Payload)))
+		} else {
+			// We ignore out-of-order packets, so it's time to
+			// return its chunk to pool
+			packet.ReturnChunk()
 		}
 	}
 
@@ -328,14 +345,18 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 func (c *Connection) Read(buffer []byte) (int, error) {
 	// read packet from connection, blindly acknowledge it and all previous unacknowledged packets since last acknowledged one
 	// mimicking net lib TCP read function interface
-	payload := <-c.ReadChannel
-	payloadLength := len(payload)
+	packet := <-c.ReadChannel
+	payloadLength := len(packet.Payload)
 	if payloadLength > len(buffer) {
 		err := fmt.Errorf("buffer length (%d) is too short to hold received payload (length %d)", len(buffer), payloadLength)
 		log.Println(err)
 		return 0, err
 	}
-	copy(buffer[:payloadLength], payload)
+	copy(buffer[:payloadLength], packet.Payload)
+	// now that the payload is copied to buffer, we no longer need the packet
+	// it's time to return the chunk to pool
+	packet.ReturnChunk()
+
 	return payloadLength, nil
 }
 
@@ -361,11 +382,12 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 		}
 
 		// Extract the current segment from the buffer
-		payload := make([]byte, segmentLength)
-		copy(payload, buffer[:segmentLength])
+		//payload := make([]byte, segmentLength)
+		//copy(payload, buffer[:segmentLength])
 
 		// Construct a packet with the current segment
-		packet := NewPcpPacket(c.NextSequenceNumber, c.LastAckNumber, ACKFlag, payload, c)
+		packet := NewPcpPacket(c.NextSequenceNumber, c.LastAckNumber, ACKFlag, buffer[:segmentLength], c)
+
 		c.NextSequenceNumber = uint32(uint64(c.NextSequenceNumber) + uint64(segmentLength)) // Update sequence number. Implicit modulo included
 		c.OutputChan <- packet
 		//fmt.Println("buffer length is", len(buffer))
@@ -388,13 +410,62 @@ func (c *Connection) Close() error {
 	// put write channel on hold so that no data packet interfere with termination process
 	c.WriteOnHold = true
 	// Assemble FIN packet to be sent to the other end
-	finPacket := NewPcpPacket(c.NextSequenceNumber, c.LastAckNumber, ACKFlag, nil, c)
+	finPacket := NewPcpPacket(c.NextSequenceNumber, c.LastAckNumber, FINFlag, nil, c)
 	c.NextSequenceNumber = uint32(uint64(c.NextSequenceNumber) + 1) // implicit modulo op
 	c.OutputChan <- finPacket
 	// set 4-way termination state to CallerFINSent
 	c.TerminationCallerState = CallerFinSent
+	log.Println("4-way termination caller sent FIN packet")
 
 	return nil
+}
+
+// clear connection resources and send close signal to paranet
+func (c *Connection) ClearConnResource() {
+	log.Println("Start clearing connection resource")
+	// Lock to ensure exclusive access to the timer
+	c.KeepaliveTimerMutex.Lock()
+	defer c.KeepaliveTimerMutex.Unlock()
+
+	// Stop the keepalive timer if it's running
+	if c.KeepaliveTimer != nil {
+		c.KeepaliveTimer.Stop()
+		c.KeepaliveTimer = nil
+	}
+	log.Println("Keepalive timer cleared")
+
+	// Lock to ensure exclusive access to the timer
+	c.resendTimerMutex.Lock()
+	defer c.resendTimerMutex.Unlock()
+
+	// Stop the resend timer if it's running
+	if c.resendTimer != nil {
+		c.resendTimer.Stop()
+		c.resendTimer = nil
+	}
+	log.Println("Resender timer cleared")
+
+	// Close connection go routines first
+	close(c.closeSigal) // Close the channel to signal termination
+	log.Println("close signal sent to go routine")
+
+	// then send close connection signal to parent to clear connection resource
+	c.connCloseSignalChan <- c
+
+	log.Println("Close signal sent to parent. Now we start to return all chunks")
+	// if SACK option is enabled, release all packets in the sendPackets and RevPacketCache
+	if c.TcpOptions.SackEnabled {
+		// Return chunks of all packets in c.ResendPackets to pool
+		for _, packet := range c.ResendPackets.packets {
+			packet.Data.ReturnChunk()
+		}
+
+		// Return chunks of all packets in c.RevPacketCache to pool
+		for _, packet := range c.RevPacketCache.packets {
+			packet.ReturnChunk()
+		}
+	}
+	log.Printf("Connection %s resource cleared.\n", c.Key)
 }
 
 // Function to resend lost packets based on SACK blocks and resend packet information
@@ -438,30 +509,29 @@ func (c *Connection) resendLostPacket() {
 
 // Method to start the resend timer
 func (c *Connection) StartResendTimer() {
-	c.resendTimer = time.NewTimer(c.ResendInterval)
-	go func() {
-		defer c.resendTimer.Stop()
-		for {
-			select {
-			case <-c.resendTimer.C:
-				c.resendLostPacket()
-				c.resendTimer.Reset(c.ResendInterval)
-			case <-c.closeSigal:
-				c.resendTimer.Stop()
-				return
-			}
-		}
-	}()
+	// Start the keepalive timer
+	c.resendTimer = time.AfterFunc(c.ResendInterval, func() {
+		c.resendTimerMutex.Lock()
+		defer c.resendTimerMutex.Unlock()
+		c.resendTimer.Stop()
+		c.resendLostPacket()
+		c.StartResendTimer()
+	})
 }
 
 func (c *Connection) sendKeepalivePacket() {
 	// Create and send the keepalive packet
 	keepalivePacket := NewPcpPacket(c.NextSequenceNumber-1, c.LastAckNumber, ACKFlag, []byte{0}, c)
+	keepalivePacket.IsKeepAliveMassege = true
 	c.OutputChan <- keepalivePacket
 	fmt.Println("Sending keepalive packet...")
 }
 
 func (c *Connection) startKeepaliveTimer() {
+	// Lock to ensure exclusive access to the timer
+	c.KeepaliveTimerMutex.Lock()
+	defer c.KeepaliveTimerMutex.Unlock()
+
 	// Stop the existing timer if it's running
 	if c.KeepaliveTimer != nil {
 		c.KeepaliveTimer.Stop()
@@ -479,10 +549,8 @@ func (c *Connection) startKeepaliveTimer() {
 	c.KeepaliveTimer = time.AfterFunc(timeout, func() {
 		if c.TimeoutCount == c.MaxKeepaliveAttempts {
 			log.Printf("Connection %s idle timed out. Close it.\n", c.Key)
-			// connection idle timed out. Close HandleIncomingPackets go routine first
-			c.closeSigal <- struct{}{}
-			// then send close connection signal to parent to clear connection resource
-			c.connCloseSignalChan <- c
+			// connection idle timed out. clear connection resoureces and close connection
+			c.ClearConnResource()
 
 			return
 		}

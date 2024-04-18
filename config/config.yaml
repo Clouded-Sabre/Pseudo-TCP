@@ -16,3 +16,6 @@ max_resend_count: 5
 resend_interval: 200
 sack_permit_support: true
 sack_option_support: true
+payload_pool_size: 2000
+conn_signal_retry: 5
+conn_signal_retry_interval: 5   # in seconds

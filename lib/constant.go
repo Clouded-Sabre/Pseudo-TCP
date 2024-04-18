@@ -33,4 +33,9 @@ const (
 	Reset = "\033[0m"
 )
 
-const TcpOptionsMaxLength = 40
+const (
+	TcpOptionsMaxLength   = 40
+	TcpHeaderLength       = 20 //options not included
+	TcpPseudoHeaderLength = 12
+	IpHeaderMaxLength     = 60
+)

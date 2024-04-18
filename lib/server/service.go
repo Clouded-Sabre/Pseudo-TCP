@@ -141,6 +141,8 @@ func (s *Service) handleSynPacket(packet *lib.PcpPacket) {
 		return
 	}
 
+	newConn.InitServerState = lib.SynReceived
+
 	// Add the new connection to the temporary connection map
 	s.tempConnMap[connKey] = newConn
 
@@ -170,8 +172,6 @@ func (s *Service) handleSynPacket(packet *lib.PcpPacket) {
 	// start the temp connection's goroutine to handle 3-way handshaking process
 	go newConn.Handle3WayHandshake()
 
-	newConn.OpenServerState = lib.SynReceived // set 3-way handshake state
-
 	// Send SYN-ACK packet to the SYN packet sender
 	// Construct a SYN-ACK packet
 	newConn.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
@@ -181,7 +181,7 @@ func (s *Service) handleSynPacket(packet *lib.PcpPacket) {
 	s.OutputChan <- synAckPacket
 	newConn.NextSequenceNumber = uint32(uint64(newConn.NextSequenceNumber) + 1) // implicit modulo op
 
-	newConn.OpenServerState = lib.SynAckSent // set 3-way handshake state
+	newConn.InitServerState = lib.SynAckSent // set 3-way handshake state
 
 	log.Printf("Sent SYN-ACK packet to: %s\n", connKey)
 }

@@ -35,8 +35,12 @@ func NewPcpServer(protocolId uint8) (*PcpServer, error) {
 	// create map for pcpServerProtocolConnection
 	protoConnectionMap := make(map[string]*PcpProtocolConnection)
 
-	pcpServerObj := &PcpServer{ProtocolID: protocolId, ProtoConnectionMap: protoConnectionMap}
+	pcpServerObj := &PcpServer{
+		ProtocolID:         protocolId,
+		ProtoConnectionMap: protoConnectionMap,
+	}
 
+	lib.Pool = lib.NewPayloadPool(config.AppConfig.PayloadPoolSize, config.AppConfig.PreferredMSS)
 	fmt.Println("Pcp protocol client started")
 
 	return pcpServerObj, nil
@@ -76,27 +80,28 @@ func newPcpServerProtocolConnection(p *PcpServer, serverIP string) (*PcpProtocol
 
 func (p *PcpProtocolConnection) handlingIncomingPackets() {
 	// Continuously read from the protocolConn
-	buffer := make([]byte, config.AppConfig.PreferredMSS)
+	buffer := make([]byte, config.AppConfig.PreferredMSS+lib.TcpHeaderLength+lib.TcpOptionsMaxLength+lib.TcpPseudoHeaderLength)
+	pcpFrame := buffer[lib.TcpPseudoHeaderLength:] // the first lib.TcpPseudoHeaderLength bytes are reserved for Tcp pseudo header
 	for {
-		n, addr, err := p.Connection.ReadFrom(buffer)
+		n, addr, err := p.Connection.ReadFrom(pcpFrame)
 		if err != nil {
 			fmt.Println("Error reading:", err)
 			continue
 		}
 
-		// Make a copy of the packet data
-		packetData := make([]byte, n)
-		copy(packetData, buffer[:n])
-
 		// check PCP packet checksum
-		/*if !lib.VerifyChecksum(packetData, addr, p.ServerAddr, p.pcpServerObj.ProtocolID) {
+		if !lib.VerifyChecksum(buffer[:lib.TcpPseudoHeaderLength+n], addr, p.ServerAddr, p.pcpServerObj.ProtocolID) {
 			log.Println("Packet checksum verification failed. Skip this packet.")
 			continue
-		}*/
+		}
 
 		// Extract destination port
 		packet := &lib.PcpPacket{}
-		packet.Unmarshal(packetData, addr, p.ServerAddr)
+		err = packet.Unmarshal(pcpFrame[:n], addr, p.ServerAddr)
+		if err != nil {
+			log.Println("Received TCP frame is il-formated. Ignore it!")
+			continue
+		}
 		destPort := packet.DestinationPort
 		//log.Printf("Got packet with options: %+v\n", packet.TcpOptions)
 
@@ -117,12 +122,18 @@ func (p *PcpProtocolConnection) handlingIncomingPackets() {
 
 // handleOutgoingPackets handles outgoing packets by writing them to the interface.
 func (p *PcpProtocolConnection) handleOutgoingPackets() {
-	count := 0
-	var lostCount = 0
+	var (
+		count      = 0
+		lostCount  = 0
+		frameBytes = make([]byte, config.AppConfig.PreferredMSS+lib.TcpHeaderLength+lib.TcpOptionsMaxLength+lib.TcpPseudoHeaderLength)
+		n          = 0
+		err        error
+	)
+
 	packetLost := false
 	for {
 		packet := <-p.OutputChan // Subscribe to p.OutputChan
-		if packet.IsOpenConnection && config.AppConfig.PacketLostSimulation {
+		if packet.IsOpenConnection && config.AppConfig.PacketLostSimulation && !packet.Conn.WriteOnHold {
 			if count == 0 {
 				lostCount = rand.Intn(10)
 			}
@@ -135,19 +146,28 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 
 		if !packetLost {
 			// Marshal the packet into bytes
-			frameBytes := packet.Marshal(p.pcpServerObj.ProtocolID)
+			n, err = packet.Marshal(p.pcpServerObj.ProtocolID, frameBytes)
+			if err != nil {
+				fmt.Println("Error marshalling packet:", err)
+				log.Fatal()
+			}
 			// Write the packet to the interface
-			_, err := p.Connection.WriteTo(frameBytes, packet.DestAddr)
+			frame := frameBytes[lib.TcpPseudoHeaderLength:] // first part of framesBytes is actually Tcp Pseudo Header
+			_, err = p.Connection.WriteTo(frame[:n], packet.DestAddr)
 			if err != nil {
 				fmt.Println("Error writing packet:", err, "Skip this packet.")
 			}
 		}
 
 		// add packet to the connection's ResendPackets to wait for acknowledgement from peer
-		if packet.Conn.TcpOptions.SackEnabled && len(packet.Payload) > 0 {
-			// if the packet is already in RevPacketCache, it is a resend packet. Ignore it. Otherwise, add it to
-			if _, found := packet.Conn.ResendPackets.GetSentPacket(packet.SequenceNumber); !found {
-				packet.Conn.ResendPackets.AddSentPacket(packet)
+		if len(packet.Payload) > 0 {
+			if packet.Conn.TcpOptions.SackEnabled && !packet.IsKeepAliveMassege {
+				// if the packet is already in RevPacketCache, it is a resend packet. Ignore it. Otherwise, add it to
+				if _, found := packet.Conn.ResendPackets.GetSentPacket(packet.SequenceNumber); !found {
+					packet.Conn.ResendPackets.AddSentPacket(packet)
+				}
+			} else { // SACK is not enabled or it is a keepalive message
+				packet.ReturnChunk() //return its chunk to pool
 			}
 		}
 

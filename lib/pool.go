@@ -2,6 +2,7 @@ package lib
 
 import (
 	"fmt"
+	"log"
 	"sync"
 	"time"
 )
@@ -81,11 +82,17 @@ func NewPayloadPool(capacity int, chunkLength int) *PayloadPool {
 	for i := 0; i < capacity; i++ {
 		chunks[i] = NewChunk(chunkLength)
 	}
-	return &PayloadPool{
+
+	p := &PayloadPool{
 		chunks:    chunks,
 		available: capacity,
 		closed:    false,
 	}
+
+	// start timeout checks for allocated chunks
+	go p.CheckTimedOutChunks()
+
+	return p
 }
 
 // GetPayload retrieves a payload from the pool
@@ -134,6 +141,29 @@ func (p *PayloadPool) AvailableChunks() int {
 
 	return p.available
 }
+
+// CheckTimedOutChunks checks every 5 seconds for chunks allocated more than 10 seconds ago
+func (p *PayloadPool) CheckTimedOutChunks() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	var count int
+	for {
+		<-ticker.C
+		count = 0
+
+		p.mtx.Lock()
+		for _, chunk := range p.chunks[p.available:] {
+			if time.Since(chunk.LastAllocation) > 10*time.Second {
+				count++
+			}
+		}
+		log.Printf("Number of chunks allocated more than 10 seconds ago: %d\n", count)
+		p.mtx.Unlock()
+	}
+}
+
+var Pool *PayloadPool
 
 // Example usage
 /*func main() {

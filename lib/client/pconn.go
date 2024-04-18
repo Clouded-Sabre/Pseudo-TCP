@@ -73,6 +73,7 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*lib.Connection, error) {
 	synPacket := lib.NewPcpPacket(newConn.NextSequenceNumber, 0, lib.SYNFlag, nil, newConn)
 	p.OutputChan <- synPacket
 	newConn.NextSequenceNumber = uint32(uint64(newConn.NextSequenceNumber) + 1) // implicit modulo op
+	newConn.InitClientState = lib.SynSent
 	log.Println("Initiated connection to server with connKey:", connKey)
 
 	// Wait for SYN-ACK
@@ -80,10 +81,13 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*lib.Connection, error) {
 	for {
 		packet := <-newConn.InputChannel
 		if packet.Flags == lib.SYNFlag|lib.ACKFlag { // Verify if it's a SYN-ACK from the server
+			newConn.InitClientState = lib.SynAckReceived
 			// Prepare ACK packet
 			newConn.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
 			ackPacket := lib.NewPcpPacket(newConn.NextSequenceNumber, newConn.LastAckNumber, lib.ACKFlag, nil, newConn)
 			newConn.OutputChan <- ackPacket
+
+			newConn.InitClientState = lib.AckSent
 
 			// Connection established, remove newConn from tempClientConnections, and place it into clientConnections pool
 			delete(p.tempConnectionMap, connKey)
@@ -130,7 +134,8 @@ func (p *pcpProtocolConnection) handleIncomingPackets() {
 		err error
 		n   int
 	)
-	buffer := make([]byte, config.AppConfig.PreferredMSS)
+	buffer := make([]byte, config.AppConfig.PreferredMSS+lib.TcpHeaderLength+lib.TcpOptionsMaxLength+lib.IpHeaderMaxLength)
+	//frame := buffer[lib.TcpPseudoHeaderLength:] // the first lib.TcpPseudoHeaderLength bytes are reserved for Tcp Pseudo Header
 	// main loop for incoming packets
 	for {
 		n, err = p.pConn.Read(buffer)
@@ -140,25 +145,31 @@ func (p *pcpProtocolConnection) handleIncomingPackets() {
 		}
 
 		// Make a copy of the packet data
-		packetData := make([]byte, n)
-		copy(packetData, buffer[:n])
+		//packetData := make([]byte, n)
+		//copy(packetData, buffer[:n])
 
 		// extract Pcp frame from the received IP frame
-		pcpFrame, err := lib.ExtractIpPayload(packetData)
+		index, err := lib.ExtractIpPayload(buffer[:n])
 		if err != nil {
 			log.Println("Received IP frame is il-formated. Ignore it!")
 			continue
 		}
 		//log.Println("extracted PCP frame length is", len(pcpFrame), pcpFrame)
 		// check PCP packet checksum
-		/*if !lib.VerifyChecksum(pcpFrame, p.ServerAddr, p.LocalAddr, uint8(p.pcpClientObj.ProtocolID)) {
+		// please note the first lib.TcpPseudoHeaderLength bytes are reseved for Tcp pseudo header
+		if !lib.VerifyChecksum(buffer[index-lib.TcpPseudoHeaderLength:n], p.ServerAddr, p.LocalAddr, uint8(p.pcpClientObj.ProtocolID)) {
 			log.Println("Packet checksum verification failed. Skip this packet.")
 			continue
-		}*/
+		}
 
 		// Extract destination port
+		pcpFrame := buffer[index:n]
 		packet := &lib.PcpPacket{}
-		packet.Unmarshal(pcpFrame, p.ServerAddr, p.LocalAddr)
+		err = packet.Unmarshal(pcpFrame, p.ServerAddr, p.LocalAddr)
+		if err != nil {
+			log.Println("Received TCP frame is il-formated. Ignore it!")
+			continue
+		}
 		//fmt.Println("Received packet Length:", n)
 		//fmt.Printf("Got packet:\n %+v\n", packet)
 
@@ -192,8 +203,13 @@ func (p *pcpProtocolConnection) handleIncomingPackets() {
 
 // handleOutgoingPackets handles outgoing packets by writing them to the interface.
 func (p *pcpProtocolConnection) handleOutgoingPackets() {
-	count := 0
-	var lostCount = 0
+	var (
+		count      = 0
+		lostCount  = 0
+		frameBytes = make([]byte, config.AppConfig.PreferredMSS+lib.TcpHeaderLength+lib.TcpOptionsMaxLength+lib.TcpPseudoHeaderLength)
+		n          = 0
+		err        error
+	)
 	packetLost := false
 	for {
 		packet := <-p.OutputChan // Subscribe to p.OutputChan
@@ -202,7 +218,7 @@ func (p *pcpProtocolConnection) handleOutgoingPackets() {
 		}*/
 		//fmt.Println("PTC got packet.")
 
-		if packet.IsOpenConnection && config.AppConfig.PacketLostSimulation {
+		if packet.IsOpenConnection && config.AppConfig.PacketLostSimulation && !packet.Conn.WriteOnHold {
 			if count == 0 {
 				lostCount = rand.Intn(10)
 			}
@@ -215,21 +231,29 @@ func (p *pcpProtocolConnection) handleOutgoingPackets() {
 
 		if !packetLost {
 			// Marshal the packet into bytes
-			frameBytes := packet.Marshal(p.pcpClientObj.ProtocolID)
+			n, err = packet.Marshal(p.pcpClientObj.ProtocolID, frameBytes)
+			if err != nil {
+				fmt.Println("Error marshalling packet:", err)
+				log.Fatal()
+			}
 			// Write the packet to the interface
-			_, err := p.pConn.Write(frameBytes)
+			_, err = p.pConn.Write(frameBytes[lib.TcpPseudoHeaderLength : lib.TcpPseudoHeaderLength+n]) // first part of framesBytes is actually Tcp Pseudo Header
 			if err != nil {
 				log.Println("Error writing packet:", err, "Skip this packet.")
 			}
 		}
 
 		// add packet to the connection's ResendPackets to wait for acknowledgement from peer or resend if lost
-		if packet.Conn.TcpOptions.SackEnabled && len(packet.Payload) > 0 {
-			// if the packet is already in ResendPackets, it is a resend packet. Ignore it. Otherwise, add it to
-			if _, found := packet.Conn.ResendPackets.GetSentPacket(packet.SequenceNumber); !found {
-				packet.Conn.ResendPackets.AddSentPacket(packet)
-			} else {
-				//fmt.Println("this is a resent packet. Do not put it into ResendPackets")
+		if len(packet.Payload) > 0 {
+			if packet.Conn.TcpOptions.SackEnabled && !packet.IsKeepAliveMassege {
+				// if the packet is already in ResendPackets, it is a resend packet. Ignore it. Otherwise, add it to
+				if _, found := packet.Conn.ResendPackets.GetSentPacket(packet.SequenceNumber); !found {
+					packet.Conn.ResendPackets.AddSentPacket(packet)
+				} else {
+					//fmt.Println("this is a resent packet. Do not put it into ResendPackets")
+				}
+			} else { // SACK is not enabled or it is a keepalive massage
+				packet.ReturnChunk() //return its chunk to pool
 			}
 		}
 

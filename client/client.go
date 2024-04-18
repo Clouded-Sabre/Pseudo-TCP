@@ -63,6 +63,6 @@ func main() {
 
 	// Close the connection
 	conn.Close()
-	time.Sleep(time.Second * 3)
+	time.Sleep(time.Second * 30)
 	fmt.Println("PCP client exit")
 }
