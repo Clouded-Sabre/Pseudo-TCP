@@ -118,7 +118,6 @@ func (s *Service) handleDataPacket(packet *lib.PcpPacket) {
 
 // handleSynPacket handles a SYN packet and initiates a new connection.
 func (s *Service) handleSynPacket(packet *lib.PcpPacket) {
-	// Extract destination IP and port from the packet
 	// Extract source IP address and port from the packet
 	sourceAddr := packet.SrcAddr
 	sourcePort := packet.SourcePort
@@ -134,7 +133,6 @@ func (s *Service) handleSynPacket(packet *lib.PcpPacket) {
 	}
 
 	// Create a new temporary connection object for the 3-way handshake
-	//newConn, err := newConnection(connKey, s, sourceAddr, int(sourcePort), s.ServiceAddr, s.Port)
 	newConn, err := lib.NewConnection(connKey, sourceAddr, int(sourcePort), s.ServiceAddr, s.Port, s.OutputChan, s.ConnCloseSignal, s.newConnChannel)
 	if err != nil {
 		log.Printf("Error creating new connection for %s: %s\n", connKey, err)
@@ -173,15 +171,10 @@ func (s *Service) handleSynPacket(packet *lib.PcpPacket) {
 	go newConn.Handle3WayHandshake()
 
 	// Send SYN-ACK packet to the SYN packet sender
-	// Construct a SYN-ACK packet
 	newConn.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
-	synAckPacket := lib.NewPcpPacket(newConn.NextSequenceNumber, newConn.LastAckNumber, lib.SYNFlag|lib.ACKFlag, nil, newConn)
-
-	// Send the SYN-ACK packet to the sender
-	s.OutputChan <- synAckPacket
+	newConn.InitSendSynAck()
+	newConn.StartConnSignalTimer()
 	newConn.NextSequenceNumber = uint32(uint64(newConn.NextSequenceNumber) + 1) // implicit modulo op
-
-	newConn.InitServerState = lib.SynAckSent // set 3-way handshake state
 
 	log.Printf("Sent SYN-ACK packet to: %s\n", connKey)
 }
@@ -211,7 +204,7 @@ func (s *Service) Close() error {
 	}
 
 	// send signal to service go routines to gracefully close them
-	s.serviceCloseSignal <- struct{}{}
+	close(s.serviceCloseSignal)
 	// send signal to parent pcpProtocolConnection to clear service resource
 	s.pcpProtocolConnection.serviceCloseSignal <- s
 

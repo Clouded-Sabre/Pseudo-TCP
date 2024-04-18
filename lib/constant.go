@@ -1,20 +1,18 @@
 package lib
 
 const (
-	SynReceived       = 1 // 3-way handshake server state
-	SynAckSent        = 2 // 3-way handshake server state
-	AckReceived       = 3 // 3-way handshake server state
-	SynSent           = 1 // 3-way handshake client state
-	SynAckReceived    = 2 // 3-way handshake client state
-	AckSent           = 3 // 3-way handshake client state
-	CallerFinSent     = 1 // 4-way termination caller state
-	CallerAckReceived = 2 // 4-way termination caller state
-	CallerFinReceived = 3 // 4-way termination caller state
-	CallerAckSent     = 4 // 4-way termination caller state
-	RespFinReceived   = 1 // 4-way termination responder state
-	RespAckSent       = 2 // 4-way termination responder state
-	RespFinSent       = 3 // 4-way termination responder state
-	RespAckReceived   = 4 // 4-way termination responder state
+	SynReceived          = 1 // 3-way handshake server state
+	SynAckSent           = 2 // 3-way handshake server state
+	AckReceived          = 3 // 3-way handshake server state
+	SynSent              = 1 // 3-way handshake client state
+	SynAckReceived       = 2 // 3-way handshake client state
+	AckSent              = 3 // 3-way handshake client state
+	CallerFinSent        = 1 // 4-way termination caller state
+	CallerFinAckReceived = 2 // 4-way termination caller state
+	CallerAckSent        = 3 // 4-way termination caller state
+	RespFinReceived      = 1 // 4-way termination responder state
+	RespFinAckSent       = 2 // 4-way termination responder state
+	RespAckReceived      = 3 // 4-way termination responder state
 )
 
 // Flag constants

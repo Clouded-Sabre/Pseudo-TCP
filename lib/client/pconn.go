@@ -70,10 +70,9 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*lib.Connection, error) {
 	p.tempConnectionMap[connKey] = newConn
 
 	// Send SYN to server
-	synPacket := lib.NewPcpPacket(newConn.NextSequenceNumber, 0, lib.SYNFlag, nil, newConn)
-	p.OutputChan <- synPacket
+	newConn.InitSendSyn()
+	newConn.StartConnSignalTimer()
 	newConn.NextSequenceNumber = uint32(uint64(newConn.NextSequenceNumber) + 1) // implicit modulo op
-	newConn.InitClientState = lib.SynSent
 	log.Println("Initiated connection to server with connKey:", connKey)
 
 	// Wait for SYN-ACK
@@ -81,13 +80,12 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*lib.Connection, error) {
 	for {
 		packet := <-newConn.InputChannel
 		if packet.Flags == lib.SYNFlag|lib.ACKFlag { // Verify if it's a SYN-ACK from the server
+			newConn.StopConnSignalTimer() // stops the connection signal resend timer
 			newConn.InitClientState = lib.SynAckReceived
+			newConn.InitialPeerSeq = packet.SequenceNumber //record the initial SEQ from the peer
 			// Prepare ACK packet
 			newConn.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
-			ackPacket := lib.NewPcpPacket(newConn.NextSequenceNumber, newConn.LastAckNumber, lib.ACKFlag, nil, newConn)
-			newConn.OutputChan <- ackPacket
-
-			newConn.InitClientState = lib.AckSent
+			newConn.InitSendAck()
 
 			// Connection established, remove newConn from tempClientConnections, and place it into clientConnections pool
 			delete(p.tempConnectionMap, connKey)
@@ -114,6 +112,8 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*lib.Connection, error) {
 				newConn.StartResendTimer()
 			}
 
+			newConn.InitClientState = 0 // reset it to zero so that later ACK message can be processed correctly
+
 			return newConn, nil
 		}
 	}
@@ -134,8 +134,8 @@ func (p *pcpProtocolConnection) handleIncomingPackets() {
 		err error
 		n   int
 	)
+	// the first lib.TcpPseudoHeaderLength bytes are reserved for Tcp Pseudo Header
 	buffer := make([]byte, config.AppConfig.PreferredMSS+lib.TcpHeaderLength+lib.TcpOptionsMaxLength+lib.IpHeaderMaxLength)
-	//frame := buffer[lib.TcpPseudoHeaderLength:] // the first lib.TcpPseudoHeaderLength bytes are reserved for Tcp Pseudo Header
 	// main loop for incoming packets
 	for {
 		n, err = p.pConn.Read(buffer)
@@ -143,10 +143,6 @@ func (p *pcpProtocolConnection) handleIncomingPackets() {
 			fmt.Println("Error reading:", err)
 			continue
 		}
-
-		// Make a copy of the packet data
-		//packetData := make([]byte, n)
-		//copy(packetData, buffer[:n])
 
 		// extract Pcp frame from the received IP frame
 		index, err := lib.ExtractIpPayload(buffer[:n])
@@ -218,7 +214,7 @@ func (p *pcpProtocolConnection) handleOutgoingPackets() {
 		}*/
 		//fmt.Println("PTC got packet.")
 
-		if packet.IsOpenConnection && config.AppConfig.PacketLostSimulation && !packet.Conn.WriteOnHold {
+		if config.AppConfig.PacketLostSimulation {
 			if count == 0 {
 				lostCount = rand.Intn(10)
 			}

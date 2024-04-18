@@ -133,7 +133,7 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 	packetLost := false
 	for {
 		packet := <-p.OutputChan // Subscribe to p.OutputChan
-		if packet.IsOpenConnection && config.AppConfig.PacketLostSimulation && !packet.Conn.WriteOnHold {
+		if config.AppConfig.PacketLostSimulation {
 			if count == 0 {
 				lostCount = rand.Intn(10)
 			}
