@@ -20,6 +20,7 @@ type Service struct {
 	newConnChannel        chan *lib.Connection       // new connection all be placed here are 3-way handshake
 	ConnCloseSignal       chan *lib.Connection       // signal for connection close
 	serviceCloseSignal    chan struct{}              // signal for closing service
+	connSignalFailed      chan *lib.Connection       // signal for closing temp connection due to openning signalling failed
 }
 
 // NewService creates a new service listening on the specified port.
@@ -34,6 +35,7 @@ func newService(pcpProtocolConn *PcpProtocolConnection, serviceAddr net.Addr, po
 		tempConnMap:           make(map[string]*lib.Connection),
 		newConnChannel:        make(chan *lib.Connection),
 		ConnCloseSignal:       make(chan *lib.Connection),
+		connSignalFailed:      make(chan *lib.Connection),
 		serviceCloseSignal:    make(chan struct{}),
 	}, nil
 }
@@ -133,7 +135,7 @@ func (s *Service) handleSynPacket(packet *lib.PcpPacket) {
 	}
 
 	// Create a new temporary connection object for the 3-way handshake
-	newConn, err := lib.NewConnection(connKey, sourceAddr, int(sourcePort), s.ServiceAddr, s.Port, s.OutputChan, s.ConnCloseSignal, s.newConnChannel)
+	newConn, err := lib.NewConnection(connKey, sourceAddr, int(sourcePort), s.ServiceAddr, s.Port, s.OutputChan, s.ConnCloseSignal, s.newConnChannel, s.connSignalFailed)
 	if err != nil {
 		log.Printf("Error creating new connection for %s: %s\n", connKey, err)
 		return
@@ -172,6 +174,7 @@ func (s *Service) handleSynPacket(packet *lib.PcpPacket) {
 
 	// Send SYN-ACK packet to the SYN packet sender
 	newConn.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
+	newConn.InitialPeerSeq = newConn.LastAckNumber
 	newConn.InitSendSynAck()
 	newConn.StartConnSignalTimer()
 	newConn.NextSequenceNumber = uint32(uint64(newConn.NextSequenceNumber) + 1) // implicit modulo op
@@ -182,18 +185,32 @@ func (s *Service) handleSynPacket(packet *lib.PcpPacket) {
 // handle close connection request from ClientConnection
 func (s *Service) handleCloseConnections() {
 	for {
-		conn := <-s.ConnCloseSignal
-		// clear it from p.ConnectionMap
-		_, ok := s.connectionMap[conn.Key] // just make sure it really in ConnectionMap for debug purpose
-		if !ok {
-			// connection does not exist in ConnectionMap
-			log.Printf("Pcp connection does not exist in %s:%d->%s:%d", conn.LocalAddr.(*net.IPAddr).IP.String(), conn.LocalPort, conn.RemoteAddr.(*net.IPAddr).IP.String(), conn.RemotePort)
-			continue
+		var conn *lib.Connection
+		select {
+		case conn = <-s.connSignalFailed:
+			// clear it from p.ConnectionMap
+			_, ok := s.connectionMap[conn.Key] // just make sure it really in ConnectionMap for debug purpose
+			if !ok {
+				// connection does not exist in ConnectionMap
+				log.Printf("Pcp connection does not exist in %s:%d->%s:%d", conn.LocalAddr.(*net.IPAddr).IP.String(), conn.LocalPort, conn.RemoteAddr.(*net.IPAddr).IP.String(), conn.RemotePort)
+				continue
+			}
+			log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.LocalAddr.(*net.IPAddr).IP.String(), conn.LocalPort, conn.RemoteAddr.(*net.IPAddr).IP.String(), conn.RemotePort)
+			return
+		case conn = <-s.ConnCloseSignal:
+			// clear it from p.ConnectionMap
+			_, ok := s.connectionMap[conn.Key] // just make sure it really in ConnectionMap for debug purpose
+			if !ok {
+				// connection does not exist in ConnectionMap
+				log.Printf("Pcp connection does not exist in %s:%d->%s:%d", conn.LocalAddr.(*net.IPAddr).IP.String(), conn.LocalPort, conn.RemoteAddr.(*net.IPAddr).IP.String(), conn.RemotePort)
+				continue
+			}
+
+			// delete the clientConn from ConnectionMap
+			delete(s.connectionMap, conn.Key)
+			log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.LocalAddr.(*net.IPAddr).IP.String(), conn.LocalPort, conn.RemoteAddr.(*net.IPAddr).IP.String(), conn.RemotePort)
 		}
 
-		// delete the clientConn from ConnectionMap
-		delete(s.connectionMap, conn.Key)
-		log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.LocalAddr.(*net.IPAddr).IP.String(), conn.LocalPort, conn.RemoteAddr.(*net.IPAddr).IP.String(), conn.RemotePort)
 	}
 }
 

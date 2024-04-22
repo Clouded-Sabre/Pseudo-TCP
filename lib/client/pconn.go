@@ -60,7 +60,7 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*lib.Connection, error) {
 	connKey := fmt.Sprintf("%d:%d", clientPort, serverPort)
 
 	// Create a new temporary connection object for the 3-way handshake
-	newConn, err := lib.NewConnection(connKey, p.ServerAddr, int(serverPort), p.LocalAddr, clientPort, p.OutputChan, p.ConnCloseSignalChan, nil)
+	newConn, err := lib.NewConnection(connKey, p.ServerAddr, int(serverPort), p.LocalAddr, clientPort, p.OutputChan, p.ConnCloseSignalChan, nil, nil)
 	if err != nil {
 		fmt.Printf("Error creating new connection to %s:%d because of error: %s\n", p.ServerAddr.IP.To4().String(), serverPort, err)
 		return nil, err
@@ -78,44 +78,66 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*lib.Connection, error) {
 	// Wait for SYN-ACK
 	// Create a loop to read from connection's input channel till we see SYN-ACK packet from the other end
 	for {
-		packet := <-newConn.InputChannel
-		if packet.Flags == lib.SYNFlag|lib.ACKFlag { // Verify if it's a SYN-ACK from the server
-			newConn.StopConnSignalTimer() // stops the connection signal resend timer
-			newConn.InitClientState = lib.SynAckReceived
-			newConn.InitialPeerSeq = packet.SequenceNumber //record the initial SEQ from the peer
-			// Prepare ACK packet
-			newConn.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
-			newConn.InitSendAck()
-
-			// Connection established, remove newConn from tempClientConnections, and place it into clientConnections pool
+		select {
+		case <-newConn.ConnSignalFailed:
+			// dial action failed
+			// Connection dialing failed, remove newConn from tempClientConnections
 			delete(p.tempConnectionMap, connKey)
 
-			// Add iptables rule to drop RST packets
-			if err := addIptablesRule(p.ServerAddr.IP.To4().String(), serverPort); err != nil {
-				log.Println("Error adding iptables rule:", err)
+			// remove iptables rule added earlier
+			if err := removeIptablesRule(p.ServerAddr.IP.To4().String(), serverPort); err != nil {
+				log.Println("Error removing iptables rule:", err)
 				return nil, err
 			}
-
-			newConn.IsOpenConnection = true
-			newConn.TcpOptions.TimestampEnabled = packet.TcpOptions.TimestampEnabled
-			// Sack permit and SackOption support
-			newConn.TcpOptions.PermitSack = newConn.TcpOptions.PermitSack && packet.TcpOptions.PermitSack    // both sides need to permit SACK
-			newConn.TcpOptions.SackEnabled = newConn.TcpOptions.PermitSack && newConn.TcpOptions.SackEnabled // Sack Option support also needs to be manually enabled
-
-			p.ConnectionMap[connKey] = newConn
-
-			// start go routine to handle incoming packets for new connection
-			go newConn.HandleIncomingPackets()
-			// start ResendTimer if Sack Enabled
-			if newConn.TcpOptions.SackEnabled {
-				// Start the resend timer
-				newConn.StartResendTimer()
+			if newConn.ConnSignalTimer != nil {
+				newConn.StopConnSignalTimer()
+				newConn.ConnSignalTimer = nil
 			}
+			err = fmt.Errorf("dialing PCP connection failed due to timeout")
+			log.Println(err)
+			return nil, err
 
-			newConn.InitClientState = 0 // reset it to zero so that later ACK message can be processed correctly
+		case packet := <-newConn.InputChannel:
+			if packet.Flags == lib.SYNFlag|lib.ACKFlag { // Verify if it's a SYN-ACK from the server
+				newConn.StopConnSignalTimer() // stops the connection signal resend timer
+				newConn.InitClientState = lib.SynAckReceived
+				//newConn.InitialPeerSeq = packet.SequenceNumber //record the initial SEQ from the peer
+				// Prepare ACK packet
+				newConn.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
+				newConn.InitialPeerSeq = newConn.LastAckNumber
+				newConn.InitSendAck()
 
-			return newConn, nil
+				// Connection established, remove newConn from tempClientConnections, and place it into clientConnections pool
+				delete(p.tempConnectionMap, connKey)
+
+				// Add iptables rule to drop RST packets
+				if err := addIptablesRule(p.ServerAddr.IP.To4().String(), serverPort); err != nil {
+					log.Println("Error adding iptables rule:", err)
+					return nil, err
+				}
+
+				newConn.IsOpenConnection = true
+				newConn.TcpOptions.TimestampEnabled = packet.TcpOptions.TimestampEnabled
+				// Sack permit and SackOption support
+				newConn.TcpOptions.PermitSack = newConn.TcpOptions.PermitSack && packet.TcpOptions.PermitSack    // both sides need to permit SACK
+				newConn.TcpOptions.SackEnabled = newConn.TcpOptions.PermitSack && newConn.TcpOptions.SackEnabled // Sack Option support also needs to be manually enabled
+
+				p.ConnectionMap[connKey] = newConn
+
+				// start go routine to handle incoming packets for new connection
+				go newConn.HandleIncomingPackets()
+				// start ResendTimer if Sack Enabled
+				if newConn.TcpOptions.SackEnabled {
+					// Start the resend timer
+					newConn.StartResendTimer()
+				}
+
+				newConn.InitClientState = 0 // reset it to zero so that later ACK message can be processed correctly
+
+				return newConn, nil
+			}
 		}
+
 	}
 }
 
@@ -125,6 +147,20 @@ func addIptablesRule(ip string, port int) error {
 	if err := cmd.Run(); err != nil {
 		return err
 	}
+	return nil
+}
+
+// removeIptablesRule removes the iptables rule that was added for dropping RST packets.
+func removeIptablesRule(ip string, port int) error {
+	// Construct the command to delete the iptables rule
+	cmd := exec.Command("iptables", "-D", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-d", ip, "--dport", strconv.Itoa(port), "-j", "DROP")
+
+	// Execute the command to delete the iptables rule
+	if err := cmd.Run(); err != nil {
+		// If there is an error executing the command, return the error
+		return err
+	}
+
 	return nil
 }
 

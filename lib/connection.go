@@ -5,7 +5,9 @@ import (
 	"log"
 	"math"
 	"net"
+	"os/exec"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -13,46 +15,49 @@ import (
 )
 
 type Connection struct {
-	Key                    string // connection key for easy reference
-	RemoteAddr             net.Addr
-	RemotePort             int
-	LocalAddr              net.Addr
-	LocalPort              int
-	NextSequenceNumber     uint32 // the SEQ sequence number of the next outgoing packet
-	LastAckNumber          uint32 // the last acknowleged incoming packet
-	WindowSize             uint16
-	InitialSeq             uint32          // connection's initial SEQ
-	InitialPeerSeq         uint32          // the initial SEQ from Peer
-	InputChannel           chan *PcpPacket // per connection packet input channel
-	OutputChan             chan *PcpPacket // overall output channel shared by all connections
-	ReadChannel            chan *PcpPacket // for connection read function
-	TerminationCallerState uint            // 4-way termination caller states
-	TerminationRespState   uint            // 4-way termination responder states
-	InitClientState        uint            // 3-way handshake state of the client
-	InitServerState        uint            // 3-way handshake state of the Server
-	ConnSignalFailed       chan struct{}   // used to notify Connection signalling process (3-way handshake and 4-way termination) failed
-	ConnSignalTimer        *time.Timer     // Timer for 3-way handshake and 4-way connection close
-	ConnSignalRetryCount   int             // retry count for 3-way handshake and 4-way connection close
-	TcpOptions             *Options        // tcp options
-	WriteOnHold            bool            // true if 4-way termination starts
-	IsOpenConnection       bool            //false if in 3-way handshake
-	KeepaliveTimer         *time.Timer     // Timer for keepalive mechanism
-	KeepaliveTimerMutex    sync.Mutex      // mutex for KeepaliveTimer
-	IdleTimeout            time.Duration   // Idle timeout duration
-	TimeoutCount           int             // Timeout count for keepalive
-	KeepaliveInterval      time.Duration   // Interval between keepalive attempts
-	MaxKeepaliveAttempts   int             // Maximum number of keepalive attempts before marking the connection as dead
-	IsKeepAliveInProgress  bool            // denote if keepalive probe is in process or not
-	IsDead                 bool            // mark the connection is idle timed out and failed keepalive probe
-	ResendPackets          ResendPackets   // data structure to hold sent packets which are not acknowledged yet
-	ResendInterval         time.Duration   // packet resend interval
-	resendTimer            *time.Timer     // resend timer to trigger resending packet every ResendInterval
-	resendTimerMutex       sync.Mutex      // mutex for resendTimer
-	RevPacketCache         PacketGapMap    // Cache for received packets who has gap before it due to packet loss or out-of-order
+	Key                            string // connection key for easy reference
+	RemoteAddr                     net.Addr
+	RemotePort                     int
+	LocalAddr                      net.Addr
+	LocalPort                      int
+	NextSequenceNumber             uint32 // the SEQ sequence number of the next outgoing packet
+	LastAckNumber                  uint32 // the last acknowleged incoming packet
+	WindowSize                     uint16
+	InitialSeq                     uint32          // connection's initial SEQ
+	InitialPeerSeq                 uint32          // the initial SEQ from Peer
+	TermStartSeq, TermStartPeerSeq uint32          // Seq and Peer Seq when 4-way termination starts
+	InputChannel                   chan *PcpPacket // per connection packet input channel
+	OutputChan                     chan *PcpPacket // overall output channel shared by all connections
+	ReadChannel                    chan *PcpPacket // for connection read function
+	TerminationCallerState         uint            // 4-way termination caller states
+	TerminationRespState           uint            // 4-way termination responder states
+	InitClientState                uint            // 3-way handshake state of the client
+	InitServerState                uint            // 3-way handshake state of the Server
+	ConnSignalTimer                *time.Timer     // Timer for 3-way handshake and 4-way connection close
+	ConnSignalRetryCount           int             // retry count for 3-way handshake and 4-way connection close
+	TcpOptions                     *Options        // tcp options
+	WriteOnHold                    bool            // true if 4-way termination starts
+	IsOpenConnection               bool            //false if in 3-way handshake
+	IsBidirectional                bool            // already seen normal packets from peer
+	KeepaliveTimer                 *time.Timer     // Timer for keepalive mechanism
+	KeepaliveTimerMutex            sync.Mutex      // mutex for KeepaliveTimer
+	IdleTimeout                    time.Duration   // Idle timeout duration
+	TimeoutCount                   int             // Timeout count for keepalive
+	KeepaliveInterval              time.Duration   // Interval between keepalive attempts
+	MaxKeepaliveAttempts           int             // Maximum number of keepalive attempts before marking the connection as dead
+	IsKeepAliveInProgress          bool            // denote if keepalive probe is in process or not
+	IsDead                         bool            // mark the connection is idle timed out and failed keepalive probe
+	ResendPackets                  ResendPackets   // data structure to hold sent packets which are not acknowledged yet
+	ResendInterval                 time.Duration   // packet resend interval
+	resendTimer                    *time.Timer     // resend timer to trigger resending packet every ResendInterval
+	resendTimerMutex               sync.Mutex      // mutex for resendTimer
+	RevPacketCache                 PacketGapMap    // Cache for received packets who has gap before it due to packet loss or out-of-order
 
-	connCloseSignalChan chan *Connection // send close connection signal to parent service or pConnection to clear it
-	newConnChannel      chan *Connection // server only. send new connection signal to parent service to signal successful 3-way handshake
-	closeSigal          chan struct{}    // used to send close signal to HandleIncomingPackets go routine to stop when keepalive failed
+	connCloseSignalChan      chan *Connection // send close connection signal to parent service or pConnection to clear it
+	connSignalFailedToParent chan *Connection // used to send signal to parrent to notify connection establishment failed
+	newConnChannel           chan *Connection // server only. send new connection signal to parent service to signal successful 3-way handshake
+	closeSigal               chan struct{}    // used to send close signal to HandleIncomingPackets go routine to stop when keepalive failed
+	ConnSignalFailed         chan struct{}    // used to notify Connection signalling process (3-way handshake and 4-way termination) failed
 }
 
 type Options struct {
@@ -76,7 +81,7 @@ type SACKOption struct {
 	Blocks []SACKBlock // Slice of SACK blocks
 }
 
-func NewConnection(key string, remoteAddr net.Addr, remotePort int, localAddr net.Addr, localPort int, outputChan chan *PcpPacket, connCloseSignalChan, newConnChannel chan *Connection) (*Connection, error) {
+func NewConnection(key string, remoteAddr net.Addr, remotePort int, localAddr net.Addr, localPort int, outputChan chan *PcpPacket, connCloseSignalChan, newConnChannel, connSignalFailedToParent chan *Connection) (*Connection, error) {
 	isn, _ := GenerateISN()
 	options := &Options{
 		WindowScaleShiftCount: uint8(config.AppConfig.WindowScale),
@@ -107,9 +112,11 @@ func NewConnection(key string, remoteAddr net.Addr, remotePort int, localAddr ne
 		ResendInterval:       time.Duration(config.AppConfig.ResendInterval) * time.Millisecond,
 		RevPacketCache:       *NewPacketGapMap(),
 
-		connCloseSignalChan: connCloseSignalChan,
-		newConnChannel:      newConnChannel,
-		closeSigal:          make(chan struct{}),
+		connCloseSignalChan:      connCloseSignalChan,
+		connSignalFailedToParent: connSignalFailedToParent,
+		newConnChannel:           newConnChannel,
+		closeSigal:               make(chan struct{}),
+		ConnSignalFailed:         make(chan struct{}),
 	}
 
 	if config.AppConfig.KeepAliveEnabled {
@@ -141,6 +148,13 @@ func (c *Connection) HandleIncomingPackets() {
 				c.TimeoutCount = 0
 			}
 
+			if !(isSYN || isRST) {
+				c.IsBidirectional = true
+				if !c.WriteOnHold && c.ConnSignalTimer != nil {
+					c.StopConnSignalTimer()
+				}
+			}
+
 			// Parse TCP options to update timestamp parameters
 			if packet.TcpOptions != nil && packet.TcpOptions.TimestampEnabled {
 				// Update timestamp parameters
@@ -155,7 +169,7 @@ func (c *Connection) HandleIncomingPackets() {
 			isDataPacket = len(packet.Payload) > 0
 
 			// update ResendPackets if it's ACK packet
-			if isACK {
+			if isACK && !isSYN && !isFIN && !isRST {
 				c.UpdateResendPacketsOnAck(packet)
 			}
 
@@ -165,9 +179,10 @@ func (c *Connection) HandleIncomingPackets() {
 			} else { // ACK only or FIN packet
 				if isFIN {
 					if c.TerminationCallerState == CallerFinSent {
-						if isACK {
+						if isACK && packet.SequenceNumber == c.TermStartPeerSeq && packet.AcknowledgmentNum == c.TermStartSeq+1 {
 							log.Println("Got FIN-ACK from 4-way responder.")
-							c.StopConnSignalTimer() // stop the Connection Signal retry timer
+							c.StopConnSignalTimer()                                     // stop the Connection Signal retry timer
+							c.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1) // implicit modulo included
 							c.TermCallerSendAck()
 							log.Println("ACK sent to 4-way responder.")
 							// clear connection resource and close
@@ -184,22 +199,26 @@ func (c *Connection) HandleIncomingPackets() {
 						c.TerminationRespState = RespFinReceived
 						// Sent ACK back to the server
 						c.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1) // implicit modulo included
+						c.TermStartSeq = packet.AcknowledgmentNum
+						c.TermStartPeerSeq = c.LastAckNumber
 						c.TermRespSendFinAck()
 						c.StartConnSignalTimer() // start connection signal retry timer
 						log.Println("Sent FIN-ACK to 4-way caller.")
 					}
 					//ignore FIN packet in other scenario
+					continue
 				}
-				if isSYN {
+				if isSYN && !c.IsBidirectional {
 					if isACK && packet.SequenceNumber == c.InitialPeerSeq && packet.AcknowledgmentNum == c.InitialSeq+1 {
 						// normally SYN-ACK message should be handled in Handle3WayHandshake
 						// this should be a retry from the peer
 						c.InitSendAck() // resend 3-way handshake ACK to peer
 					}
+					continue
 				}
 				if isACK {
 					// check if 4-way termination is in process
-					if c.TerminationRespState == RespFinAckSent {
+					if c.TerminationRespState == RespFinAckSent && packet.SequenceNumber == c.TermStartPeerSeq && packet.AcknowledgmentNum == c.TermStartSeq+1 {
 						log.Println("Got ACK from 4-way caller. 4-way completed successfully")
 						c.StopConnSignalTimer()
 						// 4-way termination completed
@@ -210,6 +229,7 @@ func (c *Connection) HandleIncomingPackets() {
 						return // this will terminate this go routine gracefully
 					}
 					// ignore ACK for data packet
+					continue
 				}
 				if isRST {
 					log.Println(Red + "Got RST packet from the other end!" + Reset)
@@ -226,50 +246,69 @@ func (c *Connection) Handle3WayHandshake() {
 		//err    error
 	)
 	for {
-		packet = <-c.InputChannel
-		// since this go routine only runs for connection initiation
-		// so it will only handle ACK message of the SYN-ACK message server sent previously
-		// and ignore all other packets
-		flags := packet.Flags
-		// Extract SYN and ACK flags from the packet
-		isSYN := flags&SYNFlag != 0
-		isACK := flags&ACKFlag != 0
+		select {
+		case <-c.ConnSignalFailed:
+			// Connection establishment signalling failed
+			// send signal to parent service to remove newConn from tempClientConnections
 
-		// If it's a ACK only packet, handle it
-		if !isSYN && isACK {
-
-			// Check if the connection's 3-way handshake state is correct
-			if c.InitServerState+1 != AckReceived {
-				log.Printf("3-way handshake state of connection %s is %d, but we received ACK message. Ignore!\n", c.Key, c.InitServerState)
-				continue
+			// remove iptables rule added earlier
+			if err := removeIptablesRule(c.RemoteAddr.(*net.IPAddr).IP.String(), c.RemotePort); err != nil {
+				log.Println("Error removing iptables rule:", err)
+				return
 			}
-			c.StopConnSignalTimer() // stops Connection Signal Retry Timer
-			// 3-way handshaking completed successfully
-			// send signal to service for new connection established
-			c.newConnChannel <- c
-			//c.expectedSeqNum don't change
-			c.InitServerState = 0 // reset it
-			c.IsOpenConnection = true
-
-			// handle TCP option negotiation
-			if c.TcpOptions.WindowScaleShiftCount > 0 {
-				fmt.Println("Set Window Size with Scaling support!")
-				c.WindowSize = uint16(config.AppConfig.WindowSizeWithScale)
+			if c.ConnSignalTimer != nil {
+				c.StopConnSignalTimer()
+				c.ConnSignalTimer = nil
 			}
-
-			// handle TCP option timestamp
-			if c.TcpOptions.TimestampEnabled {
-				c.TcpOptions.TsEchoReplyValue = packet.TcpOptions.Timestamp
-			}
-
-			//start resend timer if SACK enabled
-			if c.TcpOptions.SackEnabled {
-				// Start the resend timer
-				c.StartResendTimer()
-			}
-
+			log.Println("dialing PCP connection failed due to timeout")
 			return // this will terminate this go routine
+		case packet = <-c.InputChannel:
+			// since this go routine only runs for connection initiation
+			// so it will only handle ACK message of the SYN-ACK message server sent previously
+			// and ignore all other packets
+			flags := packet.Flags
+			// Extract SYN and ACK flags from the packet
+			isSYN := flags&SYNFlag != 0
+			isACK := flags&ACKFlag != 0
+
+			// If it's a ACK only packet, handle it
+			if !isSYN && isACK {
+
+				// Check if the connection's 3-way handshake state is correct
+				if c.InitServerState+1 != AckReceived {
+					log.Printf("3-way handshake state of connection %s is %d, but we received ACK message. Ignore!\n", c.Key, c.InitServerState)
+					continue
+				}
+				c.StopConnSignalTimer() // stops Connection Signal Retry Timer
+				// 3-way handshaking completed successfully
+				// send signal to service for new connection established
+				c.newConnChannel <- c
+				//c.expectedSeqNum don't change
+				c.InitServerState = 0 // reset it
+				c.IsOpenConnection = true
+
+				// handle TCP option negotiation
+				if c.TcpOptions.WindowScaleShiftCount > 0 {
+					fmt.Println("Set Window Size with Scaling support!")
+					c.WindowSize = uint16(config.AppConfig.WindowSizeWithScale)
+				}
+
+				// handle TCP option timestamp
+				if c.TcpOptions.TimestampEnabled {
+					c.TcpOptions.TsEchoReplyValue = packet.TcpOptions.Timestamp
+				}
+
+				//start resend timer if SACK enabled
+				if c.TcpOptions.SackEnabled {
+					// Start the resend timer
+					c.StartResendTimer()
+				}
+
+				return // this will terminate this go routine
+			}
+
 		}
+
 	}
 }
 
@@ -308,7 +347,6 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 		for _, cachedPacket := range c.RevPacketCache.getPacketsInAscendingOrder() {
 			// If a packet's SEQ < c.LastSequenceNumber, put it into ReadChannel
 			if cachedPacket.SequenceNumber < c.LastAckNumber {
-				c.ReadChannel <- cachedPacket
 				// Add the packet's sequence number to the list of packets to delete
 				packetsToDelete = append(packetsToDelete, cachedPacket.SequenceNumber)
 			} else {
@@ -318,7 +356,10 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 		}
 
 		// Delete packets from RevPacketCache after the loop has finished
+		var packetToBeRemoved *PcpPacket
 		for _, seqNum := range packetsToDelete {
+			packetToBeRemoved, _ = c.RevPacketCache.GetPacket(seqNum)
+			c.ReadChannel <- packetToBeRemoved
 			c.RevPacketCache.RemovePacket(seqNum) // remove the packet from RevPacketCache but do not return the chunk yet
 			// chunk will be returned after being read from ReadChannel
 		}
@@ -377,10 +418,6 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 			segmentLength = int(c.TcpOptions.MSS)
 		}
 
-		// Extract the current segment from the buffer
-		//payload := make([]byte, segmentLength)
-		//copy(payload, buffer[:segmentLength])
-
 		// Construct a packet with the current segment
 		packet := NewPcpPacket(c.NextSequenceNumber, c.LastAckNumber, ACKFlag, buffer[:segmentLength], c)
 
@@ -407,6 +444,8 @@ func (c *Connection) Close() error {
 	c.WriteOnHold = true
 
 	// send syn packet to peer
+	c.TermStartSeq = c.NextSequenceNumber
+	c.TermStartPeerSeq = c.LastAckNumber
 	c.TermCallerSendFin()
 	c.NextSequenceNumber = uint32(uint64(c.NextSequenceNumber) + 1) // implicit modulo op
 	c.StartConnSignalTimer()
@@ -732,7 +771,7 @@ func (c *Connection) InitSendSyn() {
 }
 
 func (c *Connection) InitSendSynAck() {
-	synAckPacket := NewPcpPacket(c.InitialSeq, c.InitialPeerSeq+1, SYNFlag|ACKFlag, nil, c)
+	synAckPacket := NewPcpPacket(c.InitialSeq, c.InitialPeerSeq, SYNFlag|ACKFlag, nil, c)
 	synAckPacket.IsOpenConnection = false
 	// Send the SYN-ACK packet to the sender
 	c.OutputChan <- synAckPacket
@@ -740,7 +779,7 @@ func (c *Connection) InitSendSynAck() {
 }
 
 func (c *Connection) InitSendAck() {
-	ackPacket := NewPcpPacket(c.InitialSeq+1, c.InitialPeerSeq+1, ACKFlag, nil, c)
+	ackPacket := NewPcpPacket(c.InitialSeq+1, c.InitialPeerSeq, ACKFlag, nil, c)
 	ackPacket.IsOpenConnection = false
 	c.OutputChan <- ackPacket
 	c.InitClientState = AckSent
@@ -748,14 +787,14 @@ func (c *Connection) InitSendAck() {
 
 func (c *Connection) TermCallerSendFin() {
 	// Assemble FIN packet to be sent to the other end
-	finPacket := NewPcpPacket(c.NextSequenceNumber, c.LastAckNumber, FINFlag|ACKFlag, nil, c)
+	finPacket := NewPcpPacket(c.TermStartSeq, c.TermStartPeerSeq, FINFlag|ACKFlag, nil, c)
 	c.OutputChan <- finPacket
 	// set 4-way termination state to CallerFINSent
 	c.TerminationCallerState = CallerFinSent
 }
 
 func (c *Connection) TermCallerSendAck() {
-	ackPacket := NewPcpPacket(c.NextSequenceNumber, c.LastAckNumber, ACKFlag, nil, c)
+	ackPacket := NewPcpPacket(c.TermStartSeq+1, c.TermStartPeerSeq+1, ACKFlag, nil, c)
 	// Send the acknowledgment packet to the other end
 	c.OutputChan <- ackPacket
 	// set 4-way termination state to CallerFINSent
@@ -763,7 +802,7 @@ func (c *Connection) TermCallerSendAck() {
 }
 
 func (c *Connection) TermRespSendFinAck() {
-	ackPacket := NewPcpPacket(c.NextSequenceNumber, c.LastAckNumber, FINFlag|ACKFlag, nil, c)
+	ackPacket := NewPcpPacket(c.TermStartSeq, c.TermStartPeerSeq, FINFlag|ACKFlag, nil, c)
 	// Send the acknowledgment packet to the other end
 	c.OutputChan <- ackPacket
 	c.TerminationRespState = RespFinAckSent
@@ -811,4 +850,18 @@ func (c *Connection) StartConnSignalTimer() {
 
 func (c *Connection) StopConnSignalTimer() {
 	c.ConnSignalTimer.Stop()
+}
+
+// removeIptablesRule removes the iptables rule that was added for dropping RST packets.
+func removeIptablesRule(ip string, port int) error {
+	// Construct the command to delete the iptables rule
+	cmd := exec.Command("iptables", "-D", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-s", ip, "--sport", strconv.Itoa(port), "-j", "DROP")
+
+	// Execute the command to delete the iptables rule
+	if err := cmd.Run(); err != nil {
+		// If there is an error executing the command, return the error
+		return err
+	}
+
+	return nil
 }
