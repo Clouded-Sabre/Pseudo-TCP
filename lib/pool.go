@@ -13,6 +13,7 @@ type Chunk struct {
 	Length         int
 	LastAllocation time.Time
 	CallStack      []string
+	StayAtChannel  string
 }
 
 // NewChunk creates a new chunk with the given length
@@ -21,7 +22,8 @@ func NewChunk(length int) *Chunk {
 		Data:   make([]byte, length),
 		Length: 0,
 		//LastAllocation: time.Time{},
-		CallStack: nil,
+		CallStack:     nil,
+		StayAtChannel: "",
 	}
 }
 
@@ -37,6 +39,15 @@ func (c *Chunk) PopCallStack() {
 	}
 }
 
+// AddToChannel assign a channel string to StayAtChannel of the chunk
+func (c *Chunk) AddToChannel(channelString string) {
+	c.StayAtChannel = channelString
+}
+
+func (c *Chunk) RemoveFromChannel() {
+	c.StayAtChannel = ""
+}
+
 // PrintCallStack prints the call stack of the chunk
 func (c *Chunk) PrintCallStack() {
 	fmt.Print("Call Stack:")
@@ -44,6 +55,11 @@ func (c *Chunk) PrintCallStack() {
 		fmt.Printf(" -> %s", call)
 	}
 	fmt.Println()
+	if len(c.StayAtChannel) > 0 {
+		fmt.Println("Chunk@channel:", c.StayAtChannel)
+	}
+	fmt.Println()
+	fmt.Println("Payload:", string(c.Data[:c.Length]))
 }
 
 // Reset resets necessary fields after chunk is returned
@@ -155,6 +171,7 @@ func (p *PayloadPool) CheckTimedOutChunks() {
 		p.mtx.Lock()
 		for _, chunk := range p.chunks[p.available:] {
 			if time.Since(chunk.LastAllocation) > 10*time.Second {
+				chunk.PrintCallStack()
 				count++
 			}
 		}

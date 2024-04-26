@@ -20,12 +20,12 @@ type PcpServer struct {
 
 // pcp protocol server struct
 type PcpProtocolConnection struct {
-	pcpServerObj       *PcpServer
-	ServerAddr         net.Addr
-	Connection         net.PacketConn
-	OutputChan         chan *lib.PcpPacket
-	ServiceMap         map[int]*Service
-	serviceCloseSignal chan *Service
+	pcpServerObj              *PcpServer
+	ServerAddr                net.Addr
+	Connection                net.PacketConn
+	OutputChan, sigOutputChan chan *lib.PcpPacket
+	ServiceMap                map[int]*Service
+	serviceCloseSignal        chan *Service
 }
 
 func NewPcpServer(protocolId uint8) (*PcpServer, error) {
@@ -67,6 +67,7 @@ func newPcpServerProtocolConnection(p *PcpServer, serverIP string) (*PcpProtocol
 		ServerAddr:         serverAddr,
 		Connection:         protocolConn,
 		OutputChan:         make(chan *lib.PcpPacket),
+		sigOutputChan:      make(chan *lib.PcpPacket),
 		ServiceMap:         make(map[int]*Service),
 		serviceCloseSignal: make(chan *Service),
 	}
@@ -102,6 +103,11 @@ func (p *PcpProtocolConnection) handlingIncomingPackets() {
 			log.Println("Received TCP frame is il-formated. Ignore it!")
 			continue
 		}
+
+		if config.Debug && packet.GetChunkReference() != nil {
+			packet.GetChunkReference().AddCallStack("pcpProtocolConn.handleIncomingPackets")
+		}
+
 		destPort := packet.DestinationPort
 		//log.Printf("Got packet with options: %+v\n", packet.TcpOptions)
 
@@ -112,11 +118,17 @@ func (p *PcpProtocolConnection) handlingIncomingPackets() {
 
 		if !ok {
 			//fmt.Println("No service registered for port:", destPort)
+			// return the packet's chunk
+			packet.ReturnChunk()
 			continue
 		}
 
 		// Dispatch the packet to the corresponding service's input channel
 		service.InputChannel <- packet
+		if config.Debug && packet.GetChunkReference() != nil {
+			packet.GetChunkReference().AddToChannel("Service.InputChannel")
+			packet.GetChunkReference().PopCallStack()
+		}
 	}
 }
 
@@ -128,11 +140,21 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 		frameBytes = make([]byte, config.AppConfig.PreferredMSS+lib.TcpHeaderLength+lib.TcpOptionsMaxLength+lib.TcpPseudoHeaderLength)
 		n          = 0
 		err        error
+		packet     *lib.PcpPacket
 	)
 
 	packetLost := false
 	for {
-		packet := <-p.OutputChan // Subscribe to p.OutputChan
+		select {
+		case packet = <-p.OutputChan: // Subscribe to p.OutputChan
+		case packet = <-p.sigOutputChan: // Subscribe to the priority p.sigOutputChan
+		}
+
+		if config.Debug && packet.GetChunkReference() != nil {
+			packet.GetChunkReference().RemoveFromChannel()
+			packet.GetChunkReference().AddCallStack("pcpProtocolConnection.handleOutgoingPackets")
+		}
+
 		if config.AppConfig.PacketLostSimulation {
 			if count == 0 {
 				lostCount = rand.Intn(10)
@@ -175,6 +197,10 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 			count = (count + 1) % 10
 		}
 		packetLost = false
+
+		if config.Debug && packet.GetChunkReference() != nil {
+			packet.GetChunkReference().PopCallStack()
+		}
 	}
 }
 
@@ -208,7 +234,7 @@ func (p *PcpServer) ListenPcp(serviceIP string, port int) (*Service, error) {
 	if !ok {
 		// need to create new service
 		// create new Pcp service
-		srv, err := newService(pConn, serviceAddr, port, pConn.OutputChan)
+		srv, err := newService(pConn, serviceAddr, port, pConn.OutputChan, pConn.sigOutputChan)
 		if err != nil {
 			log.Println("Error creating service:", err)
 			return nil, err
@@ -239,5 +265,19 @@ func addIptablesRule(ip string, port int) error {
 	if err := cmd.Run(); err != nil {
 		return err
 	}
+	return nil
+}
+
+// removeIptablesRule removes the iptables rule that was added for dropping RST packets.
+func RemoveIptablesRule(ip string, port int) error {
+	// Construct the command to delete the iptables rule
+	cmd := exec.Command("iptables", "-D", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-s", ip, "--sport", strconv.Itoa(port), "-j", "DROP")
+
+	// Execute the command to delete the iptables rule
+	if err := cmd.Run(); err != nil {
+		// If there is an error executing the command, return the error
+		return err
+	}
+
 	return nil
 }

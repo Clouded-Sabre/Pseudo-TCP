@@ -9,6 +9,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 )
 
 // PcpPacket represents a packet in your custom protocol
@@ -32,6 +34,9 @@ type PcpPacket struct {
 
 // Marshal converts a PcpPacket to a byte slice
 func (p *PcpPacket) Marshal(protocolId uint8, buffer []byte) (int, error) {
+	if config.Debug && p.chunk != nil {
+		p.chunk.AddCallStack("p.Marshal")
+	}
 	// Calculate the length of the options field (including padding)
 	optionsLength := 0
 	optionsPresent := false
@@ -176,11 +181,17 @@ func (p *PcpPacket) Marshal(protocolId uint8, buffer []byte) (int, error) {
 	checksum := CalculateChecksum(buffer[:TcpPseudoHeaderLength+pcpFrameLength])
 	binary.BigEndian.PutUint16(frame[16:18], checksum)
 
+	if config.Debug && p.chunk != nil {
+		p.chunk.PopCallStack()
+	}
 	return pcpFrameLength, nil
 }
 
 // Unmarshal converts a byte slice to a PcpPacket
 func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) error {
+	if config.Debug && p.chunk != nil {
+		p.chunk.AddCallStack("p.Unmarshal")
+	}
 	if len(data) < TcpHeaderLength {
 		return fmt.Errorf("the length(%d) of data is too short to be unmarshalled", len(data))
 	}
@@ -282,6 +293,11 @@ func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) error {
 
 	// Retrieve the checksum from the packet
 	p.Checksum = binary.BigEndian.Uint16(data[16:18]) // Assuming checksum field is at byte 16 and 17
+
+	if config.Debug && p.chunk != nil {
+		p.chunk.PopCallStack()
+	}
+
 	return nil
 }
 
@@ -324,11 +340,16 @@ func NewPcpPacket(seqNum, ackNum uint32, flags uint8, data []byte, conn *Connect
 func (p *PcpPacket) ReturnChunk() {
 	if p.chunk != nil {
 		Pool.ReturnPayload(p.chunk)
+		p.chunk = nil
 	}
 }
 
 func (p *PcpPacket) GetChunk() {
 	p.chunk = Pool.GetPayload()
+}
+
+func (p *PcpPacket) GetChunkReference() *Chunk {
+	return p.chunk
 }
 
 func CalculateChecksum(buffer []byte) uint16 {
@@ -440,14 +461,22 @@ type PacketInfo struct {
 }
 
 type ResendPackets struct {
-	mutex   sync.Mutex
-	packets map[uint32]PacketInfo
+	mutex, removalMutex sync.Mutex
+	packets             map[uint32]PacketInfo
 }
 
 func NewResendPackets() *ResendPackets {
 	return &ResendPackets{
 		packets: make(map[uint32]PacketInfo),
 	}
+}
+
+func (r *ResendPackets) RemovalLock() {
+	r.removalMutex.Lock()
+}
+
+func (r *ResendPackets) RemovalUnlock() {
+	r.removalMutex.Unlock()
 }
 
 // Function to add a sent packet to the map
@@ -494,12 +523,30 @@ func (r *ResendPackets) RemoveSentPacket(seqNum uint32) {
 	defer r.mutex.Unlock()
 	packet, ok := r.packets[seqNum]
 	if !ok {
+		if config.Debug && packet.Data.chunk != nil {
+			log.Println("RemoveSentPackact error: No such packets with SEQ", seqNum)
+		}
 		return
 	}
+	if config.Debug && packet.Data.chunk != nil {
+		packet.Data.chunk.AddCallStack("ResendPackets.RemoveSentPacket")
+	}
+
 	delete(r.packets, seqNum)
 	// now that we delete packet from SentPackets, we no longer
 	// need it so it's time to return its chunk
 	packet.Data.ReturnChunk()
+}
+
+func (r *ResendPackets) GetPacketKeys() []uint32 {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	keys := make([]uint32, 0, len(r.packets))
+	for key := range r.packets {
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 type PacketGapMap struct {

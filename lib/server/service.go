@@ -5,32 +5,34 @@ import (
 	"log"
 	"net"
 
+	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 	"github.com/Clouded-Sabre/Pseudo-TCP/lib"
 )
 
 // Service represents a service listening on a specific port.
 type Service struct {
-	pcpProtocolConnection *PcpProtocolConnection // point back to parent pcp server
-	ServiceAddr           net.Addr
-	Port                  int
-	InputChannel          chan *lib.PcpPacket        // channel for incoming packets of the whole services (including packets for all connections)
-	OutputChan            chan *lib.PcpPacket        // output channel for outgoing packets
-	connectionMap         map[string]*lib.Connection // open connections
-	tempConnMap           map[string]*lib.Connection // temporary connection map for completing 3-way handshake
-	newConnChannel        chan *lib.Connection       // new connection all be placed here are 3-way handshake
-	ConnCloseSignal       chan *lib.Connection       // signal for connection close
-	serviceCloseSignal    chan struct{}              // signal for closing service
-	connSignalFailed      chan *lib.Connection       // signal for closing temp connection due to openning signalling failed
+	pcpProtocolConnection     *PcpProtocolConnection // point back to parent pcp server
+	ServiceAddr               net.Addr
+	Port                      int
+	InputChannel              chan *lib.PcpPacket        // channel for incoming packets of the whole services (including packets for all connections)
+	OutputChan, sigOutputChan chan *lib.PcpPacket        // output channels for ordinary outgoing packets and priority signalling packets
+	connectionMap             map[string]*lib.Connection // open connections
+	tempConnMap               map[string]*lib.Connection // temporary connection map for completing 3-way handshake
+	newConnChannel            chan *lib.Connection       // new connection all be placed here are 3-way handshake
+	ConnCloseSignal           chan *lib.Connection       // signal for connection close
+	serviceCloseSignal        chan struct{}              // signal for closing service
+	connSignalFailed          chan *lib.Connection       // signal for closing temp connection due to openning signalling failed
 }
 
 // NewService creates a new service listening on the specified port.
-func newService(pcpProtocolConn *PcpProtocolConnection, serviceAddr net.Addr, port int, outputChan chan *lib.PcpPacket) (*Service, error) {
+func newService(pcpProtocolConn *PcpProtocolConnection, serviceAddr net.Addr, port int, outputChan, sigOutputChan chan *lib.PcpPacket) (*Service, error) {
 	return &Service{
 		pcpProtocolConnection: pcpProtocolConn,
 		ServiceAddr:           serviceAddr,
 		Port:                  port,
 		InputChannel:          make(chan *lib.PcpPacket),
 		OutputChan:            outputChan,
+		sigOutputChan:         sigOutputChan,
 		connectionMap:         make(map[string]*lib.Connection),
 		tempConnMap:           make(map[string]*lib.Connection),
 		newConnChannel:        make(chan *lib.Connection),
@@ -73,6 +75,10 @@ func (s *Service) handleServicePackets() {
 	for {
 		select {
 		case packet := <-s.InputChannel:
+			if config.Debug && packet.GetChunkReference() != nil {
+				packet.GetChunkReference().RemoveFromChannel()
+				packet.GetChunkReference().AddCallStack("service.handleServicePackets")
+			}
 			// Extract SYN and ACK flags from the packet
 			isSYN := packet.Flags&lib.SYNFlag != 0
 			isACK := packet.Flags&lib.ACKFlag != 0
@@ -83,6 +89,9 @@ func (s *Service) handleServicePackets() {
 			} else {
 				s.handleDataPacket(packet)
 			}
+			if config.Debug && packet.GetChunkReference() != nil {
+				packet.GetChunkReference().PopCallStack()
+			}
 		case <-s.serviceCloseSignal:
 			// Close the handleServicePackets goroutine to gracefully shutdown
 			return
@@ -92,6 +101,9 @@ func (s *Service) handleServicePackets() {
 
 // handleDataPacket forward Data packet to corresponding open connection if present.
 func (s *Service) handleDataPacket(packet *lib.PcpPacket) {
+	if config.Debug && packet.GetChunkReference() != nil {
+		packet.GetChunkReference().AddCallStack("service.handleDataPacket")
+	}
 	// Extract destination IP and port from the packet
 	sourceIP := packet.SrcAddr.(*net.IPAddr).IP.String()
 	sourcePort := packet.SourcePort
@@ -104,18 +116,33 @@ func (s *Service) handleDataPacket(packet *lib.PcpPacket) {
 	if ok {
 		// Dispatch the packet to the corresponding connection's input channel
 		conn.InputChannel <- packet
+		if config.Debug && packet.GetChunkReference() != nil {
+			packet.GetChunkReference().AddToChannel("Conn.InputChannel")
+			packet.GetChunkReference().PopCallStack()
+		}
 		return
 	}
 
 	// then check if the connection exists in temp connection map
 	tempConn, ok := s.tempConnMap[connKey]
 	if ok {
-		// Dispatch the packet to the corresponding connection's input channel
-		tempConn.InputChannel <- packet
-		return
+		if len(packet.Payload) == 0 && packet.SequenceNumber-tempConn.InitialPeerSeq < 2 {
+			// Dispatch the packet to the corresponding connection's input channel
+			tempConn.InputChannel <- packet
+			if config.Debug && packet.GetChunkReference() != nil {
+				packet.GetChunkReference().AddToChannel("TempConn.InputChannel")
+				packet.GetChunkReference().PopCallStack()
+			}
+			return
+		} else if len(packet.Payload) > 0 {
+			// since the connection is not ready yet, discard the data packet for the time being
+			packet.ReturnChunk()
+			return
+		}
 	}
 
 	log.Printf("Received data packet for non-existent connection: %s\n", connKey)
+	packet.ReturnChunk()
 }
 
 // handleSynPacket handles a SYN packet and initiates a new connection.
@@ -134,8 +161,15 @@ func (s *Service) handleSynPacket(packet *lib.PcpPacket) {
 		return
 	}
 
+	// then check if the connection exists in temp connection map
+	_, ok = s.tempConnMap[connKey]
+	if ok {
+		log.Printf("Received SYN packet for existing temp connection: %s. Ignore it.\n", connKey)
+		return
+	}
+
 	// Create a new temporary connection object for the 3-way handshake
-	newConn, err := lib.NewConnection(connKey, sourceAddr, int(sourcePort), s.ServiceAddr, s.Port, s.OutputChan, s.ConnCloseSignal, s.newConnChannel, s.connSignalFailed)
+	newConn, err := lib.NewConnection(connKey, sourceAddr, int(sourcePort), s.ServiceAddr, s.Port, s.OutputChan, s.sigOutputChan, s.ConnCloseSignal, s.newConnChannel, s.connSignalFailed)
 	if err != nil {
 		log.Printf("Error creating new connection for %s: %s\n", connKey, err)
 		return

@@ -14,13 +14,13 @@ import (
 
 // pcp client protocol connection struct
 type pcpProtocolConnection struct {
-	pcpClientObj          *pcpClient
-	ServerAddr, LocalAddr *net.IPAddr
-	pConn                 *net.IPConn
-	OutputChan            chan *lib.PcpPacket
-	ConnectionMap         map[string]*lib.Connection
-	tempConnectionMap     map[string]*lib.Connection
-	ConnCloseSignalChan   chan *lib.Connection
+	pcpClientObj              *pcpClient
+	ServerAddr, LocalAddr     *net.IPAddr
+	pConn                     *net.IPConn
+	OutputChan, sigOutputChan chan *lib.PcpPacket
+	ConnectionMap             map[string]*lib.Connection
+	tempConnectionMap         map[string]*lib.Connection
+	ConnCloseSignalChan       chan *lib.Connection
 }
 
 func newPcpProtocolConnection(p *pcpClient, serverAddr, localAddr *net.IPAddr) (*pcpProtocolConnection, error) {
@@ -38,6 +38,7 @@ func newPcpProtocolConnection(p *pcpClient, serverAddr, localAddr *net.IPAddr) (
 		ServerAddr:          serverAddr,
 		pConn:               pConn,
 		OutputChan:          make(chan *lib.PcpPacket),
+		sigOutputChan:       make(chan *lib.PcpPacket),
 		ConnectionMap:       make(map[string]*lib.Connection),
 		tempConnectionMap:   make(map[string]*lib.Connection),
 		ConnCloseSignalChan: make(chan *lib.Connection),
@@ -60,7 +61,7 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*lib.Connection, error) {
 	connKey := fmt.Sprintf("%d:%d", clientPort, serverPort)
 
 	// Create a new temporary connection object for the 3-way handshake
-	newConn, err := lib.NewConnection(connKey, p.ServerAddr, int(serverPort), p.LocalAddr, clientPort, p.OutputChan, p.ConnCloseSignalChan, nil, nil)
+	newConn, err := lib.NewConnection(connKey, p.ServerAddr, int(serverPort), p.LocalAddr, clientPort, p.OutputChan, p.sigOutputChan, p.ConnCloseSignalChan, nil, nil)
 	if err != nil {
 		fmt.Printf("Error creating new connection to %s:%d because of error: %s\n", p.ServerAddr.IP.To4().String(), serverPort, err)
 		return nil, err
@@ -84,11 +85,6 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*lib.Connection, error) {
 			// Connection dialing failed, remove newConn from tempClientConnections
 			delete(p.tempConnectionMap, connKey)
 
-			// remove iptables rule added earlier
-			if err := removeIptablesRule(p.ServerAddr.IP.To4().String(), serverPort); err != nil {
-				log.Println("Error removing iptables rule:", err)
-				return nil, err
-			}
 			if newConn.ConnSignalTimer != nil {
 				newConn.StopConnSignalTimer()
 				newConn.ConnSignalTimer = nil
@@ -151,7 +147,7 @@ func addIptablesRule(ip string, port int) error {
 }
 
 // removeIptablesRule removes the iptables rule that was added for dropping RST packets.
-func removeIptablesRule(ip string, port int) error {
+func RemoveIptablesRule(ip string, port int) error {
 	// Construct the command to delete the iptables rule
 	cmd := exec.Command("iptables", "-D", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-d", ip, "--dport", strconv.Itoa(port), "-j", "DROP")
 
@@ -200,10 +196,15 @@ func (p *pcpProtocolConnection) handleIncomingPackets() {
 		err = packet.Unmarshal(pcpFrame, p.ServerAddr, p.LocalAddr)
 		if err != nil {
 			log.Println("Received TCP frame is il-formated. Ignore it!")
+			// because chunk won't be allocated unless the marshalling is success, there is no need to return the chunk
 			continue
 		}
 		//fmt.Println("Received packet Length:", n)
 		//fmt.Printf("Got packet:\n %+v\n", packet)
+
+		if config.Debug && packet.GetChunkReference() != nil {
+			packet.GetChunkReference().AddCallStack("pcpProtocolConn.handleIncomingPackets")
+		}
 
 		// Extract destination IP and port from the packet
 		sourcePort := packet.SourcePort
@@ -218,18 +219,34 @@ func (p *pcpProtocolConnection) handleIncomingPackets() {
 		if ok {
 			// open connection. Dispatch the packet to the corresponding connection's input channel
 			conn.InputChannel <- packet
+			if config.Debug && packet.GetChunkReference() != nil {
+				packet.GetChunkReference().AddToChannel("Conn.InputChannel")
+				packet.GetChunkReference().PopCallStack()
+			}
 			continue
 		}
 
 		// then check if packet belongs to an temp connection.
 		tempConn, ok := p.tempConnectionMap[connKey]
 		if ok {
-			// forward to that connection's input channel
-			tempConn.InputChannel <- packet
-			continue
+			if len(packet.Payload) == 0 && packet.AcknowledgmentNum-tempConn.InitialSeq < 2 {
+				// forward to that connection's input channel
+				tempConn.InputChannel <- packet
+				if config.Debug && packet.GetChunkReference() != nil {
+					packet.GetChunkReference().AddToChannel("TempConn.InputChannel")
+					packet.GetChunkReference().PopCallStack()
+				}
+				continue
+			} else if len(packet.Payload) > 0 {
+				// since the connection is not ready yet, discard the data packet for the time being
+				packet.ReturnChunk()
+				return
+			}
 		}
 
 		fmt.Printf("Received data packet for non-existent connection: %s\n", connKey)
+		// return the packet chunk now that it's destined to an unknown connection
+		packet.ReturnChunk()
 	}
 }
 
@@ -241,14 +258,24 @@ func (p *pcpProtocolConnection) handleOutgoingPackets() {
 		frameBytes = make([]byte, config.AppConfig.PreferredMSS+lib.TcpHeaderLength+lib.TcpOptionsMaxLength+lib.TcpPseudoHeaderLength)
 		n          = 0
 		err        error
+		packet     *lib.PcpPacket
 	)
 	packetLost := false
 	for {
-		packet := <-p.OutputChan // Subscribe to p.OutputChan
+		select {
+		case packet = <-p.OutputChan:
+		case packet = <-p.sigOutputChan:
+		}
+		// Subscribe to p.OutputChan
 		/*if len(packet.Data.Payload) > 0 {
 			fmt.Println("outgoing packet payload is", packet.Data.Payload)
 		}*/
 		//fmt.Println("PTC got packet.")
+
+		if config.Debug && packet.GetChunkReference() != nil {
+			packet.GetChunkReference().RemoveFromChannel()
+			packet.GetChunkReference().AddCallStack("pcpProtocolConnection.handleOutgoingPackets")
+		}
 
 		if config.AppConfig.PacketLostSimulation {
 			if count == 0 {
@@ -293,6 +320,10 @@ func (p *pcpProtocolConnection) handleOutgoingPackets() {
 			count = (count + 1) % 10
 		}
 		packetLost = false
+
+		if config.Debug && packet.GetChunkReference() != nil {
+			packet.GetChunkReference().PopCallStack()
+		}
 	}
 }
 
