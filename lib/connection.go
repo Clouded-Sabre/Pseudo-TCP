@@ -602,9 +602,11 @@ func (c *Connection) StartResendTimer() {
 	c.resendTimer = time.AfterFunc(c.ResendInterval, func() {
 		c.resendTimerMutex.Lock()
 		defer c.resendTimerMutex.Unlock()
-		c.resendTimer.Stop()
-		c.resendLostPacket()
-		c.StartResendTimer()
+		if c.resendTimer != nil {
+			c.resendTimer.Stop()
+			c.resendLostPacket()
+			c.StartResendTimer()
+		}
 	})
 }
 
