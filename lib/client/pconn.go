@@ -100,7 +100,7 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*lib.Connection, error) {
 				//newConn.InitialPeerSeq = packet.SequenceNumber //record the initial SEQ from the peer
 				// Prepare ACK packet
 				newConn.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
-				newConn.InitialPeerSeq = newConn.LastAckNumber
+				newConn.InitialPeerSeq = packet.SequenceNumber
 				newConn.InitSendAck()
 
 				// Connection established, remove newConn from tempClientConnections, and place it into clientConnections pool

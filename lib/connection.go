@@ -213,7 +213,7 @@ func (c *Connection) HandleIncomingPackets() {
 				}
 				if isSYN && !c.IsBidirectional {
 					fmt.Println("is SYN!", packet.SequenceNumber, c.InitialPeerSeq)
-					if isACK && packet.SequenceNumber+1 == c.InitialPeerSeq && packet.AcknowledgmentNum == c.InitialSeq+1 {
+					if isACK && packet.SequenceNumber == uint32(uint64(c.InitialPeerSeq)+1) && packet.AcknowledgmentNum == uint32(uint64(c.InitialSeq)+1) {
 						fmt.Println("Bingo!!")
 						// normally on client side SYN-ACK message should be handled in Dial
 						// this case is for lost of ACK message from client side which caused a SYN-ACK retry from server
@@ -853,7 +853,7 @@ func (c *Connection) InitSendSyn() {
 }
 
 func (c *Connection) InitSendSynAck() {
-	synAckPacket := NewPcpPacket(c.InitialSeq, c.InitialPeerSeq, SYNFlag|ACKFlag, nil, c)
+	synAckPacket := NewPcpPacket(c.InitialSeq, uint32(uint64(c.InitialPeerSeq)+1), SYNFlag|ACKFlag, nil, c)
 	synAckPacket.IsOpenConnection = false
 	// Send the SYN-ACK packet to the sender
 	c.sigOutputChan <- synAckPacket
@@ -861,7 +861,7 @@ func (c *Connection) InitSendSynAck() {
 }
 
 func (c *Connection) InitSendAck() {
-	ackPacket := NewPcpPacket(c.InitialSeq+1, c.InitialPeerSeq, ACKFlag, nil, c)
+	ackPacket := NewPcpPacket(uint32(uint64(c.InitialSeq)+1), uint32(uint64(c.InitialPeerSeq)+1), ACKFlag, nil, c)
 	ackPacket.IsOpenConnection = false
 	c.sigOutputChan <- ackPacket
 	c.InitClientState = AckSent

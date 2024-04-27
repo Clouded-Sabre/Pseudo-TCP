@@ -208,7 +208,7 @@ func (s *Service) handleSynPacket(packet *lib.PcpPacket) {
 
 	// Send SYN-ACK packet to the SYN packet sender
 	newConn.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
-	newConn.InitialPeerSeq = newConn.LastAckNumber
+	newConn.InitialPeerSeq = packet.SequenceNumber
 	newConn.InitSendSynAck()
 	newConn.StartConnSignalTimer()
 	newConn.NextSequenceNumber = uint32(uint64(newConn.NextSequenceNumber) + 1) // implicit modulo op
