@@ -34,6 +34,8 @@ type Config struct {
 	PayloadPoolSize         int    `yaml:"payload_pool_size"`
 	ConnSignalRetry         int    `yaml:"conn_signal_retry"`
 	ConnSignalRetryInterval int    `yaml:"conn_signal_retry_interval"`
+	PConnTimeout            int    `yaml:"pconn_time_out"`
+	IptableRuleDaley        int    `yaml:"iptable_rule_daley"`
 }
 
 var AppConfig *Config

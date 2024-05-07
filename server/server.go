@@ -18,6 +18,11 @@ var (
 	serverPort   int
 )
 
+const (
+	numOfPackets = 20
+	msOfSleep    = 1000
+)
+
 func init() {
 	// Define CLI flags for server IP and port
 	flag.StringVar(&serverIP, "ip", "127.0.0.1", "Server IP address")
@@ -80,7 +85,7 @@ func handleConnection(conn *lib.Connection) {
 	}
 
 	// Simulate data transmission
-	for i := 0; i < 10; i++ {
+	for i := 0; i < numOfPackets; i++ {
 		// Construct a packet
 		payload := []byte(fmt.Sprintf("Data packet %d", i))
 
@@ -88,7 +93,7 @@ func handleConnection(conn *lib.Connection) {
 		conn.Write(payload)
 		log.Printf("Packet %d sent.\n", i)
 
-		time.Sleep(time.Second) // Simulate some delay between packets
+		SleepForMs(msOfSleep) // Simulate some delay between packets
 	}
 
 	// Construct a packet
@@ -98,17 +103,11 @@ func handleConnection(conn *lib.Connection) {
 	conn.Write(payload)
 	log.Println("Packet sent:", string(payload))
 
-	time.Sleep(time.Second) // Simulate some delay between packets
+	select {}
+}
 
-	for {
-		n, err := conn.Read(buffer)
-		if err != nil {
-			fmt.Println("Error reading packet:", err)
-			return
-		}
-		log.Printf("Got Packet from client(Length %d): %s \n", n, string(buffer[:n]))
-		if string(buffer[:n]) == "Client Done" {
-			break
-		}
-	}
+// sleep for n milliseconds
+func SleepForMs(n int) {
+	timeout := time.After(time.Duration(n) * time.Millisecond)
+	<-timeout // Wait on the channel
 }

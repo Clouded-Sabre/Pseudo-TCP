@@ -2,7 +2,9 @@ package client
 
 import (
 	"fmt"
+	"log"
 	"net"
+	"sync"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 	"github.com/Clouded-Sabre/Pseudo-TCP/lib"
@@ -10,8 +12,11 @@ import (
 
 // pcp protocol client struct
 type pcpClient struct {
-	ProtocolID         uint8
-	ProtoConnectionMap map[string]*pcpProtocolConnection // keep track of all protocolConn created by dialIP
+	ProtocolID           uint8
+	ProtoConnectionMap   map[string]*pcpProtocolConnection // keep track of all protocolConn created by dialIP
+	pConnCloseSignalChan chan *pcpProtocolConnection       // signal for pcpProtocolConnection close
+	wg                   sync.WaitGroup                    // WaitGroup to synchronize goroutines
+	closeSignal          chan struct{}                     // used to send close signal to go routines to stop when timeout arrives
 }
 
 func NewPcpClient(protocolId uint8) *pcpClient {
@@ -21,16 +26,47 @@ func NewPcpClient(protocolId uint8) *pcpClient {
 	// Output channel for writing packets to the interface
 	protoConnectionMap := make(map[string]*pcpProtocolConnection)
 
-	pcpClientObj := &pcpClient{ProtocolID: protocolId, ProtoConnectionMap: protoConnectionMap}
+	pcpClientObj := &pcpClient{
+		ProtocolID:           protocolId,
+		ProtoConnectionMap:   protoConnectionMap,
+		pConnCloseSignalChan: make(chan *pcpProtocolConnection),
+		wg:                   sync.WaitGroup{},
+		closeSignal:          make(chan struct{}),
+	}
 
 	lib.Pool = lib.NewPayloadPool(config.AppConfig.PayloadPoolSize, config.AppConfig.PreferredMSS)
 
-	fmt.Println("Pcp protocol client started")
-
 	// Start a goroutine to periodically check protocolConn and connection health
-	//go checkServiceHealth(services)
+	pcpClientObj.wg.Add(1) // Increase WaitGroup counter by 1 for the handlePConnClose goroutines
+	go pcpClientObj.handlePConnClose()
+
+	log.Println("Pcp protocol client started")
 
 	return pcpClientObj
+}
+
+func (p *pcpClient) handlePConnClose() {
+	// Decrease WaitGroup counter when the goroutine completes
+	defer p.wg.Done()
+
+	for {
+		select {
+		case <-p.closeSignal:
+			return // close the go routine gracefully
+		case pConn := <-p.pConnCloseSignalChan:
+			// clear it from p.ConnectionMap
+			_, ok := p.ProtoConnectionMap[pConn.pConnKey]
+			if !ok {
+				// connection does not exist in ConnectionMap
+				log.Printf("Pcp Protocol connection does not exist in %s->%s", pConn.LocalAddr.IP.String(), pConn.ServerAddr.IP.String())
+				continue
+			}
+
+			// delete the clientConn from ConnectionMap
+			delete(p.ProtoConnectionMap, pConn.pConnKey)
+			log.Printf("Pcp Protocol connection %s->%s terminated and removed.", pConn.LocalAddr.IP.String(), pConn.ServerAddr.IP.String())
+		}
+	}
 }
 
 // dialPcp simulates the TCP dial function interface for PCP.
@@ -51,7 +87,7 @@ func (p *pcpClient) DialPcp(localIP string, serverIP string, serverPort uint16) 
 	pConn, ok := p.ProtoConnectionMap[pConnKey]
 	if !ok {
 		// need to create new protocol connection
-		pConn, err = newPcpProtocolConnection(p, serverAddr, localAddr)
+		pConn, err = newPcpProtocolConnection(pConnKey, p, serverAddr, localAddr, p.pConnCloseSignalChan)
 		if err != nil {
 			fmt.Println("Error creating Pcp Client Protocol Connection:", err)
 			return nil, err
@@ -67,4 +103,23 @@ func (p *pcpClient) DialPcp(localIP string, serverIP string, serverPort uint16) 
 	}
 
 	return newClientConn, nil
+}
+
+// close the pcpClient
+func (p *pcpClient) Close() {
+	// Close all pcpProtocolConnection instances
+	for _, pConn := range p.ProtoConnectionMap {
+		pConn.Close()
+	}
+	p.ProtoConnectionMap = nil // Clear the map after closing all connections
+
+	// Send closeSignal to all goroutines
+	close(p.closeSignal)
+
+	// Wait for all goroutines to finish
+	p.wg.Wait()
+
+	close(p.pConnCloseSignalChan)
+
+	log.Println("PcpClient closed gracefully.")
 }

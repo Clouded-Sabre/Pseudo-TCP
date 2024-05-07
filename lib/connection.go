@@ -14,6 +14,7 @@ import (
 
 type Connection struct {
 	Key                            string // connection key for easy reference
+	isServer                       bool
 	RemoteAddr                     net.Addr
 	RemotePort                     int
 	LocalAddr                      net.Addr
@@ -50,12 +51,14 @@ type Connection struct {
 	resendTimer                    *time.Timer     // resend timer to trigger resending packet every ResendInterval
 	resendTimerMutex               sync.Mutex      // mutex for resendTimer
 	RevPacketCache                 PacketGapMap    // Cache for received packets who has gap before it due to packet loss or out-of-order
+	IsClosed                       bool            // denote that the conneciton is closed so that no packets should be accepted
 
 	connCloseSignalChan      chan *Connection // send close connection signal to parent service or pConnection to clear it
 	connSignalFailedToParent chan *Connection // used to send signal to parrent to notify connection establishment failed
 	newConnChannel           chan *Connection // server only. send new connection signal to parent service to signal successful 3-way handshake
 	closeSigal               chan struct{}    // used to send close signal to HandleIncomingPackets go routine to stop when keepalive failed
 	ConnSignalFailed         chan struct{}    // used to notify Connection signalling process (3-way handshake and 4-way termination) failed
+	Wg                       sync.WaitGroup
 }
 
 type Options struct {
@@ -79,7 +82,7 @@ type SACKOption struct {
 	Blocks []SACKBlock // Slice of SACK blocks
 }
 
-func NewConnection(key string, remoteAddr net.Addr, remotePort int, localAddr net.Addr, localPort int, outputChan, sigOutputChan chan *PcpPacket, connCloseSignalChan, newConnChannel, connSignalFailedToParent chan *Connection) (*Connection, error) {
+func NewConnection(key string, isServer bool, remoteAddr net.Addr, remotePort int, localAddr net.Addr, localPort int, outputChan, sigOutputChan chan *PcpPacket, connCloseSignalChan, newConnChannel, connSignalFailedToParent chan *Connection) (*Connection, error) {
 	isn, _ := GenerateISN()
 	options := &Options{
 		WindowScaleShiftCount: uint8(config.AppConfig.WindowScale),
@@ -90,6 +93,7 @@ func NewConnection(key string, remoteAddr net.Addr, remotePort int, localAddr ne
 	}
 	newConn := &Connection{
 		Key:                key,
+		isServer:           isServer,
 		RemoteAddr:         remoteAddr,
 		RemotePort:         remotePort,
 		LocalAddr:          localAddr,
@@ -116,6 +120,7 @@ func NewConnection(key string, remoteAddr net.Addr, remotePort int, localAddr ne
 		newConnChannel:           newConnChannel,
 		closeSigal:               make(chan struct{}),
 		ConnSignalFailed:         make(chan struct{}),
+		Wg:                       sync.WaitGroup{},
 	}
 
 	if config.AppConfig.KeepAliveEnabled {
@@ -127,6 +132,9 @@ func NewConnection(key string, remoteAddr net.Addr, remotePort int, localAddr ne
 }
 
 func (c *Connection) HandleIncomingPackets() {
+	// Decrease WaitGroup counter when the goroutine completes
+	defer c.Wg.Done()
+
 	var (
 		packet                                   *PcpPacket
 		isSYN, isACK, isFIN, isRST, isDataPacket bool
@@ -158,6 +166,15 @@ func (c *Connection) HandleIncomingPackets() {
 			isRST = packet.Flags&RSTFlag != 0
 			isDataPacket = len(packet.Payload) > 0
 
+			/*// if the role is client, filter out 3-way handshake's ACK message from server, which is invalid
+			if !c.isServer && packet.Flags == ACKFlag && len(packet.Payload) == 0 {
+				if (packet.SequenceNumber == seqIncrement(c.InitialPeerSeq) &&
+					(packet.AcknowledgmentNum == seqIncrement(c.InitialSeq) {
+						// skip this packet because it's invalid
+						continue
+					}
+			}*/
+
 			if !isSYN && !isRST {
 				c.IsBidirectional = true
 				if !c.WriteOnHold && c.ConnSignalTimer != nil {
@@ -184,12 +201,12 @@ func (c *Connection) HandleIncomingPackets() {
 					if c.TerminationCallerState == CallerFinSent {
 						if isACK && packet.SequenceNumber == c.TermStartPeerSeq && packet.AcknowledgmentNum == c.TermStartSeq+1 {
 							log.Println("Got FIN-ACK from 4-way responder.")
-							c.StopConnSignalTimer()                                     // stop the Connection Signal retry timer
-							c.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1) // implicit modulo included
+							c.StopConnSignalTimer()                               // stop the Connection Signal retry timer
+							c.LastAckNumber = SeqIncrement(packet.SequenceNumber) // implicit modulo included
 							c.TermCallerSendAck()
 							log.Println("ACK sent to 4-way responder.")
 							// clear connection resource and close
-							c.ClearConnResource()
+							go c.ClearConnResource() // has to run it as go routine otherwise it will be block as wg.wait()
 							log.Println("HandleIncomingPackets stops now.")
 							return // this will terminate this go routine gracefully
 						}
@@ -201,7 +218,7 @@ func (c *Connection) HandleIncomingPackets() {
 						// 4-way termination initiated from the server
 						c.TerminationRespState = RespFinReceived
 						// Sent ACK back to the server
-						c.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1) // implicit modulo included
+						c.LastAckNumber = SeqIncrement(packet.SequenceNumber) // implicit modulo included
 						c.TermStartSeq = packet.AcknowledgmentNum
 						c.TermStartPeerSeq = c.LastAckNumber
 						c.TermRespSendFinAck()
@@ -211,10 +228,9 @@ func (c *Connection) HandleIncomingPackets() {
 					//ignore FIN packet in other scenario
 					continue
 				}
-				if isSYN && !c.IsBidirectional {
-					fmt.Println("is SYN!", packet.SequenceNumber, c.InitialPeerSeq)
-					if isACK && packet.SequenceNumber == uint32(uint64(c.InitialPeerSeq)+1) && packet.AcknowledgmentNum == uint32(uint64(c.InitialSeq)+1) {
-						fmt.Println("Bingo!!")
+				if !c.isServer && isSYN && !c.IsBidirectional {
+					//fmt.Println("is SYN!", packet.SequenceNumber, c.InitialPeerSeq)
+					if isACK && packet.SequenceNumber == c.InitialPeerSeq && packet.AcknowledgmentNum == SeqIncrement(c.InitialSeq) {
 						// normally on client side SYN-ACK message should be handled in Dial
 						// this case is for lost of ACK message from client side which caused a SYN-ACK retry from server
 						c.InitSendAck() // resend 3-way handshake ACK to peer
@@ -229,7 +245,7 @@ func (c *Connection) HandleIncomingPackets() {
 						// 4-way termination completed
 						c.TerminationRespState = RespAckReceived
 						// clear connection resources
-						c.ClearConnResource()
+						go c.ClearConnResource() // has to run it as go routine otherwise it will be block as wg.wait()
 						log.Println("HandleIncomingPackets stops now.")
 						return // this will terminate this go routine gracefully
 					}
@@ -249,6 +265,9 @@ func (c *Connection) HandleIncomingPackets() {
 
 // Server only. Handle ACK packet from client during the 3-way handshake.
 func (c *Connection) Handle3WayHandshake() {
+	// Decrease WaitGroup counter when the goroutine completes
+	defer c.Wg.Done()
+
 	var (
 		packet *PcpPacket
 		//err    error
@@ -258,12 +277,13 @@ func (c *Connection) Handle3WayHandshake() {
 		case <-c.ConnSignalFailed:
 			// Connection establishment signalling failed
 			// send signal to parent service to remove newConn from tempClientConnections
+			c.IsClosed = true
 
 			if c.ConnSignalTimer != nil {
 				c.StopConnSignalTimer()
 				c.ConnSignalTimer = nil
 			}
-			log.Println("dialing PCP connection failed due to timeout")
+			log.Println("PCP connection establishment failed due to timeout")
 			return // this will terminate this go routine
 		case packet = <-c.InputChannel:
 			// since this go routine only runs for connection initiation
@@ -309,9 +329,7 @@ func (c *Connection) Handle3WayHandshake() {
 
 				return // this will terminate this go routine
 			}
-
 		}
-
 	}
 }
 
@@ -349,12 +367,41 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 		// Create a slice to hold packets to delete
 		var packetsToDelete []uint32
 
+		// Scan through packets in RevPacketCache in descending order of sequence number
+		packetsInOrder := c.RevPacketCache.getPacketsInAscendingOrder()
+		resentTimeOut := config.AppConfig.MaxResendCount * config.AppConfig.ResendInterval
+		for i := len(packetsInOrder) - 1; i >= 0; i-- {
+			cachedPacket := packetsInOrder[i]
+			// Calculate the age of the packet
+			age := time.Since(cachedPacket.ReceivedTime)
+			// Check if the age is older than 5 seconds
+			if age > time.Duration(resentTimeOut)*time.Millisecond {
+				// Find the right edge of the farthest contiguous packet
+				rightEdge := SeqIncrementBy(cachedPacket.Packet.SequenceNumber, uint32(len(cachedPacket.Packet.Payload)))
+				// Extend the right edge to the farthest contiguous packet's right edge
+				for j := i + 1; j < len(packetsInOrder); j++ {
+					nextPacket := packetsInOrder[j]
+					if rightEdge == nextPacket.Packet.SequenceNumber {
+						rightEdge = SeqIncrementBy(nextPacket.Packet.SequenceNumber, uint32(len(nextPacket.Packet.Payload)))
+					} else {
+						break
+					}
+				}
+				// Update c.LastAckNumber if rightEdge is greater
+				if rightEdge > c.LastAckNumber {
+					c.LastAckNumber = rightEdge
+					c.trimOutSackOption(rightEdge)
+				}
+				break
+			}
+		}
+
 		// Scan through packets in RevPacketCache
-		for _, cachedPacket := range c.RevPacketCache.getPacketsInAscendingOrder() {
+		for _, cachedPacket := range packetsInOrder {
 			// If a packet's SEQ < c.LastSequenceNumber, put it into ReadChannel
-			if cachedPacket.SequenceNumber < c.LastAckNumber {
+			if cachedPacket.Packet.SequenceNumber < c.LastAckNumber {
 				// Add the packet's sequence number to the list of packets to delete
-				packetsToDelete = append(packetsToDelete, cachedPacket.SequenceNumber)
+				packetsToDelete = append(packetsToDelete, cachedPacket.Packet.SequenceNumber)
 			} else {
 				// If the packet's SEQ is not less than c.LastSequenceNumber, break the loop
 				break
@@ -362,13 +409,13 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 		}
 
 		// Delete packets from RevPacketCache after the loop has finished
-		var packetToBeRemoved *PcpPacket
+		var packetToBeRemoved *ReceivedPacket
 		for _, seqNum := range packetsToDelete {
 			packetToBeRemoved, _ = c.RevPacketCache.GetPacket(seqNum)
-			c.ReadChannel <- packetToBeRemoved
 			if config.Debug && packet.chunk != nil {
-				packetToBeRemoved.chunk.AddToChannel("c.ReadChannel")
+				packetToBeRemoved.Packet.chunk.AddToChannel("c.ReadChannel")
 			}
+			c.ReadChannel <- packetToBeRemoved.Packet
 			c.RevPacketCache.RemovePacket(seqNum) // remove the packet from RevPacketCache but do not return the chunk yet
 			// chunk will be returned after being read from ReadChannel
 		}
@@ -379,7 +426,7 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 			if config.Debug && packet.chunk != nil {
 				packet.chunk.AddToChannel("c.ReadChannel")
 			}
-			c.LastAckNumber = uint32(uint64(packet.SequenceNumber) + uint64(len(packet.Payload)))
+			c.LastAckNumber = SeqIncrementBy(packet.SequenceNumber, uint32(len(packet.Payload)))
 		} else {
 			// We ignore out-of-order packets, so it's time to
 			// return its chunk to pool
@@ -393,6 +440,23 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 	if config.Debug && packet.chunk != nil {
 		packet.chunk.PopCallStack()
 	}
+}
+
+func (c *Connection) trimOutSackOption(newlastAckNum uint32) {
+	// Create a new slice to hold the updated SACK blocks
+	var updatedBlocks []SACKBlock
+
+	// Iterate through each SACK block in OutSACKOption.Blocks
+	for _, block := range c.TcpOptions.OutSACKOption.Blocks {
+		// Check if the right edge of the block is greater than lastAckNum
+		if block.LeftEdge > newlastAckNum {
+			// If so, add the block to the updatedBlocks slice
+			updatedBlocks = append(updatedBlocks, block)
+		}
+	}
+
+	// Update OutSACKOption.Blocks with the updatedBlocks slice
+	c.TcpOptions.OutSACKOption.Blocks = updatedBlocks
 }
 
 func (c *Connection) Read(buffer []byte) (int, error) {
@@ -433,8 +497,6 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 
 	totalBytesWritten := 0
 
-	//fmt.Println("submitting Outgoing packet")
-
 	// Iterate over the buffer and split it into segments if necessary
 	for len(buffer) > 0 {
 		// Determine the length of the current segment
@@ -449,7 +511,7 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 			packet.chunk.AddCallStack("Connection.Write")
 		}
 
-		c.NextSequenceNumber = uint32(uint64(c.NextSequenceNumber) + uint64(segmentLength)) // Update sequence number. Implicit modulo included
+		c.NextSequenceNumber = SeqIncrementBy(c.NextSequenceNumber, uint32(segmentLength)) // Update sequence number. Implicit modulo included
 		c.OutputChan <- packet
 		//fmt.Println("buffer length is", len(buffer))
 		if config.Debug && packet.chunk != nil {
@@ -482,7 +544,7 @@ func (c *Connection) Close() error {
 	c.TermStartSeq = c.NextSequenceNumber
 	c.TermStartPeerSeq = c.LastAckNumber
 	c.TermCallerSendFin()
-	c.NextSequenceNumber = uint32(uint64(c.NextSequenceNumber) + 1) // implicit modulo op
+	c.NextSequenceNumber = SeqIncrement(c.NextSequenceNumber) // implicit modulo op
 	c.StartConnSignalTimer()
 
 	log.Println("4-way termination caller sent FIN packet")
@@ -493,6 +555,8 @@ func (c *Connection) Close() error {
 // clear connection resources and send close signal to paranet
 func (c *Connection) ClearConnResource() {
 	log.Println("Start clearing connection resource")
+	c.IsClosed = true
+
 	// Lock to ensure exclusive access to the timer
 	c.KeepaliveTimerMutex.Lock()
 	defer c.KeepaliveTimerMutex.Unlock()
@@ -519,6 +583,12 @@ func (c *Connection) ClearConnResource() {
 	close(c.closeSigal) // Close the channel to signal termination
 	log.Println("close signal sent to go routine")
 
+	c.Wg.Wait() // wait for go routine to close
+
+	// close channels
+	close(c.InputChannel)
+	close(c.ReadChannel)
+
 	// then send close connection signal to parent to clear connection resource
 	c.connCloseSignalChan <- c
 
@@ -533,7 +603,7 @@ func (c *Connection) ClearConnResource() {
 
 		// Return chunks of all packets in c.RevPacketCache to pool
 		for _, packet := range c.RevPacketCache.packets {
-			packet.ReturnChunk()
+			packet.Packet.ReturnChunk()
 		}
 		log.Printf("Released %d chunks from RevPacketCache\n", len(c.RevPacketCache.packets))
 	}
@@ -674,7 +744,7 @@ func (c *Connection) UpdateACKAndSACK(packet *PcpPacket) (uint32, []SACKBlock) {
 
 	if receivedSEQ == lastACKNum {
 		// Update last ACK number
-		lastACKNum = uint32(uint64(lastACKNum) + uint64(payloadLength))
+		lastACKNum = SeqIncrementBy(lastACKNum, uint32(payloadLength))
 
 		// Update SACK blocks if necessary
 		if len(sackBlocks) > 0 {
@@ -694,7 +764,7 @@ func (c *Connection) UpdateACKAndSACK(packet *PcpPacket) (uint32, []SACKBlock) {
 	// receivedSEQ > lastACKNum
 	// Update SACK blocks if necessary
 	newLeftEdge := receivedSEQ
-	newRightEdge := uint32(uint64(receivedSEQ) + uint64(payloadLength))
+	newRightEdge := SeqIncrementBy(receivedSEQ, uint32(payloadLength))
 
 	var mergedBlocks []SACKBlock
 	var insertPosfound bool
@@ -812,39 +882,6 @@ func (c *Connection) UpdateResendPacketsOnAck(packet *PcpPacket) {
 	}
 }
 
-// SEQ compare function with SEQ wraparound in mind
-func isGreater(seq1, seq2 uint32) bool {
-	// Calculate direct difference
-	var diff, wrapdiff, distance int64
-	diff = int64(seq1) - int64(seq2)
-	if diff < 0 {
-		diff = -diff
-	}
-	wrapdiff = int64(math.MaxUint32 + 1 - diff)
-
-	// Choose the shorter distance
-	if diff < wrapdiff {
-		distance = diff
-	} else {
-		distance = wrapdiff
-	}
-
-	// Check if the first sequence number is "greater"
-	return (distance+int64(seq2))%(math.MaxUint32+1) == int64(seq1)
-}
-
-func isGreaterOrEqual(seq1, seq2 uint32) bool {
-	return isGreater(seq1, seq2) || (seq1 == seq2)
-}
-
-func isLess(seq1, seq2 uint32) bool {
-	return !isGreater(seq1, seq2)
-}
-
-func isLessOrEqual(seq1, seq2 uint32) bool {
-	return isLess(seq1, seq2) || (seq1 == seq2)
-}
-
 func (c *Connection) InitSendSyn() {
 	synPacket := NewPcpPacket(c.InitialSeq, 0, SYNFlag, nil, c)
 	synPacket.IsOpenConnection = false
@@ -853,7 +890,7 @@ func (c *Connection) InitSendSyn() {
 }
 
 func (c *Connection) InitSendSynAck() {
-	synAckPacket := NewPcpPacket(c.InitialSeq, uint32(uint64(c.InitialPeerSeq)+1), SYNFlag|ACKFlag, nil, c)
+	synAckPacket := NewPcpPacket(c.InitialSeq, SeqIncrement(c.InitialPeerSeq), SYNFlag|ACKFlag, nil, c)
 	synAckPacket.IsOpenConnection = false
 	// Send the SYN-ACK packet to the sender
 	c.sigOutputChan <- synAckPacket
@@ -861,7 +898,7 @@ func (c *Connection) InitSendSynAck() {
 }
 
 func (c *Connection) InitSendAck() {
-	ackPacket := NewPcpPacket(uint32(uint64(c.InitialSeq)+1), uint32(uint64(c.InitialPeerSeq)+1), ACKFlag, nil, c)
+	ackPacket := NewPcpPacket(SeqIncrement(c.InitialSeq), SeqIncrement(c.InitialPeerSeq), ACKFlag, nil, c)
 	ackPacket.IsOpenConnection = false
 	c.sigOutputChan <- ackPacket
 	c.InitClientState = AckSent

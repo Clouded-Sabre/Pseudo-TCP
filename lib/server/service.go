@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"sync"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 	"github.com/Clouded-Sabre/Pseudo-TCP/lib"
@@ -19,14 +20,16 @@ type Service struct {
 	connectionMap             map[string]*lib.Connection // open connections
 	tempConnMap               map[string]*lib.Connection // temporary connection map for completing 3-way handshake
 	newConnChannel            chan *lib.Connection       // new connection all be placed here are 3-way handshake
+	serviceCloseSignal        chan *Service              // signal for sending service close signal to parent pcpProtocolConnection
 	ConnCloseSignal           chan *lib.Connection       // signal for connection close
-	serviceCloseSignal        chan struct{}              // signal for closing service
+	closeSignal               chan struct{}              // signal for closing service
 	connSignalFailed          chan *lib.Connection       // signal for closing temp connection due to openning signalling failed
+	wg                        sync.WaitGroup             // WaitGroup to synchronize goroutines
 }
 
 // NewService creates a new service listening on the specified port.
-func newService(pcpProtocolConn *PcpProtocolConnection, serviceAddr net.Addr, port int, outputChan, sigOutputChan chan *lib.PcpPacket) (*Service, error) {
-	return &Service{
+func newService(pcpProtocolConn *PcpProtocolConnection, serviceAddr net.Addr, port int, outputChan, sigOutputChan chan *lib.PcpPacket, serviceCloseSignal chan *Service) (*Service, error) {
+	newSrv := &Service{
 		pcpProtocolConnection: pcpProtocolConn,
 		ServiceAddr:           serviceAddr,
 		Port:                  port,
@@ -38,8 +41,17 @@ func newService(pcpProtocolConn *PcpProtocolConnection, serviceAddr net.Addr, po
 		newConnChannel:        make(chan *lib.Connection),
 		ConnCloseSignal:       make(chan *lib.Connection),
 		connSignalFailed:      make(chan *lib.Connection),
-		serviceCloseSignal:    make(chan struct{}),
-	}, nil
+		serviceCloseSignal:    serviceCloseSignal,
+		closeSignal:           make(chan struct{}),
+		wg:                    sync.WaitGroup{},
+	}
+
+	// Start goroutines
+	newSrv.wg.Add(2) // Increase WaitGroup counter by 3 for the three goroutines
+	go newSrv.handleIncomingPackets()
+	go newSrv.handleCloseConnections()
+
+	return newSrv, nil
 }
 
 // Accept accepts incoming connection requests.
@@ -62,6 +74,7 @@ func (s *Service) Accept() *lib.Connection {
 		s.connectionMap[newConn.Key] = newConn
 
 		// start go routine to handle the connection traffic
+		newConn.Wg.Add(1)
 		go newConn.HandleIncomingPackets()
 
 		log.Printf("New connection is ready: %s\n", newConn.Key)
@@ -71,9 +84,15 @@ func (s *Service) Accept() *lib.Connection {
 }
 
 // handleServicePacket is the main service packet dispatches loop.
-func (s *Service) handleServicePackets() {
+func (s *Service) handleIncomingPackets() {
+	// Decrease WaitGroup counter when the goroutine completes
+	defer s.wg.Done()
+
 	for {
 		select {
+		case <-s.closeSignal:
+			// Close the handleServicePackets goroutine to gracefully shutdown
+			return
 		case packet := <-s.InputChannel:
 			if config.Debug && packet.GetChunkReference() != nil {
 				packet.GetChunkReference().RemoveFromChannel()
@@ -92,9 +111,6 @@ func (s *Service) handleServicePackets() {
 			if config.Debug && packet.GetChunkReference() != nil {
 				packet.GetChunkReference().PopCallStack()
 			}
-		case <-s.serviceCloseSignal:
-			// Close the handleServicePackets goroutine to gracefully shutdown
-			return
 		}
 	}
 }
@@ -113,7 +129,7 @@ func (s *Service) handleDataPacket(packet *lib.PcpPacket) {
 
 	// Check if the connection exists in the connection map
 	conn, ok := s.connectionMap[connKey]
-	if ok {
+	if ok && !conn.IsClosed {
 		// Dispatch the packet to the corresponding connection's input channel
 		conn.InputChannel <- packet
 		if config.Debug && packet.GetChunkReference() != nil {
@@ -125,7 +141,7 @@ func (s *Service) handleDataPacket(packet *lib.PcpPacket) {
 
 	// then check if the connection exists in temp connection map
 	tempConn, ok := s.tempConnMap[connKey]
-	if ok {
+	if ok && !tempConn.IsClosed {
 		if len(packet.Payload) == 0 && packet.SequenceNumber-tempConn.InitialPeerSeq < 2 {
 			// Dispatch the packet to the corresponding connection's input channel
 			tempConn.InputChannel <- packet
@@ -169,7 +185,7 @@ func (s *Service) handleSynPacket(packet *lib.PcpPacket) {
 	}
 
 	// Create a new temporary connection object for the 3-way handshake
-	newConn, err := lib.NewConnection(connKey, sourceAddr, int(sourcePort), s.ServiceAddr, s.Port, s.OutputChan, s.sigOutputChan, s.ConnCloseSignal, s.newConnChannel, s.connSignalFailed)
+	newConn, err := lib.NewConnection(connKey, true, sourceAddr, int(sourcePort), s.ServiceAddr, s.Port, s.OutputChan, s.sigOutputChan, s.ConnCloseSignal, s.newConnChannel, s.connSignalFailed)
 	if err != nil {
 		log.Printf("Error creating new connection for %s: %s\n", connKey, err)
 		return
@@ -204,20 +220,24 @@ func (s *Service) handleSynPacket(packet *lib.PcpPacket) {
 	newConn.TcpOptions.TsEchoReplyValue = packet.TcpOptions.Timestamp
 
 	// start the temp connection's goroutine to handle 3-way handshaking process
+	newConn.Wg.Add(1)
 	go newConn.Handle3WayHandshake()
 
 	// Send SYN-ACK packet to the SYN packet sender
-	newConn.LastAckNumber = uint32(uint64(packet.SequenceNumber) + 1)
+	newConn.LastAckNumber = lib.SeqIncrement(packet.SequenceNumber)
 	newConn.InitialPeerSeq = packet.SequenceNumber
 	newConn.InitSendSynAck()
 	newConn.StartConnSignalTimer()
-	newConn.NextSequenceNumber = uint32(uint64(newConn.NextSequenceNumber) + 1) // implicit modulo op
+	newConn.NextSequenceNumber = lib.SeqIncrement(newConn.NextSequenceNumber) // implicit modulo op
 
 	log.Printf("Sent SYN-ACK packet to: %s\n", connKey)
 }
 
 // handle close connection request from ClientConnection
 func (s *Service) handleCloseConnections() {
+	// Decrease WaitGroup counter when the goroutine completes
+	defer s.wg.Done()
+
 	for {
 		var conn *lib.Connection
 		select {
@@ -254,10 +274,31 @@ func (s *Service) Close() error {
 		conn.Close()
 	}
 
+	// Close all temp connections associated with this service
+	for _, tempConn := range s.tempConnMap {
+		close(tempConn.ConnSignalFailed)
+	}
+
 	// send signal to service go routines to gracefully close them
-	close(s.serviceCloseSignal)
+	close(s.closeSignal)
+
+	s.wg.Wait()
+
+	// close channels created by the service
+	close(s.InputChannel)
+	close(s.newConnChannel)
+	close(s.ConnCloseSignal)
+	close(s.connSignalFailed)
+
 	// send signal to parent pcpProtocolConnection to clear service resource
-	s.pcpProtocolConnection.serviceCloseSignal <- s
+	s.serviceCloseSignal <- s
+
+	// remove the iptable rules for the service
+	err := removeIptablesRule(s.ServiceAddr.(*net.IPAddr).IP.String(), s.Port)
+	if err != nil {
+		log.Printf("Error removing iptable rules for service %s:%d: %s", s.ServiceAddr.(*net.IPAddr).IP.String(), s.Port, err)
+		return err
+	}
 
 	return nil
 }

@@ -551,19 +551,32 @@ func (r *ResendPackets) GetPacketKeys() []uint32 {
 
 type PacketGapMap struct {
 	mutex   sync.Mutex
-	packets map[uint32]*PcpPacket
+	packets map[uint32]*ReceivedPacket // key is SEQ
+}
+
+type ReceivedPacket struct {
+	ReceivedTime time.Time // Time the packet was last sent
+	Packet       *PcpPacket
+}
+
+func NewReceivedPacket(packet *PcpPacket) *ReceivedPacket {
+	return &ReceivedPacket{
+		ReceivedTime: time.Now(),
+		Packet:       packet,
+	}
 }
 
 func NewPacketGapMap() *PacketGapMap {
 	return &PacketGapMap{
-		packets: make(map[uint32]*PcpPacket),
+		packets: make(map[uint32]*ReceivedPacket),
 	}
 }
 
 func (pgm *PacketGapMap) AddPacket(packet *PcpPacket) {
 	pgm.mutex.Lock()
 	defer pgm.mutex.Unlock()
-	pgm.packets[packet.SequenceNumber] = packet
+	rp := NewReceivedPacket(packet)
+	pgm.packets[packet.SequenceNumber] = rp
 }
 
 func (pgm *PacketGapMap) RemovePacket(seqNum uint32) {
@@ -576,7 +589,7 @@ func (pgm *PacketGapMap) RemovePacket(seqNum uint32) {
 	delete(pgm.packets, seqNum)
 }
 
-func (pgm *PacketGapMap) GetPacket(seqNum uint32) (*PcpPacket, bool) {
+func (pgm *PacketGapMap) GetPacket(seqNum uint32) (*ReceivedPacket, bool) {
 	pgm.mutex.Lock()
 	defer pgm.mutex.Unlock()
 	packet, found := pgm.packets[seqNum]
@@ -584,19 +597,19 @@ func (pgm *PacketGapMap) GetPacket(seqNum uint32) (*PcpPacket, bool) {
 }
 
 // Method to retrieve packets from PacketGapMap in ascending order by SEQ
-func (pgm *PacketGapMap) getPacketsInAscendingOrder() []*PcpPacket {
+func (pgm *PacketGapMap) getPacketsInAscendingOrder() []*ReceivedPacket {
 	pgm.mutex.Lock()
 	defer pgm.mutex.Unlock()
 
 	// Create a slice to store packets
-	packets := make([]*PcpPacket, 0, len(pgm.packets))
+	packets := make([]*ReceivedPacket, 0, len(pgm.packets))
 	for _, packet := range pgm.packets {
 		packets = append(packets, packet)
 	}
 
 	// Sort the packets in ascending order by SEQ
 	sort.Slice(packets, func(i, j int) bool {
-		return packets[i].SequenceNumber < packets[j].SequenceNumber
+		return packets[i].Packet.SequenceNumber < packets[j].Packet.SequenceNumber
 	})
 
 	return packets

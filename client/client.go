@@ -20,49 +20,66 @@ func main() {
 	serverPort := flag.Int("serverPort", config.AppConfig.ServerPort, "Server port")
 	flag.Parse()
 
+	const (
+		iteration         = 1000
+		numOfPackets      = 20
+		msOfSleep         = 1000
+		iterationInterval = 15 // in seconds
+	)
+
 	pcpClientObj := client.NewPcpClient(uint8(config.AppConfig.ProtocolID))
-	// Dial to the server
-	conn, err := pcpClientObj.DialPcp(*sourceIP, *serverIP, uint16(*serverPort))
-	if err != nil {
-		fmt.Println("Error connecting:", err)
-		return
-	}
-	defer conn.Close()
-
-	fmt.Println("PCP connection established!")
-
-	// Simulate data transmission
-	for i := 0; i < 10; i++ {
-		// Construct a packet
-		payload := []byte(fmt.Sprintf("Data packet %d \n", i))
-
-		// Send the packet to the server
-		fmt.Println("Sending packet", i)
-		conn.Write(payload)
-		log.Printf("Packet %d sent.\n", i)
-
-		time.Sleep(time.Second) // Simulate some delay between packets
-	}
-
-	payload := []byte("Client Done")
-	conn.Write(payload)
-	log.Println("Packet sent:", string(payload))
+	defer pcpClientObj.Close()
 
 	buffer := make([]byte, config.AppConfig.PreferredMSS)
-	for {
-		n, err := conn.Read(buffer)
+	for j := 0; j < iteration; j++ {
+		// Dial to the server
+		conn, err := pcpClientObj.DialPcp(*sourceIP, *serverIP, uint16(*serverPort))
 		if err != nil {
-			fmt.Println("Error reading:", err)
-			continue
+			fmt.Println("Error connecting:", err)
+			return
 		}
-		log.Println("Received packet:", string(buffer[:n]))
-		if string(buffer[:n]) == "Server Done" {
-			break
-		}
-	}
+		//defer conn.Close()
 
-	// Close the connection
-	conn.Close()
-	time.Sleep(time.Second * 30)
+		fmt.Println("PCP connection established!")
+
+		// Simulate data transmission
+		for i := 0; i < numOfPackets; i++ {
+			// Construct a packet
+			payload := []byte(fmt.Sprintf("Data packet %d \n", i))
+
+			// Send the packet to the server
+			fmt.Println("Sending packet", i)
+			conn.Write(payload)
+			log.Printf("Packet %d sent.\n", i)
+
+			SleepForMs(msOfSleep) // Simulate some delay between packets
+		}
+
+		payload := []byte("Client Done")
+		conn.Write(payload)
+		log.Println("Packet sent:", string(payload))
+
+		for {
+			n, err := conn.Read(buffer)
+			if err != nil {
+				fmt.Println("Error reading:", err)
+				continue
+			}
+			log.Println("Received packet:", string(buffer[:n]))
+			if string(buffer[:n]) == "Server Done" {
+				break
+			}
+		}
+
+		// Close the connection
+		conn.Close()
+		time.Sleep(time.Second * iterationInterval)
+	}
 	fmt.Println("PCP client exit")
+}
+
+// sleep for n milliseconds
+func SleepForMs(n int) {
+	timeout := time.After(time.Duration(n) * time.Millisecond)
+	<-timeout // Wait on the channel
 }
