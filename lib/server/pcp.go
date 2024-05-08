@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
+	"time"
 
 	//"time"
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
@@ -153,56 +154,71 @@ func (p *PcpProtocolConnection) handlingIncomingPackets() {
 	buffer := make([]byte, config.AppConfig.PreferredMSS+lib.TcpHeaderLength+lib.TcpOptionsMaxLength+lib.TcpPseudoHeaderLength)
 	pcpFrame := buffer[lib.TcpPseudoHeaderLength:] // the first lib.TcpPseudoHeaderLength bytes are reserved for Tcp pseudo header
 	for {
-		n, addr, err := p.Connection.ReadFrom(pcpFrame)
-		if err != nil {
-			log.Println("PcpProtocolConnection.handlingIncomingPackets:Error reading:", err)
-			continue
-		}
+		select {
+		case <-p.closeSignal:
+			log.Println("Closing PcpProtocolConnection handlingIncomingPackets go routine")
+			return
+		default:
+			// Set a read deadline to ensure non-blocking behavior
+			p.Connection.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // Example timeout of 100 milliseconds
 
-		// check PCP packet checksum
-		if !lib.VerifyChecksum(buffer[:lib.TcpPseudoHeaderLength+n], addr, p.ServerAddr, p.pcpServerObj.ProtocolID) {
-			log.Println("Packet checksum verification failed. Skip this packet.")
-			continue
-		}
+			n, addr, err := p.Connection.ReadFrom(pcpFrame)
+			if err != nil {
+				// Check if the error is a timeout
+				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					// Handle timeout error (no data received within the timeout period)
+					continue // Continue waiting for incoming packets or handling closeSignal
+				}
 
-		// Extract destination port
-		packet := &lib.PcpPacket{}
-		err = packet.Unmarshal(pcpFrame[:n], addr, p.ServerAddr)
-		if err != nil {
-			log.Println("Received TCP frame is il-formated. Ignore it!")
-			continue
-		}
+				log.Println("PcpProtocolConnection.handlingIncomingPackets:Error reading:", err)
+				continue
+			}
 
-		if config.Debug && packet.GetChunkReference() != nil {
-			packet.GetChunkReference().AddCallStack("pcpProtocolConn.handleIncomingPackets")
-		}
+			// check PCP packet checksum
+			if !lib.VerifyChecksum(buffer[:lib.TcpPseudoHeaderLength+n], addr, p.ServerAddr, p.pcpServerObj.ProtocolID) {
+				log.Println("Packet checksum verification failed. Skip this packet.")
+				continue
+			}
 
-		destPort := packet.DestinationPort
-		//log.Printf("Got packet with options: %+v\n", packet.TcpOptions)
+			// Extract destination port
+			packet := &lib.PcpPacket{}
+			err = packet.Unmarshal(pcpFrame[:n], addr, p.ServerAddr)
+			if err != nil {
+				log.Println("Received TCP frame is il-formated. Ignore it!")
+				continue
+			}
 
-		// Check if a connection is registered for the packet
-		config.Mu.Lock()
-		service, ok := p.ServiceMap[int(destPort)]
-		config.Mu.Unlock()
+			if config.Debug && packet.GetChunkReference() != nil {
+				packet.GetChunkReference().AddCallStack("pcpProtocolConn.handleIncomingPackets")
+			}
 
-		if !ok {
-			//fmt.Println("No service registered for port:", destPort)
-			// return the packet's chunk
-			packet.ReturnChunk()
-			continue
-		}
-		if ok && service.IsClosed {
-			log.Println("Packet is destined to a closed service. Ignore it.")
-			packet.ReturnChunk()
-			continue
-		}
+			destPort := packet.DestinationPort
+			//log.Printf("Got packet with options: %+v\n", packet.TcpOptions)
 
-		// Dispatch the packet to the corresponding service's input channel
-		if config.Debug && packet.GetChunkReference() != nil {
-			packet.GetChunkReference().AddToChannel("Service.InputChannel")
-			packet.GetChunkReference().PopCallStack()
+			// Check if a connection is registered for the packet
+			config.Mu.Lock()
+			service, ok := p.ServiceMap[int(destPort)]
+			config.Mu.Unlock()
+
+			if !ok {
+				//fmt.Println("No service registered for port:", destPort)
+				// return the packet's chunk
+				packet.ReturnChunk()
+				continue
+			}
+			if ok && service.IsClosed {
+				log.Println("Packet is destined to a closed service. Ignore it.")
+				packet.ReturnChunk()
+				continue
+			}
+
+			// Dispatch the packet to the corresponding service's input channel
+			if config.Debug && packet.GetChunkReference() != nil {
+				packet.GetChunkReference().AddToChannel("Service.InputChannel")
+				packet.GetChunkReference().PopCallStack()
+			}
+			service.InputChannel <- packet
 		}
-		service.InputChannel <- packet
 	}
 }
 
@@ -224,6 +240,7 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 	for {
 		select {
 		case <-p.closeSignal:
+			log.Println("Closing PcpProtocolConnection handleOutgoingPackets go routine")
 			return // gracefully close the go routine
 		case packet = <-p.sigOutputChan: // Subscribe to the priority p.sigOutputChan
 		default:
@@ -296,6 +313,7 @@ func (p *PcpProtocolConnection) handleCloseService() {
 	for {
 		select {
 		case <-p.closeSignal:
+			log.Println("Closing PcpProtocolConnection handleCloseService go routine")
 			return // gracefully close the go routine
 		case srv := <-p.serviceCloseSignal:
 			// clear it from p.ConnectionMap
@@ -332,6 +350,8 @@ func (p *PcpProtocolConnection) Close() error {
 
 	// send signal to parent pcpServer to clear the PcpProtocolConnection's resource
 	p.pConnCloseSignal <- p
+
+	log.Printf("PcpProtocolConnection %s closed successfully\n", p.pConnKey)
 
 	return nil
 }

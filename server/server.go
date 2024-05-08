@@ -43,7 +43,6 @@ func main() {
 		log.Println("Error creating PCP server:", err)
 		return
 	}
-	defer pcpServerObj.Close()
 	log.Println("PCP server started.")
 
 	// Listen for interrupt signal (Ctrl+C)
@@ -77,6 +76,8 @@ func main() {
 	}
 	SleepForMs(2000) // 10 seconds
 	log.Println("Server exiting...")
+	pcpServerObj.Close()
+	SleepForMs(2000) // 10 seconds
 	os.Exit(0)
 }
 
