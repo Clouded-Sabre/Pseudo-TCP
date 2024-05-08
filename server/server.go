@@ -4,6 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
@@ -40,11 +43,12 @@ func main() {
 		log.Println("Error creating PCP server:", err)
 		return
 	}
+	defer pcpServerObj.Close()
 	log.Println("PCP server started.")
 
 	// Listen for interrupt signal (Ctrl+C)
-	//signalChan := make(chan os.Signal, 1)
-	//signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 
 	// Start the PCP server
 	srv, err := pcpServerObj.ListenPcp(serverIP, serverPort)
@@ -55,19 +59,25 @@ func main() {
 
 	log.Printf("PCP service started at %s:%d", serverIP, serverPort)
 	// Handle Ctrl+C signal for graceful shutdown
-	/*go func() {
+	go func() {
 		<-signalChan
 		fmt.Println("\nReceived SIGINT (Ctrl+C). Shutting down...")
 		srv.Close() // Close the server gracefully
-		os.Exit(0)
-	}()*/
+	}()
 
 	for {
 		// Accept incoming connections
-		conn := srv.Accept()
-
-		go handleConnection(conn)
+		conn, err := srv.Accept()
+		if err != nil {
+			log.Println("Service stopped accepting new connection.")
+			break
+		} else {
+			go handleConnection(conn)
+		}
 	}
+	SleepForMs(2000) // 10 seconds
+	log.Println("Server exiting...")
+	os.Exit(0)
 }
 
 func handleConnection(conn *lib.Connection) {
@@ -103,7 +113,7 @@ func handleConnection(conn *lib.Connection) {
 	conn.Write(payload)
 	log.Println("Packet sent:", string(payload))
 
-	select {}
+	conn.Close()
 }
 
 // sleep for n milliseconds

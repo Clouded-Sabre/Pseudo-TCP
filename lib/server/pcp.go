@@ -191,6 +191,11 @@ func (p *PcpProtocolConnection) handlingIncomingPackets() {
 			packet.ReturnChunk()
 			continue
 		}
+		if ok && service.IsClosed {
+			log.Println("Packet is destined to a closed service. Ignore it.")
+			packet.ReturnChunk()
+			continue
+		}
 
 		// Dispatch the packet to the corresponding service's input channel
 		if config.Debug && packet.GetChunkReference() != nil {

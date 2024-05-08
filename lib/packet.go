@@ -331,6 +331,9 @@ func NewPcpPacket(seqNum, ackNum uint32, flags uint8, data []byte, conn *Connect
 	}
 	if len(data) > 0 {
 		newPacket.GetChunk()
+		if newPacket.chunk == nil {
+			fmt.Println("Got an nil chunk!!!!")
+		}
 		newPacket.chunk.Copy(data)
 		newPacket.Payload = newPacket.chunk.Data[:newPacket.chunk.Length]
 	}

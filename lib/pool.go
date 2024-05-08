@@ -9,18 +9,21 @@ import (
 
 // Chunk represents a single chunk of payload
 type Chunk struct {
-	Data           []byte
-	Length         int
+	Data   []byte
+	Length int // length of the real data
+	// below is for debug purpose
+	index          int
 	LastAllocation time.Time
 	CallStack      []string
 	StayAtChannel  string
 }
 
 // NewChunk creates a new chunk with the given length
-func NewChunk(length int) *Chunk {
+func NewChunk(index, length int) *Chunk {
 	return &Chunk{
 		Data:   make([]byte, length),
 		Length: 0,
+		index:  index,
 		//LastAllocation: time.Time{},
 		CallStack:     nil,
 		StayAtChannel: "",
@@ -86,23 +89,28 @@ func (c *Chunk) Copy(srcByteSlice []byte) {
 
 // PayloadPool represents a pool of packet payloads
 type PayloadPool struct {
-	chunks    []*Chunk
-	available int
-	mtx       sync.Mutex
-	closed    bool
+	chunks          []*Chunk
+	capacity        int // total number of chunks in the pool
+	chunkLength     int // length of each chunk (buffer length)
+	readIdx         int
+	writeIdx        int
+	isFull, isEmpty bool
+	allocatedMap    map[int]*Chunk
+	mtx             sync.Mutex
 }
 
 // NewPayloadPool creates a new payload pool with the specified capacity
 func NewPayloadPool(capacity int, chunkLength int) *PayloadPool {
 	chunks := make([]*Chunk, capacity)
 	for i := 0; i < capacity; i++ {
-		chunks[i] = NewChunk(chunkLength)
+		chunks[i] = NewChunk(i, chunkLength)
 	}
 
 	p := &PayloadPool{
-		chunks:    chunks,
-		available: capacity,
-		closed:    false,
+		chunks:       chunks,
+		capacity:     capacity,
+		chunkLength:  chunkLength,
+		allocatedMap: make(map[int]*Chunk),
 	}
 
 	// start timeout checks for allocated chunks
@@ -116,13 +124,25 @@ func (p *PayloadPool) GetPayload() *Chunk {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
 
-	if p.closed || p.available == 0 {
-		return NewChunk(0) // Create a new chunk if pool is closed or empty
+	// Check if the pool is empty
+	if p.isEmpty {
+		log.Println("Chunk allocation: payload pool is empty, allocate more chunk will impact performance till some chunks are returned")
+		return NewChunk(p.capacity+1, p.chunkLength) // Pool is empty. Create new chunk manually
 	}
 
-	chunk := p.chunks[p.available-1]
-	chunk.LastAllocation = time.Now() // Update LastAllocation when chunk is retrieved
-	p.available--
+	chunk := p.chunks[p.readIdx]
+	chunk.LastAllocation = time.Now()
+	p.readIdx = (p.readIdx + 1) % p.capacity // Move read index circularly
+
+	if p.readIdx == p.writeIdx {
+		p.isEmpty = true
+	}
+
+	p.isFull = false
+
+	// Add the frame to allocatedMap
+	p.allocatedMap[chunk.index] = chunk
+
 	return chunk
 }
 
@@ -131,31 +151,48 @@ func (p *PayloadPool) ReturnPayload(chunk *Chunk) {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
 
-	if p.closed || p.available == len(p.chunks) {
-		return // Pool is closed or full, discard the chunk
+	if chunk.index > p.capacity {
+		// manually created chunk, just ignore it
+		log.Println("Payload Pool: returned a manually created chunk")
+		return
+	}
+
+	if p.isFull {
+		log.Println("Deallocation: Pool is full, cannot return more chunk")
+		return // Pool is full, discard the chunk
 	}
 
 	chunk.Reset()
-	p.chunks[p.available] = chunk
-	p.available++
-}
-
-// Close closes the payload pool
-func (p *PayloadPool) Close() {
-	p.mtx.Lock()
-	defer p.mtx.Unlock()
-
-	if !p.closed {
-		p.closed = true
+	p.chunks[p.writeIdx] = chunk // Reuse the frame object
+	// Check if the pool is full
+	p.writeIdx = (p.writeIdx + 1) % p.capacity
+	if p.writeIdx == p.readIdx {
+		p.isFull = true
 	}
+	p.isEmpty = false
+
+	// remove it from allocatedMap
+	delete(p.allocatedMap, chunk.index)
+	chunk = nil // Set the pointer to nil
 }
 
-// AvailableChunks returns the number of available chunks in the pool
+// return the numnber of available frames
 func (p *PayloadPool) AvailableChunks() int {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
-
-	return p.available
+	if p.readIdx > p.writeIdx {
+		return p.capacity - (p.readIdx - p.writeIdx)
+	} else if p.readIdx < p.writeIdx {
+		return p.writeIdx - p.readIdx
+	} else { // ==
+		if p.isEmpty {
+			return 0
+		}
+		if p.isFull {
+			return p.capacity
+		}
+		return 0 // put it here just to please compiler hahaha
+	}
 }
 
 // CheckTimedOutChunks checks every 5 seconds for chunks allocated more than 10 seconds ago
@@ -169,7 +206,7 @@ func (p *PayloadPool) CheckTimedOutChunks() {
 		count = 0
 
 		p.mtx.Lock()
-		for _, chunk := range p.chunks[p.available:] {
+		for _, chunk := range p.allocatedMap {
 			if time.Since(chunk.LastAllocation) > 10*time.Second {
 				chunk.PrintCallStack()
 				count++

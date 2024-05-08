@@ -25,6 +25,7 @@ type Service struct {
 	closeSignal               chan struct{}              // signal for closing service
 	connSignalFailed          chan *lib.Connection       // signal for closing temp connection due to openning signalling failed
 	wg                        sync.WaitGroup             // WaitGroup to synchronize goroutines
+	IsClosed                  bool                       // used to denote that the service is close so parent PCP Protocol connection won't forward more packets to it
 }
 
 // NewService creates a new service listening on the specified port.
@@ -55,31 +56,35 @@ func newService(pcpProtocolConn *PcpProtocolConnection, serviceAddr net.Addr, po
 }
 
 // Accept accepts incoming connection requests.
-func (s *Service) Accept() *lib.Connection {
+func (s *Service) Accept() (*lib.Connection, error) {
 	for {
-		// Wait for new connection to come
-		newConn := <-s.newConnChannel
+		select {
+		case <-s.closeSignal:
+			// Close the accept function to gracefully shutdown
+			return nil, fmt.Errorf("service is closed")
+		case newConn := <-s.newConnChannel: // Wait for new connection to come
 
-		// Check if the connection exists in the temporary connection map
-		_, ok := s.tempConnMap[newConn.Key]
-		if !ok {
-			log.Printf("Received ACK packet for non-existent connection: %s. Ignore it!\n", newConn.Key)
-			continue
+			// Check if the connection exists in the temporary connection map
+			_, ok := s.tempConnMap[newConn.Key]
+			if !ok {
+				log.Printf("Received ACK packet for non-existent connection: %s. Ignore it!\n", newConn.Key)
+				continue
+			}
+
+			// Remove the connection from the temporary connection map
+			delete(s.tempConnMap, newConn.Key)
+
+			// adding the connection to ConnectionMap
+			s.connectionMap[newConn.Key] = newConn
+
+			// start go routine to handle the connection traffic
+			newConn.Wg.Add(1)
+			go newConn.HandleIncomingPackets()
+
+			log.Printf("New connection is ready: %s\n", newConn.Key)
+
+			return newConn, nil
 		}
-
-		// Remove the connection from the temporary connection map
-		delete(s.tempConnMap, newConn.Key)
-
-		// adding the connection to ConnectionMap
-		s.connectionMap[newConn.Key] = newConn
-
-		// start go routine to handle the connection traffic
-		newConn.Wg.Add(1)
-		go newConn.HandleIncomingPackets()
-
-		log.Printf("New connection is ready: %s\n", newConn.Key)
-
-		return newConn
 	}
 }
 
@@ -91,6 +96,7 @@ func (s *Service) handleIncomingPackets() {
 	for {
 		select {
 		case <-s.closeSignal:
+			log.Println("Closing service handleIncomingPackets go routine")
 			// Close the handleServicePackets goroutine to gracefully shutdown
 			return
 		case packet := <-s.InputChannel:
@@ -241,6 +247,10 @@ func (s *Service) handleCloseConnections() {
 	for {
 		var conn *lib.Connection
 		select {
+		case <-s.closeSignal:
+			log.Println("Closing service handleCloseConnections go routine")
+			// Close the handleServicePackets goroutine to gracefully shutdown
+			return
 		case conn = <-s.connSignalFailed:
 			// clear it from p.ConnectionMap
 			_, ok := s.connectionMap[conn.Key] // just make sure it really in ConnectionMap for debug purpose
@@ -269,6 +279,7 @@ func (s *Service) handleCloseConnections() {
 }
 
 func (s *Service) Close() error {
+	log.Println("Beginning service shutdown...")
 	// Close all connections associated with this service
 	for _, conn := range s.connectionMap {
 		conn.Close()
@@ -278,6 +289,9 @@ func (s *Service) Close() error {
 	for _, tempConn := range s.tempConnMap {
 		close(tempConn.ConnSignalFailed)
 	}
+
+	// begin close the service itself and clear resources
+	s.IsClosed = true
 
 	// send signal to service go routines to gracefully close them
 	close(s.closeSignal)
@@ -290,8 +304,10 @@ func (s *Service) Close() error {
 	close(s.ConnCloseSignal)
 	close(s.connSignalFailed)
 
+	log.Println("Service resource cleared.")
 	// send signal to parent pcpProtocolConnection to clear service resource
 	s.serviceCloseSignal <- s
+	log.Println("signal sent to parent PCP service to remove service entry.")
 
 	// remove the iptable rules for the service
 	err := removeIptablesRule(s.ServiceAddr.(*net.IPAddr).IP.String(), s.Port)
@@ -299,6 +315,8 @@ func (s *Service) Close() error {
 		log.Printf("Error removing iptable rules for service %s:%d: %s", s.ServiceAddr.(*net.IPAddr).IP.String(), s.Port, err)
 		return err
 	}
+
+	log.Printf("Service %s:%d is shutting down.\n", s.ServiceAddr.(*net.IPAddr).IP.String(), s.Port)
 
 	return nil
 }

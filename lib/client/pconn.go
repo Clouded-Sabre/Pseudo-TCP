@@ -115,7 +115,7 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*lib.Connection, error) {
 				// Prepare ACK packet
 				newConn.LastAckNumber = lib.SeqIncrement(packet.SequenceNumber)
 				newConn.InitialPeerSeq = packet.SequenceNumber
-				//newConn.InitSendAck()
+				newConn.InitSendAck()
 
 				// Connection established, remove newConn from tempClientConnections, and place it into clientConnections pool
 				delete(p.tempConnectionMap, connKey)
@@ -291,12 +291,8 @@ func (p *pcpProtocolConnection) handleOutgoingPackets() {
 			case packet = <-p.OutputChan:
 			}
 		}
-		// Subscribe to p.OutputChan
-		/*if len(packet.Data.Payload) > 0 {
-			fmt.Println("outgoing packet payload is", packet.Data.Payload)
-		}*/
-		//fmt.Println("PTC got packet.")
 
+		// Subscribe to p.OutputChan
 		if config.Debug && packet.GetChunkReference() != nil {
 			packet.GetChunkReference().RemoveFromChannel()
 			packet.GetChunkReference().AddCallStack("pcpProtocolConnection.handleOutgoingPackets")

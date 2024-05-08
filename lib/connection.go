@@ -2,6 +2,7 @@ package lib
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net"
@@ -460,9 +461,15 @@ func (c *Connection) trimOutSackOption(newlastAckNum uint32) {
 }
 
 func (c *Connection) Read(buffer []byte) (int, error) {
-	// read packet from connection, blindly acknowledge it and all previous unacknowledged packets since last acknowledged one
 	// mimicking net lib TCP read function interface
+	if c == nil {
+		return 0, io.EOF
+	}
 	packet := <-c.ReadChannel
+
+	if packet == nil {
+		return 0, io.EOF
+	}
 
 	if config.Debug && packet.chunk != nil {
 		packet.chunk.RemoveFromChannel()

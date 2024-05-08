@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"time"
 
@@ -62,17 +63,23 @@ func main() {
 		for {
 			n, err := conn.Read(buffer)
 			if err != nil {
-				fmt.Println("Error reading:", err)
-				continue
+				if err == io.EOF {
+					// Connection closed by the server, exit the loop
+					fmt.Println("Server closed the connection.")
+					break
+				} else {
+					fmt.Println("Error reading:", err)
+					continue
+				}
 			}
 			log.Println("Received packet:", string(buffer[:n]))
-			if string(buffer[:n]) == "Server Done" {
+			/*if string(buffer[:n]) == "Server Done" {
 				break
-			}
+			}*/
 		}
 
 		// Close the connection
-		conn.Close()
+		//conn.Close()
 		time.Sleep(time.Second * iterationInterval)
 	}
 	fmt.Println("PCP client exit")
