@@ -128,7 +128,7 @@ func (p *pcpProtocolConnection) dial(serverPort int) (*lib.Connection, error) {
 				p.iptableRules = append(p.iptableRules, serverPort) // record it for later deletion of the rules when connection closes
 
 				// sleep for 200ms to make sure iptable rule takes effect
-				SleepForMs(config.AppConfig.IptableRuleDaley)
+				lib.SleepForMs(config.AppConfig.IptableRuleDaley)
 
 				newConn.IsOpenConnection = true
 				newConn.TcpOptions.TimestampEnabled = packet.TcpOptions.TimestampEnabled
@@ -398,7 +398,7 @@ func (p *pcpProtocolConnection) handleCloseConnection() {
 func (p *pcpProtocolConnection) Close() {
 	// Close all PCP Connections
 	for _, conn := range p.ConnectionMap {
-		conn.Close()
+		go conn.Close()
 	}
 	p.ConnectionMap = nil // Clear the map after closing all connections
 
@@ -485,10 +485,4 @@ func removeIptablesRule(ip string, port int) error {
 	}
 
 	return nil
-}
-
-// sleep for n milliseconds
-func SleepForMs(n int) {
-	timeout := time.After(time.Duration(n) * time.Millisecond)
-	<-timeout // Wait on the channel
 }

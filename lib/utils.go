@@ -1,6 +1,9 @@
 package lib
 
-import "math"
+import (
+	"math"
+	"time"
+)
 
 func SeqIncrement(seq uint32) uint32 {
 	return uint32(uint64(seq) + 1) // implicit modulo operation included
@@ -41,4 +44,26 @@ func isLess(seq1, seq2 uint32) bool {
 
 func isLessOrEqual(seq1, seq2 uint32) bool {
 	return isLess(seq1, seq2) || (seq1 == seq2)
+}
+
+type TimeoutError struct {
+	msg string
+}
+
+func (e *TimeoutError) Error() string {
+	return e.msg
+}
+
+func (e *TimeoutError) Timeout() bool {
+	return true
+}
+
+func (e *TimeoutError) Temporary() bool {
+	return false
+}
+
+// sleep for n milliseconds
+func SleepForMs(n int) {
+	timeout := time.After(time.Duration(n) * time.Millisecond)
+	<-timeout // Wait on the channel
 }

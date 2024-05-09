@@ -3,7 +3,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -49,6 +51,8 @@ func main() {
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 
+	closeChan := make(chan struct{})
+
 	// Start the PCP server
 	srv, err := pcpServerObj.ListenPcp(serverIP, serverPort)
 	if err != nil {
@@ -61,6 +65,8 @@ func main() {
 	go func() {
 		<-signalChan
 		fmt.Println("\nReceived SIGINT (Ctrl+C). Shutting down...")
+		close(closeChan)
+		fmt.Println("Closing service.")
 		srv.Close() // Close the server gracefully
 	}()
 
@@ -71,7 +77,7 @@ func main() {
 			log.Println("Service stopped accepting new connection.")
 			break
 		} else {
-			go handleConnection(conn)
+			go handleConnection(conn, closeChan)
 		}
 	}
 	SleepForMs(2000) // 10 seconds
@@ -81,30 +87,54 @@ func main() {
 	os.Exit(0)
 }
 
-func handleConnection(conn *lib.Connection) {
+func handleConnection(conn *lib.Connection, closeChan chan struct{}) {
 	buffer := make([]byte, config.AppConfig.PreferredMSS)
+S:
 	for {
-		n, err := conn.Read(buffer)
-		if err != nil {
-			fmt.Println("Error reading packet:", err)
+		select {
+		case <-closeChan:
+			log.Println("Server app got interuption. Stop and exit.")
 			return
-		}
-		log.Printf("Got Packet from client(Length %d): %s \n", n, string(buffer[:n]))
-		if string(buffer[:n]) == "Client Done" {
-			break
+		default:
+			conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // read wait for 500 ms
+			n, err := conn.Read(buffer)
+			if err != nil {
+				// Check if the error is a timeout
+				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					// Handle timeout error (no data received within the timeout period)
+					continue // Continue waiting for incoming packets or handling closeSignal
+				}
+				if err == io.EOF {
+					log.Println("Server app got interuption. Stop and exit.")
+					return
+				}
+				fmt.Println("Error reading packet:", err)
+				return
+			}
+			log.Printf("Got Packet from client(Length %d): %s \n", n, string(buffer[:n]))
+			if string(buffer[:n]) == "Client Done" {
+				break S
+			}
 		}
 	}
 
 	// Simulate data transmission
 	for i := 0; i < numOfPackets; i++ {
-		// Construct a packet
-		payload := []byte(fmt.Sprintf("Data packet %d", i))
+		select {
+		case <-closeChan:
+			log.Println("Server app got interuption. Stop and exit.")
+			return
+		default:
+			// Construct a packet
+			payload := []byte(fmt.Sprintf("Data packet %d", i))
 
-		// Send the packet to the server
-		conn.Write(payload)
-		log.Printf("Packet %d sent.\n", i)
+			// Send the packet to the server
+			conn.Write(payload)
+			log.Printf("Packet %d sent.\n", i)
 
-		SleepForMs(msOfSleep) // Simulate some delay between packets
+			SleepForMs(msOfSleep) // Simulate some delay between packets
+		}
+
 	}
 
 	// Construct a packet

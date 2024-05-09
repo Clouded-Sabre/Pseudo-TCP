@@ -29,6 +29,7 @@ type Connection struct {
 	InputChannel                   chan *PcpPacket // per connection packet input channel
 	OutputChan, sigOutputChan      chan *PcpPacket // overall output channel shared by all connections
 	ReadChannel                    chan *PcpPacket // for connection read function
+	ReadDeadline                   time.Time       // ReadDeadline for non-blocking read
 	TerminationCallerState         uint            // 4-way termination caller states
 	TerminationRespState           uint            // 4-way termination responder states
 	InitClientState                uint            // 3-way handshake state of the client
@@ -105,6 +106,7 @@ func NewConnection(key string, isServer bool, remoteAddr net.Addr, remotePort in
 		WindowSize:         math.MaxUint16,
 		InputChannel:       make(chan *PcpPacket),
 		ReadChannel:        make(chan *PcpPacket),
+		ReadDeadline:       time.Time{},
 		OutputChan:         outputChan,
 		sigOutputChan:      sigOutputChan,
 		// all the rest variables keep there init value
@@ -462,35 +464,61 @@ func (c *Connection) trimOutSackOption(newlastAckNum uint32) {
 
 func (c *Connection) Read(buffer []byte) (int, error) {
 	// mimicking net lib TCP read function interface
+	var packet *PcpPacket
 	if c == nil {
 		return 0, io.EOF
 	}
-	packet := <-c.ReadChannel
 
-	if packet == nil {
-		return 0, io.EOF
-	}
+	pcpRead := func() (int, error) {
 
-	if config.Debug && packet.chunk != nil {
-		packet.chunk.RemoveFromChannel()
-		packet.chunk.AddCallStack("Connection.Read")
-	}
+		if packet == nil {
+			return 0, io.EOF
+		}
 
-	payloadLength := len(packet.Payload)
-	if payloadLength > len(buffer) {
-		err := fmt.Errorf("buffer length (%d) is too short to hold received payload (length %d)", len(buffer), payloadLength)
-		log.Println(err)
+		if config.Debug && packet.chunk != nil {
+			packet.chunk.RemoveFromChannel()
+			packet.chunk.AddCallStack("Connection.Read")
+		}
+
+		payloadLength := len(packet.Payload)
+		if payloadLength > len(buffer) {
+			err := fmt.Errorf("buffer length (%d) is too short to hold received payload (length %d)", len(buffer), payloadLength)
+			log.Println(err)
+			// it's time to return the chunk to pool
+			packet.ReturnChunk()
+			return 0, err
+		}
+		copy(buffer[:payloadLength], packet.Payload)
+		// now that the payload is copied to buffer, we no longer need the packet
 		// it's time to return the chunk to pool
 		packet.ReturnChunk()
-		return 0, err
-	}
-	copy(buffer[:payloadLength], packet.Payload)
-	// now that the payload is copied to buffer, we no longer need the packet
-	// it's time to return the chunk to pool
-	packet.ReturnChunk()
 
-	// since packet is returned for all condition branch, there is no need to pop the callstack
-	return payloadLength, nil
+		// since packet is returned for all condition branch, there is no need to pop the callstack
+		return payloadLength, nil
+	}
+
+	if c.ReadDeadline.IsZero() { // blocking read
+		packet = <-c.ReadChannel
+		return pcpRead()
+	} else if c.ReadDeadline.After(time.Now()) {
+		select {
+		case packet = <-c.ReadChannel:
+			return pcpRead()
+		case <-time.After(time.Until(c.ReadDeadline)):
+			return 0, &TimeoutError{"Read deadline exceeded"}
+		}
+	} else {
+		return 0, fmt.Errorf("ReadDeadline is in the past")
+	}
+}
+
+func (c *Connection) SetReadDeadline(t time.Time) error {
+	if t.After(time.Now()) || t.IsZero() {
+		c.ReadDeadline = t
+		return nil
+	} else {
+		return fmt.Errorf("trying to set ReadDeadline to be in the past")
+	}
 }
 
 func (c *Connection) Write(buffer []byte) (int, error) {
@@ -556,6 +584,13 @@ func (c *Connection) Close() error {
 
 	log.Println("4-way termination caller sent FIN packet")
 
+	SleepForMs(3000) // wait for 4-way hand-shake
+
+	if !c.IsClosed {
+		// if connection is still not closed, clear it forcefully
+		c.ClearConnResource()
+	}
+
 	return nil
 }
 
@@ -586,6 +621,13 @@ func (c *Connection) ClearConnResource() {
 	}
 	log.Println("Resender timer cleared")
 
+	// stop ConnSignalTimer
+	if c.ConnSignalTimer != nil {
+		c.ConnSignalTimer.Stop()
+		c.ConnSignalTimer = nil
+	}
+	log.Println("ConnSignalTimer timer cleared")
+
 	// Close connection go routines first
 	close(c.closeSigal) // Close the channel to signal termination
 	log.Println("close signal sent to go routine")
@@ -596,29 +638,43 @@ func (c *Connection) ClearConnResource() {
 	close(c.InputChannel)
 	close(c.ReadChannel)
 
+	endOfConnClose := func() {
+		log.Println("Connection close signal already sent to parent. Now we start to return all chunks")
+		// if SACK option is enabled, release all packets in the sendPackets and RevPacketCache
+		if c.TcpOptions.SackEnabled {
+			// Return chunks of all packets in c.ResendPackets to pool
+			for _, packet := range c.ResendPackets.packets {
+				packet.Data.ReturnChunk()
+			}
+			log.Printf("Released %d chunks from ResendPackets\n", len(c.ResendPackets.packets))
+
+			// Return chunks of all packets in c.RevPacketCache to pool
+			for _, packet := range c.RevPacketCache.packets {
+				packet.Packet.ReturnChunk()
+			}
+			log.Printf("Released %d chunks from RevPacketCache\n", len(c.RevPacketCache.packets))
+		}
+		log.Printf("Connection %s resource cleared.\n", c.Key)
+	}
+
 	// then send close connection signal to parent to clear connection resource
+	defer func() {
+		if r := recover(); r != nil {
+			// Handle the panic caused by sending to a closed channel
+			fmt.Println("Parent is already closed. No need to notify it anymore", r)
+			endOfConnClose()
+		}
+	}()
 	c.connCloseSignalChan <- c
 
-	log.Println("Close signal sent to parent. Now we start to return all chunks")
-	// if SACK option is enabled, release all packets in the sendPackets and RevPacketCache
-	if c.TcpOptions.SackEnabled {
-		// Return chunks of all packets in c.ResendPackets to pool
-		for _, packet := range c.ResendPackets.packets {
-			packet.Data.ReturnChunk()
-		}
-		log.Printf("Released %d chunks from ResendPackets\n", len(c.ResendPackets.packets))
-
-		// Return chunks of all packets in c.RevPacketCache to pool
-		for _, packet := range c.RevPacketCache.packets {
-			packet.Packet.ReturnChunk()
-		}
-		log.Printf("Released %d chunks from RevPacketCache\n", len(c.RevPacketCache.packets))
-	}
-	log.Printf("Connection %s resource cleared.\n", c.Key)
+	endOfConnClose()
 }
 
 // Function to resend lost packets based on SACK blocks and resend packet information
 func (c *Connection) resendLostPacket() {
+	if c.IsClosed {
+		return
+	}
 	now := time.Now()
 	packetsToRemove := make([]uint32, 0)
 	c.ResendPackets.RemovalLock()
@@ -914,24 +970,30 @@ func (c *Connection) InitSendAck() {
 func (c *Connection) TermCallerSendFin() {
 	// Assemble FIN packet to be sent to the other end
 	finPacket := NewPcpPacket(c.TermStartSeq, c.TermStartPeerSeq, FINFlag|ACKFlag, nil, c)
-	c.sigOutputChan <- finPacket
-	// set 4-way termination state to CallerFINSent
-	c.TerminationCallerState = CallerFinSent
+	if c.sigOutputChan != nil {
+		c.sigOutputChan <- finPacket
+		// set 4-way termination state to CallerFINSent
+		c.TerminationCallerState = CallerFinSent
+	}
 }
 
 func (c *Connection) TermCallerSendAck() {
 	ackPacket := NewPcpPacket(c.TermStartSeq+1, c.TermStartPeerSeq+1, ACKFlag, nil, c)
 	// Send the acknowledgment packet to the other end
-	c.sigOutputChan <- ackPacket
-	// set 4-way termination state to CallerFINSent
-	c.TerminationCallerState = CallerAckSent
+	if c.sigOutputChan != nil {
+		c.sigOutputChan <- ackPacket
+		// set 4-way termination state to CallerFINSent
+		c.TerminationCallerState = CallerAckSent
+	}
 }
 
 func (c *Connection) TermRespSendFinAck() {
 	ackPacket := NewPcpPacket(c.TermStartSeq, c.TermStartPeerSeq, FINFlag|ACKFlag, nil, c)
 	// Send the acknowledgment packet to the other end
-	c.sigOutputChan <- ackPacket
-	c.TerminationRespState = RespFinAckSent
+	if c.sigOutputChan != nil {
+		c.sigOutputChan <- ackPacket
+		c.TerminationRespState = RespFinAckSent
+	}
 }
 
 // start Connection Signal timer to resend signal messages in 3-way handshake and 4-way termination
