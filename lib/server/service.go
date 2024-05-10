@@ -281,17 +281,21 @@ func (s *Service) handleCloseConnections() {
 func (s *Service) Close() error {
 	log.Println("Beginning service shutdown...")
 	// Close all connections associated with this service
+	var wg sync.WaitGroup
 	for _, conn := range s.connectionMap {
-		go conn.Close()
+		wg.Add(1)
+		go conn.CloseForcefully(&wg)
 	}
+
+	wg.Wait() // wait for connections to close
 
 	// Close all temp connections associated with this service
 	for _, tempConn := range s.tempConnMap {
 		close(tempConn.ConnSignalFailed)
 	}
 
-	// wait for 1 second to allow connections to finish closing
-	lib.SleepForMs(1000)
+	// wait for 500ms to allow temp connections to finish closing
+	lib.SleepForMs(500)
 
 	// begin close the service itself and clear resources
 	s.IsClosed = true

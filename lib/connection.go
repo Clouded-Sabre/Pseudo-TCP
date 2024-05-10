@@ -567,6 +567,20 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 	return totalBytesWritten, nil
 }
 
+func (c *Connection) CloseForcefully(wg *sync.WaitGroup) error {
+	defer wg.Done()
+	err := c.Close()
+	if err != nil {
+		return err
+	}
+
+	SleepForMs(6000)
+	if !c.IsClosed {
+		c.ClearConnResource()
+	}
+	return nil
+}
+
 func (c *Connection) Close() error {
 	// mimicking net lib TCP close function interface
 	// initiate connection close by sending FIN to the other side
@@ -583,13 +597,6 @@ func (c *Connection) Close() error {
 	c.StartConnSignalTimer()
 
 	log.Println("4-way termination caller sent FIN packet")
-
-	SleepForMs(3000) // wait for 4-way hand-shake
-
-	if !c.IsClosed {
-		// if connection is still not closed, clear it forcefully
-		c.ClearConnResource()
-	}
 
 	return nil
 }

@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -61,14 +62,20 @@ func main() {
 	}
 
 	log.Printf("PCP service started at %s:%d", serverIP, serverPort)
+
+	var wg sync.WaitGroup
 	// Handle Ctrl+C signal for graceful shutdown
-	go func() {
+	watcher := func(wg *sync.WaitGroup) {
+		defer wg.Done()
 		<-signalChan
 		fmt.Println("\nReceived SIGINT (Ctrl+C). Shutting down...")
 		close(closeChan)
 		fmt.Println("Closing service.")
 		srv.Close() // Close the server gracefully
-	}()
+	}
+
+	wg.Add(1)
+	go watcher(&wg)
 
 	for {
 		// Accept incoming connections
@@ -77,17 +84,19 @@ func main() {
 			log.Println("Service stopped accepting new connection.")
 			break
 		} else {
-			go handleConnection(conn, closeChan)
+			wg.Add(1)
+			go handleConnection(conn, closeChan, &wg)
 		}
 	}
-	SleepForMs(2000) // 10 seconds
+
+	wg.Wait()
 	log.Println("Server exiting...")
 	pcpServerObj.Close()
-	SleepForMs(2000) // 10 seconds
 	os.Exit(0)
 }
 
-func handleConnection(conn *lib.Connection, closeChan chan struct{}) {
+func handleConnection(conn *lib.Connection, closeChan chan struct{}, wg *sync.WaitGroup) {
+	defer wg.Done()
 	buffer := make([]byte, config.AppConfig.PreferredMSS)
 S:
 	for {
