@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
+	rp "github.com/Clouded-Sabre/ringpool/lib"
 )
 
 // PcpPacket represents a packet in your custom protocol
@@ -28,7 +29,7 @@ type PcpPacket struct {
 	TcpOptions         *Options
 	IsOpenConnection   bool        // only used in outgoing packet to denote if the connection is open or in 3-way handshake stage
 	Conn               *Connection // used for outgoing packets only to denote which connection it belongs to
-	chunk              *Chunk      // point to memory chunk used to store payload
+	chunk              *rp.Element // point to memory chunk used to store payload
 	IsKeepAliveMassege bool        // denote if this is a keepalive massage. If yes, don't put it into Connection's ResendPackets
 }
 
@@ -283,9 +284,7 @@ func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) error {
 
 	// Extract payload from the data
 	if len(data[TcpHeaderLength+optionsLength:]) > 0 {
-		p.GetChunk() // allocate chunk from pool
-		p.chunk.Copy(data[TcpHeaderLength+optionsLength:])
-		p.Payload = p.chunk.Data[:p.chunk.Length]
+		p.CopyToPayload(data[TcpHeaderLength+optionsLength:])
 	} else {
 		p.Payload = nil
 	}
@@ -330,28 +329,40 @@ func NewPcpPacket(seqNum, ackNum uint32, flags uint8, data []byte, conn *Connect
 		Conn: conn,
 	}
 	if len(data) > 0 {
-		newPacket.GetChunk()
-		if newPacket.chunk == nil {
-			fmt.Println("Got an nil chunk!!!!")
-		}
-		newPacket.chunk.Copy(data)
-		newPacket.Payload = newPacket.chunk.Data[:newPacket.chunk.Length]
+		newPacket.CopyToPayload(data)
 	}
 	return newPacket
 }
 
+func (p *PcpPacket) CopyToPayload(src []byte) error {
+	if len(src) == 0 {
+		err := fmt.Errorf("p.CopyToPayload: Source slice is empty")
+		log.Println(err)
+		return err
+	}
+	p.GetChunk()
+	if p.chunk == nil {
+		err := fmt.Errorf("p.CopyToPayload: Got an nil chunk")
+		log.Println(err)
+		return err
+	}
+	p.chunk.Data.(*Payload).Copy(src)
+	p.Payload = p.chunk.Data.(*Payload).GetSlice()
+	return nil
+}
+
 func (p *PcpPacket) ReturnChunk() {
 	if p.chunk != nil {
-		Pool.ReturnPayload(p.chunk)
+		Pool.ReturnElement(p.chunk)
 		p.chunk = nil
 	}
 }
 
 func (p *PcpPacket) GetChunk() {
-	p.chunk = Pool.GetPayload()
+	p.chunk = Pool.GetElement()
 }
 
-func (p *PcpPacket) GetChunkReference() *Chunk {
+func (p *PcpPacket) GetChunkReference() *rp.Element {
 	return p.chunk
 }
 

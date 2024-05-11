@@ -13,6 +13,7 @@ import (
 	//"time"
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 	"github.com/Clouded-Sabre/Pseudo-TCP/lib"
+	rp "github.com/Clouded-Sabre/ringpool/lib"
 )
 
 type PcpServer struct {
@@ -37,7 +38,8 @@ func NewPcpServer(protocolId uint8) (*PcpServer, error) {
 		closeSignal:        make(chan struct{}),
 	}
 
-	lib.Pool = lib.NewPayloadPool(config.AppConfig.PayloadPoolSize, config.AppConfig.PreferredMSS)
+	rp.Debug = true
+	lib.Pool = rp.NewRingPool(config.AppConfig.PayloadPoolSize, lib.NewPayload, config.AppConfig.PreferredMSS)
 
 	// Start goroutines
 	pcpServerObj.wg.Add(1) // Increase WaitGroup counter by 1 for the handleClosePConnConnection goroutines

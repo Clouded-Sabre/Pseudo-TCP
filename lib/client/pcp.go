@@ -8,6 +8,7 @@ import (
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 	"github.com/Clouded-Sabre/Pseudo-TCP/lib"
+	rp "github.com/Clouded-Sabre/ringpool/lib"
 )
 
 // pcp protocol client struct
@@ -34,7 +35,9 @@ func NewPcpClient(protocolId uint8) *pcpClient {
 		closeSignal:          make(chan struct{}),
 	}
 
-	lib.Pool = lib.NewPayloadPool(config.AppConfig.PayloadPoolSize, config.AppConfig.PreferredMSS)
+	// Preparing Ring Buffer Pool
+	rp.Debug = true
+	lib.Pool = rp.NewRingPool(config.AppConfig.PayloadPoolSize, lib.NewPayload, config.AppConfig.PreferredMSS)
 
 	// Start a goroutine to periodically check protocolConn and connection health
 	pcpClientObj.wg.Add(1) // Increase WaitGroup counter by 1 for the handlePConnClose goroutines
