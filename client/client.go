@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
-	"github.com/Clouded-Sabre/Pseudo-TCP/lib/client"
+	"github.com/Clouded-Sabre/Pseudo-TCP/lib"
 )
 
 func main() {
@@ -28,13 +28,17 @@ func main() {
 		iterationInterval = 15 // in seconds
 	)
 
-	pcpClientObj := client.NewPcpClient(uint8(config.AppConfig.ProtocolID))
-	defer pcpClientObj.Close()
+	pcpCoreObj, err := lib.NewPcpCore(uint8(config.AppConfig.ProtocolID))
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer pcpCoreObj.Close()
 
 	buffer := make([]byte, config.AppConfig.PreferredMSS)
 	for j := 0; j < iteration; j++ {
 		// Dial to the server
-		conn, err := pcpClientObj.DialPcp(*sourceIP, *serverIP, uint16(*serverPort))
+		conn, err := pcpCoreObj.DialPcp(*sourceIP, *serverIP, uint16(*serverPort))
 		if err != nil {
 			fmt.Println("Error connecting:", err)
 			return

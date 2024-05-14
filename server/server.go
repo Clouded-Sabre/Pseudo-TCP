@@ -14,14 +14,14 @@ import (
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 	"github.com/Clouded-Sabre/Pseudo-TCP/lib"
-	"github.com/Clouded-Sabre/Pseudo-TCP/lib/server"
+	//"github.com/Clouded-Sabre/Pseudo-TCP/lib/server"
 )
 
 var (
-	pcpServerObj *server.PcpServer
-	err          error
-	serverIP     string
-	serverPort   int
+	pcpCoreObj *lib.PcpCore
+	err        error
+	serverIP   string
+	serverPort int
 )
 
 const (
@@ -41,7 +41,7 @@ func main() {
 	config.AppConfig, _ = config.ReadConfig()
 
 	// Create PCP server
-	pcpServerObj, err = server.NewPcpServer(uint8(config.AppConfig.ProtocolID))
+	pcpCoreObj, err = lib.NewPcpCore(uint8(config.AppConfig.ProtocolID))
 	if err != nil {
 		log.Println("Error creating PCP server:", err)
 		return
@@ -55,7 +55,7 @@ func main() {
 	closeChan := make(chan struct{})
 
 	// Start the PCP server
-	srv, err := pcpServerObj.ListenPcp(serverIP, serverPort)
+	srv, err := pcpCoreObj.ListenPcp(serverIP, serverPort)
 	if err != nil {
 		log.Printf("PCP server error listening at %s:%d: %s", serverIP, serverPort, err)
 		return
@@ -91,7 +91,7 @@ func main() {
 
 	wg.Wait()
 	log.Println("Server exiting...")
-	pcpServerObj.Close()
+	pcpCoreObj.Close()
 	os.Exit(0)
 }
 
