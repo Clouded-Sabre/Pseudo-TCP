@@ -39,11 +39,11 @@ func isGreaterOrEqual(seq1, seq2 uint32) bool {
 }
 
 func isLess(seq1, seq2 uint32) bool {
-	return !isGreater(seq1, seq2)
+	return !isGreaterOrEqual(seq1, seq2)
 }
 
 func isLessOrEqual(seq1, seq2 uint32) bool {
-	return isLess(seq1, seq2) || (seq1 == seq2)
+	return !isGreater(seq1, seq2)
 }
 
 type TimeoutError struct {
