@@ -12,9 +12,6 @@ import (
 )
 
 func main() {
-	// load config
-	config.AppConfig, _ = config.ReadConfig("config.yaml")
-
 	// Define command-line flags
 	sourceIP := flag.String("sourceIP", config.AppConfig.ClientIP, "Source IP address")
 	serverIP := flag.String("serverIP", config.AppConfig.ServerIP, "Server IP address")
@@ -28,7 +25,7 @@ func main() {
 		iterationInterval = 15 // in seconds
 	)
 
-	pcpCoreObj, err := lib.NewPcpCore(uint8(config.AppConfig.ProtocolID))
+	pcpCoreObj, err := lib.NewPcpCore(uint8(config.AppConfig.ProtocolID), "config.yaml")
 	if err != nil {
 		log.Println(err)
 		return
