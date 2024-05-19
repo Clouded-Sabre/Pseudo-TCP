@@ -13,9 +13,9 @@ import (
 
 func main() {
 	// Define command-line flags
-	sourceIP := flag.String("sourceIP", config.AppConfig.ClientIP, "Source IP address")
-	serverIP := flag.String("serverIP", config.AppConfig.ServerIP, "Server IP address")
-	serverPort := flag.Int("serverPort", config.AppConfig.ServerPort, "Server port")
+	sourceIP := flag.String("sourceIP", "127.0.0.4", "Source IP address")
+	serverIP := flag.String("serverIP", "127.0.0.2", "Server IP address")
+	serverPort := flag.Int("serverPort", 8901, "Server port")
 	flag.Parse()
 
 	const (
@@ -25,7 +25,7 @@ func main() {
 		iterationInterval = 15 // in seconds
 	)
 
-	pcpCoreObj, err := lib.NewPcpCore(uint8(config.AppConfig.ProtocolID), "config.yaml")
+	pcpCoreObj, err := lib.NewPcpCore("config.yaml")
 	if err != nil {
 		log.Println(err)
 		return

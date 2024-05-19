@@ -21,14 +21,14 @@ type PcpCore struct {
 	wg                 sync.WaitGroup // WaitGroup to synchronize goroutines
 }
 
-func NewPcpCore(protocolId uint8, configFilePath string) (*PcpCore, error) {
+func NewPcpCore(configFilePath string) (*PcpCore, error) {
 	// load config
 	config.AppConfig, _ = config.ReadConfig(configFilePath)
 
 	// starts the PCP core main service
 	// the main role is to create PcpCore object - one per system
 	pcpServerObj := &PcpCore{
-		ProtocolID:         protocolId,
+		ProtocolID:         uint8(config.AppConfig.ProtocolID),
 		ProtoConnectionMap: make(map[string]*PcpProtocolConnection),
 		pConnCloseSignal:   make(chan *PcpProtocolConnection),
 		closeSignal:        make(chan struct{}),
