@@ -38,7 +38,7 @@ func init() {
 
 func main() {
 	// load config
-	config.AppConfig, _ = config.ReadConfig()
+	config.AppConfig, _ = config.ReadConfig("config.yaml")
 
 	// Create PCP server
 	pcpCoreObj, err = lib.NewPcpCore(uint8(config.AppConfig.ProtocolID))

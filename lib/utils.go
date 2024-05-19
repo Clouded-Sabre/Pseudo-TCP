@@ -15,6 +15,9 @@ func SeqIncrementBy(seq, inc uint32) uint32 {
 
 // SEQ compare function with SEQ wraparound in mind
 func isGreater(seq1, seq2 uint32) bool {
+	if seq1 == seq2 {
+		return false
+	}
 	// Calculate direct difference
 	var diff, wrapdiff, distance int64
 	diff = int64(seq1) - int64(seq2)

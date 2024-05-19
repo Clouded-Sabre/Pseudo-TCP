@@ -13,7 +13,7 @@ import (
 
 func main() {
 	// load config
-	config.AppConfig, _ = config.ReadConfig()
+	config.AppConfig, _ = config.ReadConfig("config.yaml")
 
 	// Define command-line flags
 	sourceIP := flag.String("sourceIP", config.AppConfig.ClientIP, "Source IP address")

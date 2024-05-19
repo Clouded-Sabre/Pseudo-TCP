@@ -40,9 +40,9 @@ type Config struct {
 
 var AppConfig *Config
 
-func ReadConfig() (*Config, error) {
+func ReadConfig(confFilePath string) (*Config, error) {
 	// Read the YAML file
-	data, err := os.ReadFile("config.yaml")
+	data, err := os.ReadFile(confFilePath)
 	if err != nil {
 		log.Fatalf("error reading YAML file: %v", err)
 	}
