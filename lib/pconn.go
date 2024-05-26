@@ -9,8 +9,6 @@ import (
 	"strconv"
 	"sync"
 	"time"
-
-	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 )
 
 // pcp protocol connection struct
@@ -32,9 +30,19 @@ type PcpProtocolConnection struct {
 	emptyMapTimer             *time.Timer                 // if this pcpProtocolConnection has no connection for 10 seconds, close it. used for client side only
 	wg                        sync.WaitGroup              // WaitGroup to synchronize goroutines
 	iptableRules              []int                       // slice of port number on server address which has iptables rules. used for client side only
+	config                    *PcpProtocolConnConfig
 }
 
-func newPcpProtocolConnection(key string, isServer bool, protocolId int, serverAddr, localAddr *net.IPAddr, pConnCloseSignal chan *PcpProtocolConnection) (*PcpProtocolConnection, error) {
+type PcpProtocolConnConfig struct {
+	IptableRuleDaley                 int
+	PreferredMSS                     int
+	PacketLostSimulation             bool
+	PConnTimeout                     int
+	ClientPortUpper, ClientPortLower int
+	ConnConfig                       *ConnectionConfig
+}
+
+func newPcpProtocolConnection(key string, isServer bool, protocolId int, serverAddr, localAddr *net.IPAddr, pConnCloseSignal chan *PcpProtocolConnection, config *PcpProtocolConnConfig) (*PcpProtocolConnection, error) {
 	var (
 		serverConn net.PacketConn
 		clientConn *net.IPConn
@@ -77,6 +85,7 @@ func newPcpProtocolConnection(key string, isServer bool, protocolId int, serverA
 		closeSignal:      make(chan struct{}),
 		wg:               sync.WaitGroup{},
 		iptableRules:     make([]int, 0),
+		config:           config,
 	}
 
 	// Start goroutines
@@ -180,7 +189,7 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *ConnectionConfi
 				p.iptableRules = append(p.iptableRules, serverPort) // record it for later deletion of the rules when connection closes
 
 				// sleep for 200ms to make sure iptable rule takes effect
-				SleepForMs(config.AppConfig.IptableRuleDaley)
+				SleepForMs(p.config.IptableRuleDaley)
 
 				newConn.IsOpenConnection = true
 				newConn.TcpOptions.TimestampEnabled = packet.TcpOptions.TimestampEnabled
@@ -255,7 +264,7 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	//fmt.Println("Received packet Length:", n)
 	//fmt.Printf("Got packet:\n %+v\n", packet)
 
-	if config.Debug && packet.GetChunkReference() != nil {
+	if PoolDebug && packet.GetChunkReference() != nil {
 		packet.GetChunkReference().AddCallStack("pcpProtocolConn.handleIncomingPackets")
 	}
 
@@ -272,7 +281,7 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	if ok && !conn.IsClosed {
 		// open connection. Dispatch the packet to the corresponding connection's input channel
 		conn.InputChannel <- packet
-		if config.Debug && packet.GetChunkReference() != nil {
+		if PoolDebug && packet.GetChunkReference() != nil {
 			packet.GetChunkReference().AddToChannel("Conn.InputChannel")
 			packet.GetChunkReference().PopCallStack()
 		}
@@ -285,7 +294,7 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 		if len(packet.Payload) == 0 && packet.AcknowledgmentNum-tempConn.InitialSeq < 2 {
 			// forward to that connection's input channel
 			tempConn.InputChannel <- packet
-			if config.Debug && packet.GetChunkReference() != nil {
+			if PoolDebug && packet.GetChunkReference() != nil {
 				packet.GetChunkReference().AddToChannel("TempConn.InputChannel")
 				packet.GetChunkReference().PopCallStack()
 			}
@@ -333,7 +342,7 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 		return
 	}
 
-	if config.Debug && packet.GetChunkReference() != nil {
+	if PoolDebug && packet.GetChunkReference() != nil {
 		packet.GetChunkReference().AddCallStack("pcpProtocolConn.handleIncomingPackets")
 	}
 
@@ -341,9 +350,9 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 	//log.Printf("Got packet with options: %+v\n", packet.TcpOptions)
 
 	// Check if a connection is registered for the packet
-	config.Mu.Lock()
+	//config.Mu.Lock()
 	service, ok := p.ServiceMap[int(destPort)]
-	config.Mu.Unlock()
+	//config.Mu.Unlock()
 
 	if !ok {
 		//fmt.Println("No service registered for port:", destPort)
@@ -358,7 +367,7 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 	}
 
 	// Dispatch the packet to the corresponding service's input channel
-	if config.Debug && packet.GetChunkReference() != nil {
+	if PoolDebug && packet.GetChunkReference() != nil {
 		packet.GetChunkReference().AddToChannel("Service.InputChannel")
 		packet.GetChunkReference().PopCallStack()
 	}
@@ -373,9 +382,9 @@ func (p *PcpProtocolConnection) handleIncomingPackets() {
 	// the first lib.TcpPseudoHeaderLength bytes are reserved for Tcp Pseudo Header
 	var buffer []byte
 	if p.isServer {
-		buffer = make([]byte, config.AppConfig.PreferredMSS+TcpHeaderLength+TcpOptionsMaxLength+TcpPseudoHeaderLength)
+		buffer = make([]byte, p.config.PreferredMSS+TcpHeaderLength+TcpOptionsMaxLength+TcpPseudoHeaderLength)
 	} else {
-		buffer = make([]byte, config.AppConfig.PreferredMSS+TcpHeaderLength+TcpOptionsMaxLength+IpHeaderMaxLength+TcpPseudoHeaderLength)
+		buffer = make([]byte, p.config.PreferredMSS+TcpHeaderLength+TcpOptionsMaxLength+IpHeaderMaxLength+TcpPseudoHeaderLength)
 	}
 
 	// main loop for incoming packets
@@ -401,7 +410,7 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 	var (
 		count      = 0
 		lostCount  = 0
-		frameBytes = make([]byte, config.AppConfig.PreferredMSS+TcpHeaderLength+TcpOptionsMaxLength+TcpPseudoHeaderLength)
+		frameBytes = make([]byte, p.config.PreferredMSS+TcpHeaderLength+TcpOptionsMaxLength+TcpPseudoHeaderLength)
 		n          = 0
 		err        error
 		packet     *PcpPacket
@@ -421,12 +430,12 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 			}
 		}
 
-		if config.Debug && packet.GetChunkReference() != nil {
+		if PoolDebug && packet.GetChunkReference() != nil {
 			packet.GetChunkReference().RemoveFromChannel()
 			packet.GetChunkReference().AddCallStack("pcpProtocolConnection.handleOutgoingPackets")
 		}
 
-		if config.AppConfig.PacketLostSimulation {
+		if p.config.PacketLostSimulation {
 			if count == 0 {
 				lostCount = rand.Intn(10)
 			}
@@ -470,12 +479,12 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 			}
 		}
 
-		if config.AppConfig.PacketLostSimulation {
+		if p.config.PacketLostSimulation {
 			count = (count + 1) % 10
 		}
 		packetLost = false
 
-		if config.Debug && packet.GetChunkReference() != nil {
+		if PoolDebug && packet.GetChunkReference() != nil {
 			packet.GetChunkReference().PopCallStack()
 		}
 	}
@@ -512,8 +521,8 @@ func (p *PcpProtocolConnection) handleCloseConnection() {
 				}
 
 				// Start a new timer for 10 seconds
-				log.Println("Wait for", config.AppConfig.PConnTimeout, "seconds before closing the PCP protocol connection")
-				p.emptyMapTimer = time.AfterFunc(time.Duration(config.AppConfig.PConnTimeout)*time.Second, func() {
+				log.Println("Wait for", p.config.PConnTimeout, "seconds before closing the PCP protocol connection")
+				p.emptyMapTimer = time.AfterFunc(time.Duration(p.config.PConnTimeout)*time.Second, func() {
 					// Close the connection by sending closeSignal to all goroutines and clear resources
 					if p.emptyMapTimer != nil {
 						p.emptyMapTimer.Stop()
@@ -608,7 +617,7 @@ func (p *PcpProtocolConnection) getAvailableRandomClientPort() int {
 	// Generate a random port number until it's not in the existingPorts map
 	var randomPort int
 	for {
-		randomPort = rand.Intn(config.AppConfig.ClientPortUpper-config.AppConfig.ClientPortLower) + config.AppConfig.ClientPortLower
+		randomPort = rand.Intn(p.config.ClientPortUpper-p.config.ClientPortLower) + p.config.ClientPortLower
 		if !existingPorts[randomPort] {
 			break
 		}

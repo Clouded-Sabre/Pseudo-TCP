@@ -47,6 +47,15 @@ func main() {
 		ConnSignalRetryInterval: config.AppConfig.ConnSignalRetryInterval,
 		ConnSignalRetry:         config.AppConfig.ConnSignalRetry,
 	}
+	pcpConfig := &lib.PcpProtocolConnConfig{
+		IptableRuleDaley:     config.AppConfig.IptableRuleDaley,
+		PreferredMSS:         config.AppConfig.PreferredMSS,
+		PacketLostSimulation: config.AppConfig.PacketLostSimulation,
+		PConnTimeout:         config.AppConfig.PConnTimeout,
+		ClientPortUpper:      config.AppConfig.ClientPortUpper,
+		ClientPortLower:      config.AppConfig.ClientPortLower,
+		ConnConfig:           connConfig,
+	}
 	pcpCoreConfig := &lib.PcpCoreConfig{
 		ProtocolID:      uint8(config.AppConfig.ProtocolID),
 		PreferredMSS:    config.AppConfig.PreferredMSS,
@@ -62,7 +71,7 @@ func main() {
 	buffer := make([]byte, config.AppConfig.PreferredMSS)
 	for j := 0; j < iteration; j++ {
 		// Dial to the server
-		conn, err := pcpCoreObj.DialPcp(*sourceIP, *serverIP, uint16(*serverPort), connConfig)
+		conn, err := pcpCoreObj.DialPcp(*sourceIP, *serverIP, uint16(*serverPort), pcpConfig)
 		if err != nil {
 			fmt.Println("Error connecting:", err)
 			return

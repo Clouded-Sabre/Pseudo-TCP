@@ -58,6 +58,15 @@ func main() {
 		ConnSignalRetryInterval: config.AppConfig.ConnSignalRetryInterval,
 		ConnSignalRetry:         config.AppConfig.ConnSignalRetry,
 	}
+	pcpConfig := &lib.PcpProtocolConnConfig{
+		IptableRuleDaley:     config.AppConfig.IptableRuleDaley,
+		PreferredMSS:         config.AppConfig.PreferredMSS,
+		PacketLostSimulation: config.AppConfig.PacketLostSimulation,
+		PConnTimeout:         config.AppConfig.PConnTimeout,
+		ClientPortUpper:      config.AppConfig.ClientPortUpper,
+		ClientPortLower:      config.AppConfig.ClientPortLower,
+		ConnConfig:           connConfig,
+	}
 
 	pcpCoreConfig := &lib.PcpCoreConfig{
 		ProtocolID:      uint8(config.AppConfig.ProtocolID),
@@ -80,7 +89,7 @@ func main() {
 	closeChan := make(chan struct{})
 
 	// Start the PCP server
-	srv, err := pcpCoreObj.ListenPcp(serverIP, serverPort, connConfig)
+	srv, err := pcpCoreObj.ListenPcp(serverIP, serverPort, pcpConfig)
 	if err != nil {
 		log.Printf("PCP server error listening at %s:%d: %s", serverIP, serverPort, err)
 		return

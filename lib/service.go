@@ -5,8 +5,7 @@ import (
 	"log"
 	"net"
 	"sync"
-
-	"github.com/Clouded-Sabre/Pseudo-TCP/config"
+	//"github.com/Clouded-Sabre/Pseudo-TCP/config"
 )
 
 // Service represents a service listening on a specific port.
@@ -101,7 +100,7 @@ func (s *Service) handleIncomingPackets() {
 			// Close the handleServicePackets goroutine to gracefully shutdown
 			return
 		case packet := <-s.InputChannel:
-			if config.Debug && packet.GetChunkReference() != nil {
+			if PoolDebug && packet.GetChunkReference() != nil {
 				packet.GetChunkReference().RemoveFromChannel()
 				packet.GetChunkReference().AddCallStack("service.handleServicePackets")
 			}
@@ -115,7 +114,7 @@ func (s *Service) handleIncomingPackets() {
 			} else {
 				s.handleDataPacket(packet)
 			}
-			if config.Debug && packet.GetChunkReference() != nil {
+			if PoolDebug && packet.GetChunkReference() != nil {
 				packet.GetChunkReference().PopCallStack()
 			}
 		}
@@ -124,7 +123,7 @@ func (s *Service) handleIncomingPackets() {
 
 // handleDataPacket forward Data packet to corresponding open connection if present.
 func (s *Service) handleDataPacket(packet *PcpPacket) {
-	if config.Debug && packet.GetChunkReference() != nil {
+	if PoolDebug && packet.GetChunkReference() != nil {
 		packet.GetChunkReference().AddCallStack("service.handleDataPacket")
 	}
 	// Extract destination IP and port from the packet
@@ -139,7 +138,7 @@ func (s *Service) handleDataPacket(packet *PcpPacket) {
 	if ok && !conn.IsClosed {
 		// Dispatch the packet to the corresponding connection's input channel
 		conn.InputChannel <- packet
-		if config.Debug && packet.GetChunkReference() != nil {
+		if PoolDebug && packet.GetChunkReference() != nil {
 			packet.GetChunkReference().AddToChannel("Conn.InputChannel")
 			packet.GetChunkReference().PopCallStack()
 		}
@@ -152,7 +151,7 @@ func (s *Service) handleDataPacket(packet *PcpPacket) {
 		if len(packet.Payload) == 0 && packet.SequenceNumber-tempConn.InitialPeerSeq < 2 {
 			// Dispatch the packet to the corresponding connection's input channel
 			tempConn.InputChannel <- packet
-			if config.Debug && packet.GetChunkReference() != nil {
+			if PoolDebug && packet.GetChunkReference() != nil {
 				packet.GetChunkReference().AddToChannel("TempConn.InputChannel")
 				packet.GetChunkReference().PopCallStack()
 			}

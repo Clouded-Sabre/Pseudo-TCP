@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Clouded-Sabre/Pseudo-TCP/config"
+	//"github.com/Clouded-Sabre/Pseudo-TCP/config"
 	rp "github.com/Clouded-Sabre/ringpool/lib"
 )
 
@@ -35,7 +35,7 @@ type PcpPacket struct {
 
 // Marshal converts a PcpPacket to a byte slice
 func (p *PcpPacket) Marshal(protocolId uint8, buffer []byte) (int, error) {
-	if config.Debug && p.chunk != nil {
+	if PoolDebug && p.chunk != nil {
 		p.chunk.AddCallStack("p.Marshal")
 	}
 	// Calculate the length of the options field (including padding)
@@ -182,7 +182,7 @@ func (p *PcpPacket) Marshal(protocolId uint8, buffer []byte) (int, error) {
 	checksum := CalculateChecksum(buffer[:TcpPseudoHeaderLength+pcpFrameLength])
 	binary.BigEndian.PutUint16(frame[16:18], checksum)
 
-	if config.Debug && p.chunk != nil {
+	if PoolDebug && p.chunk != nil {
 		p.chunk.PopCallStack()
 	}
 	return pcpFrameLength, nil
@@ -190,7 +190,7 @@ func (p *PcpPacket) Marshal(protocolId uint8, buffer []byte) (int, error) {
 
 // Unmarshal converts a byte slice to a PcpPacket
 func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) error {
-	if config.Debug && p.chunk != nil {
+	if PoolDebug && p.chunk != nil {
 		p.chunk.AddCallStack("p.Unmarshal")
 	}
 	if len(data) < TcpHeaderLength {
@@ -293,7 +293,7 @@ func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) error {
 	// Retrieve the checksum from the packet
 	p.Checksum = binary.BigEndian.Uint16(data[16:18]) // Assuming checksum field is at byte 16 and 17
 
-	if config.Debug && p.chunk != nil {
+	if PoolDebug && p.chunk != nil {
 		p.chunk.PopCallStack()
 	}
 
@@ -537,12 +537,12 @@ func (r *ResendPackets) RemoveSentPacket(seqNum uint32) {
 	defer r.mutex.Unlock()
 	packet, ok := r.packets[seqNum]
 	if !ok {
-		if config.Debug && packet.Data.chunk != nil {
+		if PoolDebug && packet.Data.chunk != nil {
 			log.Println("RemoveSentPackact error: No such packets with SEQ", seqNum)
 		}
 		return
 	}
-	if config.Debug && packet.Data.chunk != nil {
+	if PoolDebug && packet.Data.chunk != nil {
 		packet.Data.chunk.AddCallStack("ResendPackets.RemoveSentPacket")
 	}
 

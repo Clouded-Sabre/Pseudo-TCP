@@ -49,7 +49,7 @@ func NewPcpCore(pcpcoreConfig *PcpCoreConfig) (*PcpCore, error) {
 }
 
 // dialPcp simulates the TCP dial function interface for PCP.
-func (p *PcpCore) DialPcp(localIP string, serverIP string, serverPort uint16, connConfig *ConnectionConfig) (*Connection, error) {
+func (p *PcpCore) DialPcp(localIP string, serverIP string, serverPort uint16, pcpConfig *PcpProtocolConnConfig) (*Connection, error) {
 	// first normalize IP address string before making key
 	serverAddr, err := net.ResolveIPAddr("ip", serverIP)
 	if err != nil {
@@ -66,7 +66,7 @@ func (p *PcpCore) DialPcp(localIP string, serverIP string, serverPort uint16, co
 	pConn, ok := p.ProtoConnectionMap[pConnKey]
 	if !ok {
 		// need to create new protocol connection
-		pConn, err = newPcpProtocolConnection(pConnKey, false, int(p.ProtocolID), serverAddr, localAddr, p.pConnCloseSignal)
+		pConn, err = newPcpProtocolConnection(pConnKey, false, int(p.ProtocolID), serverAddr, localAddr, p.pConnCloseSignal, pcpConfig)
 		if err != nil {
 			fmt.Println("Error creating Pcp Client Protocol Connection:", err)
 			return nil, err
@@ -75,7 +75,7 @@ func (p *PcpCore) DialPcp(localIP string, serverIP string, serverPort uint16, co
 		p.ProtoConnectionMap[pConnKey] = pConn
 	}
 
-	newClientConn, err := pConn.dial(int(serverPort), connConfig)
+	newClientConn, err := pConn.dial(int(serverPort), pcpConfig.ConnConfig)
 	if err != nil {
 		fmt.Println("Error creating Pcp Client Connection:", err)
 		return nil, err
@@ -85,7 +85,7 @@ func (p *PcpCore) DialPcp(localIP string, serverIP string, serverPort uint16, co
 }
 
 // ListenPcp starts listening for incoming packets on the service's port.
-func (p *PcpCore) ListenPcp(serviceIP string, port int, connConfig *ConnectionConfig) (*Service, error) {
+func (p *PcpCore) ListenPcp(serviceIP string, port int, pcpConfig *PcpProtocolConnConfig) (*Service, error) {
 	// first check if corresponding PcpServerProtocolConnection obj exists or not
 	// Normalize IP address string before making key from it
 	serviceAddr, err := net.ResolveIPAddr("ip", serviceIP)
@@ -100,7 +100,7 @@ func (p *PcpCore) ListenPcp(serviceIP string, port int, connConfig *ConnectionCo
 	pConn, ok := p.ProtoConnectionMap[pConnKey]
 	if !ok {
 		// need to create new protocol connection
-		pConn, err = newPcpProtocolConnection(pConnKey, true, int(p.ProtocolID), serviceAddr, nil, p.pConnCloseSignal)
+		pConn, err = newPcpProtocolConnection(pConnKey, true, int(p.ProtocolID), serviceAddr, nil, p.pConnCloseSignal, pcpConfig)
 		if err != nil {
 			log.Println("Error creating Pcp Client Protocol Connection:", err)
 			return nil, err
@@ -114,7 +114,7 @@ func (p *PcpCore) ListenPcp(serviceIP string, port int, connConfig *ConnectionCo
 	if !ok {
 		// need to create new service
 		// create new Pcp service
-		srv, err := newService(pConn, serviceAddr, port, pConn.OutputChan, pConn.sigOutputChan, pConn.serviceCloseSignal, connConfig)
+		srv, err := newService(pConn, serviceAddr, port, pConn.OutputChan, pConn.sigOutputChan, pConn.serviceCloseSignal, pcpConfig.ConnConfig)
 		if err != nil {
 			log.Println("Error creating service:", err)
 			return nil, err
