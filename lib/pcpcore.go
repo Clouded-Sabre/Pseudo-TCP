@@ -7,11 +7,16 @@ import (
 	"os/exec"
 	"strconv"
 
-	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 	rp "github.com/Clouded-Sabre/ringpool/lib"
 
 	"sync"
 )
+
+type PcpCoreConfig struct {
+	ProtocolID      uint8 // protocol id which should be 6
+	PayloadPoolSize int   // how many number of packet payload chunks in the pool
+	PreferredMSS    int   // preferred MSS
+}
 
 type PcpCore struct {
 	ProtocolID         uint8
@@ -21,21 +26,18 @@ type PcpCore struct {
 	wg                 sync.WaitGroup // WaitGroup to synchronize goroutines
 }
 
-func NewPcpCore(configFilePath string) (*PcpCore, error) {
-	// load config
-	config.AppConfig, _ = config.ReadConfig(configFilePath)
-
+func NewPcpCore(pcpcoreConfig *PcpCoreConfig) (*PcpCore, error) {
 	// starts the PCP core main service
 	// the main role is to create PcpCore object - one per system
 	pcpServerObj := &PcpCore{
-		ProtocolID:         uint8(config.AppConfig.ProtocolID),
+		ProtocolID:         uint8(pcpcoreConfig.ProtocolID),
 		ProtoConnectionMap: make(map[string]*PcpProtocolConnection),
 		pConnCloseSignal:   make(chan *PcpProtocolConnection),
 		closeSignal:        make(chan struct{}),
 	}
 
 	rp.Debug = true
-	Pool = rp.NewRingPool(config.AppConfig.PayloadPoolSize, NewPayload, config.AppConfig.PreferredMSS)
+	Pool = rp.NewRingPool(pcpcoreConfig.PayloadPoolSize, NewPayload, pcpcoreConfig.PreferredMSS)
 
 	// Start goroutines
 	pcpServerObj.wg.Add(1) // Increase WaitGroup counter by 1 for the handleClosePConnConnection goroutines
@@ -47,7 +49,7 @@ func NewPcpCore(configFilePath string) (*PcpCore, error) {
 }
 
 // dialPcp simulates the TCP dial function interface for PCP.
-func (p *PcpCore) DialPcp(localIP string, serverIP string, serverPort uint16) (*Connection, error) {
+func (p *PcpCore) DialPcp(localIP string, serverIP string, serverPort uint16, connConfig *ConnectionConfig) (*Connection, error) {
 	// first normalize IP address string before making key
 	serverAddr, err := net.ResolveIPAddr("ip", serverIP)
 	if err != nil {
@@ -73,7 +75,7 @@ func (p *PcpCore) DialPcp(localIP string, serverIP string, serverPort uint16) (*
 		p.ProtoConnectionMap[pConnKey] = pConn
 	}
 
-	newClientConn, err := pConn.dial(int(serverPort))
+	newClientConn, err := pConn.dial(int(serverPort), connConfig)
 	if err != nil {
 		fmt.Println("Error creating Pcp Client Connection:", err)
 		return nil, err
@@ -83,7 +85,7 @@ func (p *PcpCore) DialPcp(localIP string, serverIP string, serverPort uint16) (*
 }
 
 // ListenPcp starts listening for incoming packets on the service's port.
-func (p *PcpCore) ListenPcp(serviceIP string, port int) (*Service, error) {
+func (p *PcpCore) ListenPcp(serviceIP string, port int, connConfig *ConnectionConfig) (*Service, error) {
 	// first check if corresponding PcpServerProtocolConnection obj exists or not
 	// Normalize IP address string before making key from it
 	serviceAddr, err := net.ResolveIPAddr("ip", serviceIP)
@@ -112,7 +114,7 @@ func (p *PcpCore) ListenPcp(serviceIP string, port int) (*Service, error) {
 	if !ok {
 		// need to create new service
 		// create new Pcp service
-		srv, err := newService(pConn, serviceAddr, port, pConn.OutputChan, pConn.sigOutputChan, pConn.serviceCloseSignal)
+		srv, err := newService(pConn, serviceAddr, port, pConn.OutputChan, pConn.sigOutputChan, pConn.serviceCloseSignal, connConfig)
 		if err != nil {
 			log.Println("Error creating service:", err)
 			return nil, err

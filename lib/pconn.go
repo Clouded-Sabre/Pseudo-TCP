@@ -88,15 +88,45 @@ func newPcpProtocolConnection(key string, isServer bool, protocolId int, serverA
 	return pConnection, nil
 }
 
-func (p *PcpProtocolConnection) dial(serverPort int) (*Connection, error) {
+func (p *PcpProtocolConnection) dial(serverPort int, connConfig *ConnectionConfig) (*Connection, error) {
 	// Choose a random client port
 	clientPort := p.getAvailableRandomClientPort()
 
 	// Create connection key
 	connKey := fmt.Sprintf("%d:%d", clientPort, serverPort)
 
+	connParam := &ConnectionParams{
+		Key:                      connKey,
+		IsServer:                 false,
+		RemoteAddr:               p.ServerAddr,
+		RemotePort:               int(serverPort),
+		LocalAddr:                p.LocalAddr,
+		LocalPort:                clientPort,
+		OutputChan:               p.OutputChan,
+		SigOutputChan:            p.sigOutputChan,
+		ConnCloseSignalChan:      p.ConnCloseSignal,
+		NewConnChannel:           nil,
+		ConnSignalFailedToParent: nil,
+
+		WindowScale:             connConfig.WindowScale,
+		PreferredMSS:            connConfig.PreferredMSS,
+		SackPermitSupport:       connConfig.SackPermitSupport,
+		SackOptionSupport:       connConfig.SackOptionSupport,
+		IdleTimeout:             connConfig.IdleTimeout,
+		KeepAliveEnabled:        connConfig.KeepAliveEnabled,
+		KeepaliveInterval:       connConfig.KeepaliveInterval,
+		MaxKeepaliveAttempts:    connConfig.MaxKeepaliveAttempts,
+		ResendInterval:          connConfig.ResendInterval,
+		MaxResendCount:          connConfig.MaxResendCount,
+		Debug:                   connConfig.Debug,
+		WindowSizeWithScale:     connConfig.WindowSizeWithScale,
+		ConnSignalRetryInterval: connConfig.ConnSignalRetryInterval,
+		ConnSignalRetry:         connConfig.ConnSignalRetry,
+	}
+
 	// Create a new temporary connection object for the 3-way handshake
-	newConn, err := NewConnection(connKey, false, p.ServerAddr, int(serverPort), p.LocalAddr, clientPort, p.OutputChan, p.sigOutputChan, p.ConnCloseSignal, nil, nil)
+	//newConn, err := NewConnection(connKey, false, p.ServerAddr, int(serverPort), p.LocalAddr, clientPort, p.OutputChan, p.sigOutputChan, p.ConnCloseSignal, nil, nil)
+	newConn, err := NewConnection(connParam)
 	if err != nil {
 		fmt.Printf("Error creating new connection to %s:%d because of error: %s\n", p.ServerAddr.IP.To4().String(), serverPort, err)
 		return nil, err
@@ -462,16 +492,16 @@ func (p *PcpProtocolConnection) handleCloseConnection() {
 			return
 		case conn := <-p.ConnCloseSignal:
 			// clear it from p.ConnectionMap
-			_, ok := p.ConnectionMap[conn.Key]
+			_, ok := p.ConnectionMap[conn.config.Key]
 			if !ok {
 				// connection does not exist in ConnectionMap
-				log.Printf("Pcp Client connection does not exist in %s:%d->%s:%d", conn.LocalAddr.(*net.IPAddr).IP.String(), conn.LocalPort, conn.RemoteAddr.(*net.IPAddr).IP.String(), conn.RemotePort)
+				log.Printf("Pcp Client connection does not exist in %s:%d->%s:%d", conn.config.LocalAddr.(*net.IPAddr).IP.String(), conn.config.LocalPort, conn.config.RemoteAddr.(*net.IPAddr).IP.String(), conn.config.RemotePort)
 				continue
 			}
 
 			// delete the clientConn from ConnectionMap
-			delete(p.ConnectionMap, conn.Key)
-			log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.LocalAddr.(*net.IPAddr).IP.String(), conn.LocalPort, conn.RemoteAddr.(*net.IPAddr).IP.String(), conn.RemotePort)
+			delete(p.ConnectionMap, conn.config.Key)
+			log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.config.LocalAddr.(*net.IPAddr).IP.String(), conn.config.LocalPort, conn.config.RemoteAddr.(*net.IPAddr).IP.String(), conn.config.RemotePort)
 
 			// if pcpProtocolConnection does not have any connection for 10 seconds, close it
 			// Start or reset the timer if ConnectionMap becomes empty
@@ -568,11 +598,11 @@ func (p *PcpProtocolConnection) getAvailableRandomClientPort() int {
 
 	// Populate the map with existing client ports
 	for _, conn := range p.ConnectionMap {
-		existingPorts[conn.LocalPort] = true
+		existingPorts[conn.config.LocalPort] = true
 	}
 
 	for _, conn := range p.tempConnectionMap {
-		existingPorts[conn.LocalPort] = true
+		existingPorts[conn.config.LocalPort] = true
 	}
 
 	// Generate a random port number until it's not in the existingPorts map

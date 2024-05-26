@@ -37,8 +37,36 @@ func init() {
 }
 
 func main() {
+	config.AppConfig, err = config.ReadConfig("config.yaml")
+	if err != nil {
+		log.Fatalln("Configurtion file error:", err)
+	}
+
+	connConfig := &lib.ConnectionConfig{
+		WindowScale:             config.AppConfig.WindowScale,
+		PreferredMSS:            config.AppConfig.PreferredMSS,
+		SackPermitSupport:       config.AppConfig.SackPermitSupport,
+		SackOptionSupport:       config.AppConfig.SackOptionSupport,
+		IdleTimeout:             config.AppConfig.IdleTimeout,
+		KeepAliveEnabled:        config.AppConfig.KeepAliveEnabled,
+		KeepaliveInterval:       config.AppConfig.KeepaliveInterval,
+		MaxKeepaliveAttempts:    config.AppConfig.MaxKeepaliveAttempts,
+		ResendInterval:          config.AppConfig.ResendInterval,
+		MaxResendCount:          config.AppConfig.MaxResendCount,
+		Debug:                   true,
+		WindowSizeWithScale:     config.AppConfig.WindowSizeWithScale,
+		ConnSignalRetryInterval: config.AppConfig.ConnSignalRetryInterval,
+		ConnSignalRetry:         config.AppConfig.ConnSignalRetry,
+	}
+
+	pcpCoreConfig := &lib.PcpCoreConfig{
+		ProtocolID:      uint8(config.AppConfig.ProtocolID),
+		PreferredMSS:    config.AppConfig.PreferredMSS,
+		PayloadPoolSize: config.AppConfig.PayloadPoolSize,
+	}
+
 	// Create PCP server
-	pcpCoreObj, err = lib.NewPcpCore("config.yaml")
+	pcpCoreObj, err = lib.NewPcpCore(pcpCoreConfig)
 	if err != nil {
 		log.Println("Error creating PCP server:", err)
 		return
@@ -52,7 +80,7 @@ func main() {
 	closeChan := make(chan struct{})
 
 	// Start the PCP server
-	srv, err := pcpCoreObj.ListenPcp(serverIP, serverPort)
+	srv, err := pcpCoreObj.ListenPcp(serverIP, serverPort, connConfig)
 	if err != nil {
 		log.Printf("PCP server error listening at %s:%d: %s", serverIP, serverPort, err)
 		return

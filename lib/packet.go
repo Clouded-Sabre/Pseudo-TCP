@@ -314,10 +314,10 @@ func NewPcpPacket(seqNum, ackNum uint32, flags uint8, data []byte, conn *Connect
 		}
 	}*/
 	newPacket := &PcpPacket{
-		SrcAddr:           conn.LocalAddr,
-		DestAddr:          conn.RemoteAddr,
-		SourcePort:        uint16(conn.LocalPort),
-		DestinationPort:   uint16(conn.RemotePort),
+		SrcAddr:           conn.config.LocalAddr,
+		DestAddr:          conn.config.RemoteAddr,
+		SourcePort:        uint16(conn.config.LocalPort),
+		DestinationPort:   uint16(conn.config.RemotePort),
 		SequenceNumber:    seqNum,
 		AcknowledgmentNum: ackNum,
 		Flags:             flags,

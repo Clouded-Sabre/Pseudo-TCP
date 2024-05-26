@@ -25,7 +25,34 @@ func main() {
 		iterationInterval = 15 // in seconds
 	)
 
-	pcpCoreObj, err := lib.NewPcpCore("config.yaml")
+	var err error
+	config.AppConfig, err = config.ReadConfig("config.yaml")
+	if err != nil {
+		log.Fatalln("Configurtion file error:", err)
+	}
+
+	connConfig := &lib.ConnectionConfig{
+		WindowScale:             config.AppConfig.WindowScale,
+		PreferredMSS:            config.AppConfig.PreferredMSS,
+		SackPermitSupport:       config.AppConfig.SackPermitSupport,
+		SackOptionSupport:       config.AppConfig.SackOptionSupport,
+		IdleTimeout:             config.AppConfig.IdleTimeout,
+		KeepAliveEnabled:        config.AppConfig.KeepAliveEnabled,
+		KeepaliveInterval:       config.AppConfig.KeepaliveInterval,
+		MaxKeepaliveAttempts:    config.AppConfig.MaxKeepaliveAttempts,
+		ResendInterval:          config.AppConfig.ResendInterval,
+		MaxResendCount:          config.AppConfig.MaxResendCount,
+		Debug:                   true,
+		WindowSizeWithScale:     config.AppConfig.WindowSizeWithScale,
+		ConnSignalRetryInterval: config.AppConfig.ConnSignalRetryInterval,
+		ConnSignalRetry:         config.AppConfig.ConnSignalRetry,
+	}
+	pcpCoreConfig := &lib.PcpCoreConfig{
+		ProtocolID:      uint8(config.AppConfig.ProtocolID),
+		PreferredMSS:    config.AppConfig.PreferredMSS,
+		PayloadPoolSize: config.AppConfig.PayloadPoolSize,
+	}
+	pcpCoreObj, err := lib.NewPcpCore(pcpCoreConfig)
 	if err != nil {
 		log.Println(err)
 		return
@@ -35,7 +62,7 @@ func main() {
 	buffer := make([]byte, config.AppConfig.PreferredMSS)
 	for j := 0; j < iteration; j++ {
 		// Dial to the server
-		conn, err := pcpCoreObj.DialPcp(*sourceIP, *serverIP, uint16(*serverPort))
+		conn, err := pcpCoreObj.DialPcp(*sourceIP, *serverIP, uint16(*serverPort), connConfig)
 		if err != nil {
 			fmt.Println("Error connecting:", err)
 			return

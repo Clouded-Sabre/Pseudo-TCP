@@ -25,10 +25,11 @@ type Service struct {
 	connSignalFailed          chan *Connection       // signal for closing temp connection due to openning signalling failed
 	wg                        sync.WaitGroup         // WaitGroup to synchronize goroutines
 	IsClosed                  bool                   // used to denote that the service is close so parent PCP Protocol connection won't forward more packets to it
+	connConfig                *ConnectionConfig      // Connection Config
 }
 
 // NewService creates a new service listening on the specified port.
-func newService(pcpProtocolConn *PcpProtocolConnection, serviceAddr net.Addr, port int, outputChan, sigOutputChan chan *PcpPacket, serviceCloseSignal chan *Service) (*Service, error) {
+func newService(pcpProtocolConn *PcpProtocolConnection, serviceAddr net.Addr, port int, outputChan, sigOutputChan chan *PcpPacket, serviceCloseSignal chan *Service, connConfig *ConnectionConfig) (*Service, error) {
 	newSrv := &Service{
 		pcpProtocolConnection: pcpProtocolConn,
 		ServiceAddr:           serviceAddr,
@@ -44,6 +45,7 @@ func newService(pcpProtocolConn *PcpProtocolConnection, serviceAddr net.Addr, po
 		serviceCloseSignal:    serviceCloseSignal,
 		closeSignal:           make(chan struct{}),
 		wg:                    sync.WaitGroup{},
+		connConfig:            connConfig,
 	}
 
 	// Start goroutines
@@ -64,23 +66,23 @@ func (s *Service) Accept() (*Connection, error) {
 		case newConn := <-s.newConnChannel: // Wait for new connection to come
 
 			// Check if the connection exists in the temporary connection map
-			_, ok := s.tempConnMap[newConn.Key]
+			_, ok := s.tempConnMap[newConn.config.Key]
 			if !ok {
-				log.Printf("Received ACK packet for non-existent connection: %s. Ignore it!\n", newConn.Key)
+				log.Printf("Received ACK packet for non-existent connection: %s. Ignore it!\n", newConn.config.Key)
 				continue
 			}
 
 			// Remove the connection from the temporary connection map
-			delete(s.tempConnMap, newConn.Key)
+			delete(s.tempConnMap, newConn.config.Key)
 
 			// adding the connection to ConnectionMap
-			s.connectionMap[newConn.Key] = newConn
+			s.connectionMap[newConn.config.Key] = newConn
 
 			// start go routine to handle the connection traffic
 			newConn.Wg.Add(1)
 			go newConn.HandleIncomingPackets()
 
-			log.Printf("New connection is ready: %s\n", newConn.Key)
+			log.Printf("New connection is ready: %s\n", newConn.config.Key)
 
 			return newConn, nil
 		}
@@ -190,7 +192,36 @@ func (s *Service) handleSynPacket(packet *PcpPacket) {
 	}
 
 	// Create a new temporary connection object for the 3-way handshake
-	newConn, err := NewConnection(connKey, true, sourceAddr, int(sourcePort), s.ServiceAddr, s.Port, s.OutputChan, s.sigOutputChan, s.ConnCloseSignal, s.newConnChannel, s.connSignalFailed)
+	connParams := &ConnectionParams{
+		Key:                      connKey,
+		IsServer:                 true,
+		RemoteAddr:               sourceAddr,
+		RemotePort:               int(sourcePort),
+		LocalAddr:                s.ServiceAddr,
+		LocalPort:                s.Port,
+		OutputChan:               s.OutputChan,
+		SigOutputChan:            s.sigOutputChan,
+		ConnCloseSignalChan:      s.ConnCloseSignal,
+		NewConnChannel:           s.newConnChannel,
+		ConnSignalFailedToParent: s.connSignalFailed,
+
+		WindowScale:             s.connConfig.WindowScale,
+		PreferredMSS:            s.connConfig.PreferredMSS,
+		SackPermitSupport:       s.connConfig.SackPermitSupport,
+		SackOptionSupport:       s.connConfig.SackOptionSupport,
+		IdleTimeout:             s.connConfig.IdleTimeout,
+		KeepAliveEnabled:        s.connConfig.KeepAliveEnabled,
+		KeepaliveInterval:       s.connConfig.KeepaliveInterval,
+		MaxKeepaliveAttempts:    s.connConfig.MaxKeepaliveAttempts,
+		ResendInterval:          s.connConfig.ResendInterval,
+		MaxResendCount:          s.connConfig.MaxResendCount,
+		Debug:                   s.connConfig.Debug,
+		WindowSizeWithScale:     s.connConfig.WindowSizeWithScale,
+		ConnSignalRetryInterval: s.connConfig.ConnSignalRetryInterval,
+		ConnSignalRetry:         s.connConfig.ConnSignalRetry,
+	}
+	//newConn, err := NewConnection(connKey, true, sourceAddr, int(sourcePort), s.ServiceAddr, s.Port, s.OutputChan, s.sigOutputChan, s.ConnCloseSignal, s.newConnChannel, s.connSignalFailed)
+	newConn, err := NewConnection(connParams)
 	if err != nil {
 		log.Printf("Error creating new connection for %s: %s\n", connKey, err)
 		return
@@ -252,26 +283,26 @@ func (s *Service) handleCloseConnections() {
 			return
 		case conn = <-s.connSignalFailed:
 			// clear it from p.ConnectionMap
-			_, ok := s.connectionMap[conn.Key] // just make sure it really in ConnectionMap for debug purpose
+			_, ok := s.connectionMap[conn.config.Key] // just make sure it really in ConnectionMap for debug purpose
 			if !ok {
 				// connection does not exist in ConnectionMap
-				log.Printf("Pcp connection does not exist in %s:%d->%s:%d", conn.LocalAddr.(*net.IPAddr).IP.String(), conn.LocalPort, conn.RemoteAddr.(*net.IPAddr).IP.String(), conn.RemotePort)
+				log.Printf("Pcp connection does not exist in %s:%d->%s:%d", conn.config.LocalAddr.(*net.IPAddr).IP.String(), conn.config.LocalPort, conn.config.RemoteAddr.(*net.IPAddr).IP.String(), conn.config.RemotePort)
 				continue
 			}
-			log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.LocalAddr.(*net.IPAddr).IP.String(), conn.LocalPort, conn.RemoteAddr.(*net.IPAddr).IP.String(), conn.RemotePort)
+			log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.config.LocalAddr.(*net.IPAddr).IP.String(), conn.config.LocalPort, conn.config.RemoteAddr.(*net.IPAddr).IP.String(), conn.config.RemotePort)
 			return
 		case conn = <-s.ConnCloseSignal:
 			// clear it from p.ConnectionMap
-			_, ok := s.connectionMap[conn.Key] // just make sure it really in ConnectionMap for debug purpose
+			_, ok := s.connectionMap[conn.config.Key] // just make sure it really in ConnectionMap for debug purpose
 			if !ok {
 				// connection does not exist in ConnectionMap
-				log.Printf("Pcp connection does not exist in %s:%d->%s:%d", conn.LocalAddr.(*net.IPAddr).IP.String(), conn.LocalPort, conn.RemoteAddr.(*net.IPAddr).IP.String(), conn.RemotePort)
+				log.Printf("Pcp connection does not exist in %s:%d->%s:%d", conn.config.LocalAddr.(*net.IPAddr).IP.String(), conn.config.LocalPort, conn.config.RemoteAddr.(*net.IPAddr).IP.String(), conn.config.RemotePort)
 				continue
 			}
 
 			// delete the clientConn from ConnectionMap
-			delete(s.connectionMap, conn.Key)
-			log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.LocalAddr.(*net.IPAddr).IP.String(), conn.LocalPort, conn.RemoteAddr.(*net.IPAddr).IP.String(), conn.RemotePort)
+			delete(s.connectionMap, conn.config.Key)
+			log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.config.LocalAddr.(*net.IPAddr).IP.String(), conn.config.LocalPort, conn.config.RemoteAddr.(*net.IPAddr).IP.String(), conn.config.RemotePort)
 		}
 
 	}
