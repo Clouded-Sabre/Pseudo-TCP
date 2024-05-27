@@ -12,58 +12,43 @@ import (
 )
 
 type Connection struct {
-	//Key                            string // connection key for easy reference
-	//isServer                       bool
-	//RemoteAddr                     net.Addr
-	//RemotePort                     int
-	//LocalAddr                      net.Addr
-	//LocalPort                      int
-	NextSequenceNumber             uint32 // the SEQ sequence number of the next outgoing packet
-	LastAckNumber                  uint32 // the last acknowleged incoming packet
-	WindowSize                     uint16
-	InitialSeq                     uint32          // connection's initial SEQ
-	InitialPeerSeq                 uint32          // the initial SEQ from Peer
-	TermStartSeq, TermStartPeerSeq uint32          // Seq and Peer Seq when 4-way termination starts
-	InputChannel                   chan *PcpPacket // per connection packet input channel
-	//OutputChan, sigOutputChan      chan *PcpPacket // overall output channel shared by all connections
-	ReadChannel            chan *PcpPacket // for connection read function
-	ReadDeadline           time.Time       // ReadDeadline for non-blocking read
-	TerminationCallerState uint            // 4-way termination caller states
-	TerminationRespState   uint            // 4-way termination responder states
-	InitClientState        uint            // 3-way handshake state of the client
-	InitServerState        uint            // 3-way handshake state of the Server
-	ConnSignalTimer        *time.Timer     // Timer for 3-way handshake and 4-way connection close
-	ConnSignalRetryCount   int             // retry count for 3-way handshake and 4-way connection close
-	TcpOptions             *Options        // tcp options
-	WriteOnHold            bool            // true if 4-way termination starts
-	IsOpenConnection       bool            //false if in 3-way handshake
-	IsBidirectional        bool            // already seen normal packets from peer
-	//KeepAliveEnabled               bool            // whether keep alive is enabled
-	KeepaliveTimer      *time.Timer   // Timer for keepalive mechanism
-	KeepaliveTimerMutex sync.Mutex    // mutex for KeepaliveTimer
-	IdleTimeout         time.Duration // Idle timeout duration
-	TimeoutCount        int           // Timeout count for keepalive
-	KeepaliveInterval   time.Duration // Interval between keepalive attempts
-	//MaxKeepaliveAttempts           int             // Maximum number of keepalive attempts before marking the connection as dead
-	IsKeepAliveInProgress bool          // denote if keepalive probe is in process or not
-	IsDead                bool          // mark the connection is idle timed out and failed keepalive probe
-	ResendPackets         ResendPackets // data structure to hold sent packets which are not acknowledged yet
-	ResendInterval        time.Duration // packet resend interval
-	resendTimer           *time.Timer   // resend timer to trigger resending packet every ResendInterval
-	resendTimerMutex      sync.Mutex    // mutex for resendTimer
-	RevPacketCache        PacketGapMap  // Cache for received packets who has gap before it due to packet loss or out-of-order
-	IsClosed              bool          // denote that the conneciton is closed so that no packets should be accepted
-
-	//connCloseSignalChan      chan *Connection // send close connection signal to parent service or pConnection to clear it
-	//connSignalFailedToParent chan *Connection // used to send signal to parrent to notify connection establishment failed
-	//newConnChannel           chan *Connection // server only. send new connection signal to parent service to signal successful 3-way handshake
-	closeSigal       chan struct{}  // used to send close signal to HandleIncomingPackets go routine to stop when keepalive failed
-	ConnSignalFailed chan struct{}  // used to notify Connection signalling process (3-way handshake and 4-way termination) failed
-	Wg               sync.WaitGroup // wait group for go routine
-	//Debug                    bool             // whether debug mode is on
-	//WindowSizeWithScale      int              // Window Size with scale
-	config *ConnectionConfig // connection config
-	Params *ConnectionParams
+	NextSequenceNumber             uint32            // the SEQ sequence number of the next outgoing packet
+	LastAckNumber                  uint32            // the last acknowleged incoming packet
+	WindowSize                     uint16            // PCP windows size
+	InitialSeq                     uint32            // connection's initial SEQ
+	InitialPeerSeq                 uint32            // the initial SEQ from Peer
+	TermStartSeq, TermStartPeerSeq uint32            // Seq and Peer Seq when 4-way termination starts
+	InputChannel                   chan *PcpPacket   // per connection packet input channel
+	ReadChannel                    chan *PcpPacket   // for connection read function
+	ReadDeadline                   time.Time         // ReadDeadline for non-blocking read
+	TerminationCallerState         uint              // 4-way termination caller states
+	TerminationRespState           uint              // 4-way termination responder states
+	InitClientState                uint              // 3-way handshake state of the client
+	InitServerState                uint              // 3-way handshake state of the Server
+	ConnSignalTimer                *time.Timer       // Timer for 3-way handshake and 4-way connection close
+	ConnSignalRetryCount           int               // retry count for 3-way handshake and 4-way connection close
+	TcpOptions                     *Options          // tcp options
+	WriteOnHold                    bool              // true if 4-way termination starts
+	IsOpenConnection               bool              //false if in 3-way handshake
+	IsBidirectional                bool              // already seen normal packets from peer
+	KeepaliveTimer                 *time.Timer       // Timer for keepalive mechanism
+	KeepaliveTimerMutex            sync.Mutex        // mutex for KeepaliveTimer
+	IdleTimeout                    time.Duration     // Idle timeout duration
+	TimeoutCount                   int               // Timeout count for keepalive
+	KeepaliveInterval              time.Duration     // Interval between keepalive attempts
+	IsKeepAliveInProgress          bool              // denote if keepalive probe is in process or not
+	IsDead                         bool              // mark the connection is idle timed out and failed keepalive probe
+	ResendPackets                  ResendPackets     // data structure to hold sent packets which are not acknowledged yet
+	ResendInterval                 time.Duration     // packet resend interval
+	resendTimer                    *time.Timer       // resend timer to trigger resending packet every ResendInterval
+	resendTimerMutex               sync.Mutex        // mutex for resendTimer
+	RevPacketCache                 PacketGapMap      // Cache for received packets who has gap before it due to packet loss or out-of-order
+	IsClosed                       bool              // denote that the conneciton is closed so that no packets should be accepted
+	closeSigal                     chan struct{}     // used to send close signal to HandleIncomingPackets go routine to stop when keepalive failed
+	ConnSignalFailed               chan struct{}     // used to notify Connection signalling process (3-way handshake and 4-way termination) failed
+	Wg                             sync.WaitGroup    // wait group for go routine
+	config                         *ConnectionConfig // connection config
+	Params                         *ConnectionParams // connection parameters
 }
 
 type Options struct {
@@ -88,17 +73,18 @@ type SACKOption struct {
 }
 
 type ConnectionParams struct {
-	Key                      string
-	IsServer                 bool
-	RemoteAddr, LocalAddr    net.Addr
-	RemotePort, LocalPort    int
-	OutputChan               chan *PcpPacket
-	SigOutputChan            chan *PcpPacket
-	ConnCloseSignalChan      chan *Connection
-	NewConnChannel           chan *Connection
-	ConnSignalFailedToParent chan *Connection
+	Key                      string           // connection key for easy reference
+	IsServer                 bool             // server or client role
+	RemoteAddr, LocalAddr    net.Addr         // IP addresses
+	RemotePort, LocalPort    int              // port number
+	OutputChan               chan *PcpPacket  // overall output channel shared by all connections
+	SigOutputChan            chan *PcpPacket  // overall connection signalling output channel shared by all connections
+	ConnCloseSignalChan      chan *Connection // send close connection signal to parent service or pConnection to clear it
+	NewConnChannel           chan *Connection // server only. send new connection signal to parent service to signal successful 3-way handshake
+	ConnSignalFailedToParent chan *Connection // used to send signal to parrent to notify connection establishment failed
 }
 
+// connection config - see config file for detailed explanation
 type ConnectionConfig struct {
 	WindowScale             int
 	PreferredMSS            int
@@ -110,7 +96,7 @@ type ConnectionConfig struct {
 	MaxKeepaliveAttempts    int
 	ResendInterval          int
 	MaxResendCount          int
-	Debug                   bool
+	Debug                   bool // whether debug mode is on
 	WindowSizeWithScale     int
 	ConnSignalRetryInterval int
 	ConnSignalRetry         int
@@ -126,14 +112,8 @@ func NewConnection(connParams *ConnectionParams, connConfig *ConnectionConfig) (
 		TimestampEnabled:      true,
 	}
 	newConn := &Connection{
-		config: connConfig,
-		Params: connParams,
-		//Key:                connConfig.Key,
-		//isServer:           connConfig.IsServer,
-		//RemoteAddr:         connConfig.RemoteAddr,
-		//RemotePort:         connConfig.RemotePort,
-		//LocalAddr:          connConfig.LocalAddr,
-		//LocalPort:          connConfig.LocalPort,
+		config:             connConfig,
+		Params:             connParams,
 		NextSequenceNumber: isn,
 		InitialSeq:         isn,
 		LastAckNumber:      0,
@@ -141,26 +121,18 @@ func NewConnection(connParams *ConnectionParams, connConfig *ConnectionConfig) (
 		InputChannel:       make(chan *PcpPacket),
 		ReadChannel:        make(chan *PcpPacket),
 		ReadDeadline:       time.Time{},
-		//OutputChan:         connConfig.OutputChan,
-		//sigOutputChan:      connConfig.SigOutputChan,
-		// all the rest variables keep there init value
-		TcpOptions:  options,
-		IdleTimeout: time.Second * time.Duration(connConfig.IdleTimeout),
-		//KeepAliveEnabled:     connConfig.KeepAliveEnabled,
-		KeepaliveInterval: time.Second * time.Duration(connConfig.KeepaliveInterval),
-		//MaxKeepaliveAttempts: connConfig.MaxKeepaliveAttempts,
-		ResendPackets:  *NewResendPackets(),
-		ResendInterval: time.Duration(connConfig.ResendInterval) * time.Millisecond,
-		RevPacketCache: *NewPacketGapMap(),
 
-		//connCloseSignalChan:      connConfig.ConnCloseSignalChan,
-		//connSignalFailedToParent: connConfig.ConnSignalFailedToParent,
-		//newConnChannel:           connConfig.NewConnChannel,
+		// all the rest variables keep there init value
+		TcpOptions:        options,
+		IdleTimeout:       time.Second * time.Duration(connConfig.IdleTimeout),
+		KeepaliveInterval: time.Second * time.Duration(connConfig.KeepaliveInterval),
+		ResendPackets:     *NewResendPackets(),
+		ResendInterval:    time.Duration(connConfig.ResendInterval) * time.Millisecond,
+		RevPacketCache:    *NewPacketGapMap(),
+
 		closeSigal:       make(chan struct{}),
 		ConnSignalFailed: make(chan struct{}),
 		Wg:               sync.WaitGroup{},
-		//Debug:                    connConfig.Debug,
-		//WindowSizeWithScale:      connConfig.WindowSizeWithScale,
 	}
 
 	if connConfig.KeepAliveEnabled {
