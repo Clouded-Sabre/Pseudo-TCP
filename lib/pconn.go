@@ -116,26 +116,11 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *ConnectionConfi
 		ConnCloseSignalChan:      p.ConnCloseSignal,
 		NewConnChannel:           nil,
 		ConnSignalFailedToParent: nil,
-
-		WindowScale:             connConfig.WindowScale,
-		PreferredMSS:            connConfig.PreferredMSS,
-		SackPermitSupport:       connConfig.SackPermitSupport,
-		SackOptionSupport:       connConfig.SackOptionSupport,
-		IdleTimeout:             connConfig.IdleTimeout,
-		KeepAliveEnabled:        connConfig.KeepAliveEnabled,
-		KeepaliveInterval:       connConfig.KeepaliveInterval,
-		MaxKeepaliveAttempts:    connConfig.MaxKeepaliveAttempts,
-		ResendInterval:          connConfig.ResendInterval,
-		MaxResendCount:          connConfig.MaxResendCount,
-		Debug:                   connConfig.Debug,
-		WindowSizeWithScale:     connConfig.WindowSizeWithScale,
-		ConnSignalRetryInterval: connConfig.ConnSignalRetryInterval,
-		ConnSignalRetry:         connConfig.ConnSignalRetry,
 	}
 
 	// Create a new temporary connection object for the 3-way handshake
 	//newConn, err := NewConnection(connKey, false, p.ServerAddr, int(serverPort), p.LocalAddr, clientPort, p.OutputChan, p.sigOutputChan, p.ConnCloseSignal, nil, nil)
-	newConn, err := NewConnection(connParam)
+	newConn, err := NewConnection(connParam, connConfig)
 	if err != nil {
 		fmt.Printf("Error creating new connection to %s:%d because of error: %s\n", p.ServerAddr.IP.To4().String(), serverPort, err)
 		return nil, err
@@ -501,16 +486,16 @@ func (p *PcpProtocolConnection) handleCloseConnection() {
 			return
 		case conn := <-p.ConnCloseSignal:
 			// clear it from p.ConnectionMap
-			_, ok := p.ConnectionMap[conn.config.Key]
+			_, ok := p.ConnectionMap[conn.Params.Key]
 			if !ok {
 				// connection does not exist in ConnectionMap
-				log.Printf("Pcp Client connection does not exist in %s:%d->%s:%d", conn.config.LocalAddr.(*net.IPAddr).IP.String(), conn.config.LocalPort, conn.config.RemoteAddr.(*net.IPAddr).IP.String(), conn.config.RemotePort)
+				log.Printf("Pcp Client connection does not exist in %s:%d->%s:%d", conn.Params.LocalAddr.(*net.IPAddr).IP.String(), conn.Params.LocalPort, conn.Params.RemoteAddr.(*net.IPAddr).IP.String(), conn.Params.RemotePort)
 				continue
 			}
 
 			// delete the clientConn from ConnectionMap
-			delete(p.ConnectionMap, conn.config.Key)
-			log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.config.LocalAddr.(*net.IPAddr).IP.String(), conn.config.LocalPort, conn.config.RemoteAddr.(*net.IPAddr).IP.String(), conn.config.RemotePort)
+			delete(p.ConnectionMap, conn.Params.Key)
+			log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.Params.LocalAddr.(*net.IPAddr).IP.String(), conn.Params.LocalPort, conn.Params.RemoteAddr.(*net.IPAddr).IP.String(), conn.Params.RemotePort)
 
 			// if pcpProtocolConnection does not have any connection for 10 seconds, close it
 			// Start or reset the timer if ConnectionMap becomes empty
@@ -607,11 +592,11 @@ func (p *PcpProtocolConnection) getAvailableRandomClientPort() int {
 
 	// Populate the map with existing client ports
 	for _, conn := range p.ConnectionMap {
-		existingPorts[conn.config.LocalPort] = true
+		existingPorts[conn.Params.LocalPort] = true
 	}
 
 	for _, conn := range p.tempConnectionMap {
-		existingPorts[conn.config.LocalPort] = true
+		existingPorts[conn.Params.LocalPort] = true
 	}
 
 	// Generate a random port number until it's not in the existingPorts map

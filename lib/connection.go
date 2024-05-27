@@ -62,7 +62,8 @@ type Connection struct {
 	Wg               sync.WaitGroup // wait group for go routine
 	//Debug                    bool             // whether debug mode is on
 	//WindowSizeWithScale      int              // Window Size with scale
-	config *ConnectionParams // connection config
+	config *ConnectionConfig // connection config
+	Params *ConnectionParams
 }
 
 type Options struct {
@@ -96,20 +97,6 @@ type ConnectionParams struct {
 	ConnCloseSignalChan      chan *Connection
 	NewConnChannel           chan *Connection
 	ConnSignalFailedToParent chan *Connection
-	WindowScale              int
-	PreferredMSS             int
-	SackPermitSupport        bool
-	SackOptionSupport        bool
-	IdleTimeout              int
-	KeepAliveEnabled         bool
-	KeepaliveInterval        int
-	MaxKeepaliveAttempts     int
-	ResendInterval           int
-	MaxResendCount           int
-	Debug                    bool
-	WindowSizeWithScale      int
-	ConnSignalRetryInterval  int
-	ConnSignalRetry          int
 }
 
 type ConnectionConfig struct {
@@ -129,7 +116,7 @@ type ConnectionConfig struct {
 	ConnSignalRetry         int
 }
 
-func NewConnection(connConfig *ConnectionParams) (*Connection, error) {
+func NewConnection(connParams *ConnectionParams, connConfig *ConnectionConfig) (*Connection, error) {
 	isn, _ := GenerateISN()
 	options := &Options{
 		WindowScaleShiftCount: uint8(connConfig.WindowScale),
@@ -140,6 +127,7 @@ func NewConnection(connConfig *ConnectionParams) (*Connection, error) {
 	}
 	newConn := &Connection{
 		config: connConfig,
+		Params: connParams,
 		//Key:                connConfig.Key,
 		//isServer:           connConfig.IsServer,
 		//RemoteAddr:         connConfig.RemoteAddr,
@@ -196,7 +184,7 @@ func (c *Connection) HandleIncomingPackets() {
 		select {
 		case <-c.closeSigal:
 			// connection close signal received. quit this go routine
-			log.Printf("Closing HandleIncomingPackets for connection %s\n", c.config.Key)
+			log.Printf("Closing HandleIncomingPackets for connection %s\n", c.Params.Key)
 			return
 		case packet = <-c.InputChannel:
 			if c.config.Debug && packet.chunk != nil {
@@ -280,7 +268,7 @@ func (c *Connection) HandleIncomingPackets() {
 					//ignore FIN packet in other scenario
 					continue
 				}
-				if !c.config.IsServer && isSYN && !c.IsBidirectional {
+				if !c.Params.IsServer && isSYN && !c.IsBidirectional {
 					//fmt.Println("is SYN!", packet.SequenceNumber, c.InitialPeerSeq)
 					if isACK && packet.SequenceNumber == c.InitialPeerSeq && packet.AcknowledgmentNum == SeqIncrement(c.InitialSeq) {
 						// normally on client side SYN-ACK message should be handled in Dial
@@ -351,13 +339,13 @@ func (c *Connection) Handle3WayHandshake() {
 
 				// Check if the connection's 3-way handshake state is correct
 				if c.InitServerState+1 != AckReceived {
-					log.Printf("3-way handshake state of connection %s is %d, but we received ACK message. Ignore!\n", c.config.Key, c.InitServerState)
+					log.Printf("3-way handshake state of connection %s is %d, but we received ACK message. Ignore!\n", c.Params.Key, c.InitServerState)
 					continue
 				}
 				c.StopConnSignalTimer() // stops Connection Signal Retry Timer
 				// 3-way handshaking completed successfully
 				// send signal to service for new connection established
-				c.config.NewConnChannel <- c
+				c.Params.NewConnChannel <- c
 				//c.expectedSeqNum don't change
 				c.InitServerState = 0 // reset it
 				c.IsOpenConnection = true
@@ -390,7 +378,7 @@ func (c *Connection) acknowledge() {
 	// prepare a PcpPacket for acknowledging the received packet
 	ackPacket := NewPcpPacket(c.NextSequenceNumber, c.LastAckNumber, ACKFlag, nil, c)
 	// Send the acknowledgment packet to the other end
-	c.config.OutputChan <- ackPacket
+	c.Params.OutputChan <- ackPacket
 }
 
 // Handle data packet function for Pcp connection
@@ -596,7 +584,7 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 		}
 
 		c.NextSequenceNumber = SeqIncrementBy(c.NextSequenceNumber, uint32(segmentLength)) // Update sequence number. Implicit modulo included
-		c.config.OutputChan <- packet
+		c.Params.OutputChan <- packet
 		//fmt.Println("buffer length is", len(buffer))
 		if c.config.Debug && packet.chunk != nil {
 			packet.chunk.AddToChannel("c.OutputChan")
@@ -710,7 +698,7 @@ func (c *Connection) ClearConnResource() {
 			}
 			log.Printf("Released %d chunks from RevPacketCache\n", len(c.RevPacketCache.packets))
 		}
-		log.Printf("Connection %s resource cleared.\n", c.config.Key)
+		log.Printf("Connection %s resource cleared.\n", c.Params.Key)
 	}
 
 	// then send close connection signal to parent to clear connection resource
@@ -721,7 +709,7 @@ func (c *Connection) ClearConnResource() {
 			endOfConnClose()
 		}
 	}()
-	c.config.ConnCloseSignalChan <- c
+	c.Params.ConnCloseSignalChan <- c
 
 	endOfConnClose()
 }
@@ -764,7 +752,7 @@ func (c *Connection) resendLostPacket() {
 				if now.Sub(packetInfo.LastSentTime) >= c.ResendInterval {
 					// Resend the packet
 					log.Printf("One Packet resent with SEQ %d and payload length %d!\n", packetInfo.Data.SequenceNumber-c.InitialSeq, len(packetInfo.Data.Payload))
-					c.config.OutputChan <- packetInfo.Data
+					c.Params.OutputChan <- packetInfo.Data
 					// Update resend information
 					c.ResendPackets.UpdateSentPacket(seqNum)
 				}
@@ -808,7 +796,7 @@ func (c *Connection) sendKeepalivePacket() {
 	}
 
 	keepalivePacket.IsKeepAliveMassege = true
-	c.config.OutputChan <- keepalivePacket
+	c.Params.OutputChan <- keepalivePacket
 	fmt.Println("Sending keepalive packet...")
 	if c.config.Debug && keepalivePacket.chunk != nil {
 		keepalivePacket.chunk.PopCallStack()
@@ -837,7 +825,7 @@ func (c *Connection) startKeepaliveTimer() {
 	// Start the keepalive timer
 	c.KeepaliveTimer = time.AfterFunc(timeout, func() {
 		if c.TimeoutCount == c.config.MaxKeepaliveAttempts {
-			log.Printf("Connection %s idle timed out. Close it.\n", c.config.Key)
+			log.Printf("Connection %s idle timed out. Close it.\n", c.Params.Key)
 			// connection idle timed out. clear connection resoureces and close connection
 			c.ClearConnResource()
 
@@ -1004,7 +992,7 @@ func (c *Connection) UpdateResendPacketsOnAck(packet *PcpPacket) {
 func (c *Connection) InitSendSyn() {
 	synPacket := NewPcpPacket(c.InitialSeq, 0, SYNFlag, nil, c)
 	synPacket.IsOpenConnection = false
-	c.config.SigOutputChan <- synPacket
+	c.Params.SigOutputChan <- synPacket
 	c.InitClientState = SynSent
 }
 
@@ -1012,22 +1000,22 @@ func (c *Connection) InitSendSynAck() {
 	synAckPacket := NewPcpPacket(c.InitialSeq, SeqIncrement(c.InitialPeerSeq), SYNFlag|ACKFlag, nil, c)
 	synAckPacket.IsOpenConnection = false
 	// Send the SYN-ACK packet to the sender
-	c.config.SigOutputChan <- synAckPacket
+	c.Params.SigOutputChan <- synAckPacket
 	c.InitServerState = SynAckSent // set 3-way handshake state
 }
 
 func (c *Connection) InitSendAck() {
 	ackPacket := NewPcpPacket(SeqIncrement(c.InitialSeq), SeqIncrement(c.InitialPeerSeq), ACKFlag, nil, c)
 	ackPacket.IsOpenConnection = false
-	c.config.SigOutputChan <- ackPacket
+	c.Params.SigOutputChan <- ackPacket
 	c.InitClientState = AckSent
 }
 
 func (c *Connection) TermCallerSendFin() {
 	// Assemble FIN packet to be sent to the other end
 	finPacket := NewPcpPacket(c.TermStartSeq, c.TermStartPeerSeq, FINFlag|ACKFlag, nil, c)
-	if c.config.SigOutputChan != nil {
-		c.config.SigOutputChan <- finPacket
+	if c.Params.SigOutputChan != nil {
+		c.Params.SigOutputChan <- finPacket
 		// set 4-way termination state to CallerFINSent
 		c.TerminationCallerState = CallerFinSent
 	}
@@ -1036,8 +1024,8 @@ func (c *Connection) TermCallerSendFin() {
 func (c *Connection) TermCallerSendAck() {
 	ackPacket := NewPcpPacket(c.TermStartSeq+1, c.TermStartPeerSeq+1, ACKFlag, nil, c)
 	// Send the acknowledgment packet to the other end
-	if c.config.SigOutputChan != nil {
-		c.config.SigOutputChan <- ackPacket
+	if c.Params.SigOutputChan != nil {
+		c.Params.SigOutputChan <- ackPacket
 		// set 4-way termination state to CallerFINSent
 		c.TerminationCallerState = CallerAckSent
 	}
@@ -1046,8 +1034,8 @@ func (c *Connection) TermCallerSendAck() {
 func (c *Connection) TermRespSendFinAck() {
 	ackPacket := NewPcpPacket(c.TermStartSeq, c.TermStartPeerSeq, FINFlag|ACKFlag, nil, c)
 	// Send the acknowledgment packet to the other end
-	if c.config.SigOutputChan != nil {
-		c.config.SigOutputChan <- ackPacket
+	if c.Params.SigOutputChan != nil {
+		c.Params.SigOutputChan <- ackPacket
 		c.TerminationRespState = RespFinAckSent
 	}
 }
