@@ -129,6 +129,16 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *ConnectionConfi
 	// Add the new connection to the temporary connection map
 	p.tempConnectionMap[connKey] = newConn
 
+	// Add iptables rule to drop RST packets
+	if err := addIptablesRule(p.ServerAddr.IP.To4().String(), serverPort); err != nil {
+		log.Println("Error adding iptables rule:", err)
+		return nil, err
+	}
+	p.iptableRules = append(p.iptableRules, serverPort) // record it for later deletion of the rules when connection closes
+
+	// sleep for 200ms to make sure iptable rule takes effect
+	SleepForMs(p.config.IptableRuleDaley)
+
 	// Send SYN to server
 	newConn.InitSendSyn()
 	newConn.StartConnSignalTimer()
@@ -165,16 +175,6 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *ConnectionConfi
 
 				// Connection established, remove newConn from tempClientConnections, and place it into clientConnections pool
 				delete(p.tempConnectionMap, connKey)
-
-				// Add iptables rule to drop RST packets
-				if err := addIptablesRule(p.ServerAddr.IP.To4().String(), serverPort); err != nil {
-					log.Println("Error adding iptables rule:", err)
-					return nil, err
-				}
-				p.iptableRules = append(p.iptableRules, serverPort) // record it for later deletion of the rules when connection closes
-
-				// sleep for 200ms to make sure iptable rule takes effect
-				SleepForMs(p.config.IptableRuleDaley)
 
 				newConn.IsOpenConnection = true
 				newConn.TcpOptions.TimestampEnabled = packet.TcpOptions.TimestampEnabled

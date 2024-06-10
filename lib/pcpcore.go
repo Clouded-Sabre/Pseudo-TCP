@@ -126,6 +126,8 @@ func (p *PcpCore) ListenPcp(serviceIP string, port int, pcpConfig *PcpProtocolCo
 			return nil, err
 		}
 
+		SleepForMs(500) // sleep for 500ms to make sure iptables rule takes effect
+
 		// add it to ServiceMap
 		pConn.ServiceMap[port] = srv
 
@@ -134,29 +136,6 @@ func (p *PcpCore) ListenPcp(serviceIP string, port int, pcpConfig *PcpProtocolCo
 		err = fmt.Errorf("%s:%d is already taken", serviceIP, port)
 		return nil, err
 	}
-}
-
-// addIptablesRule adds an iptables rule to drop RST packets originating from the given IP and port.
-func addServerIptablesRule(ip string, port int) error {
-	cmd := exec.Command("iptables", "-A", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-s", ip, "--sport", strconv.Itoa(port), "-j", "DROP")
-	if err := cmd.Run(); err != nil {
-		return err
-	}
-	return nil
-}
-
-// removeIptablesRule removes the iptables rule that was added for dropping RST packets.
-func removeServerIptablesRule(ip string, port int) error {
-	// Construct the command to delete the iptables rule
-	cmd := exec.Command("iptables", "-D", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-s", ip, "--sport", strconv.Itoa(port), "-j", "DROP")
-
-	// Execute the command to delete the iptables rule
-	if err := cmd.Run(); err != nil {
-		// If there is an error executing the command, return the error
-		return err
-	}
-
-	return nil
 }
 
 func (p *PcpCore) handleClosePConnConnection() {
@@ -209,6 +188,29 @@ func (p *PcpCore) Close() error {
 	close(p.pConnCloseSignal)
 
 	log.Println("Pcp core closed gracefully.")
+
+	return nil
+}
+
+// addIptablesRule adds an iptables rule to drop RST packets originating from the given IP and port.
+func addServerIptablesRule(ip string, port int) error {
+	cmd := exec.Command("iptables", "-A", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-s", ip, "--sport", strconv.Itoa(port), "-j", "DROP")
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// removeIptablesRule removes the iptables rule that was added for dropping RST packets.
+func removeServerIptablesRule(ip string, port int) error {
+	// Construct the command to delete the iptables rule
+	cmd := exec.Command("iptables", "-D", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-s", ip, "--sport", strconv.Itoa(port), "-j", "DROP")
+
+	// Execute the command to delete the iptables rule
+	if err := cmd.Run(); err != nil {
+		// If there is an error executing the command, return the error
+		return err
+	}
 
 	return nil
 }
