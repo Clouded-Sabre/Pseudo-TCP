@@ -93,6 +93,7 @@ func (s *Service) handleIncomingPackets() {
 	// Decrease WaitGroup counter when the goroutine completes
 	defer s.wg.Done()
 
+	var fp int
 	for {
 		select {
 		case <-s.closeSignal:
@@ -101,8 +102,8 @@ func (s *Service) handleIncomingPackets() {
 			return
 		case packet := <-s.InputChannel:
 			if PoolDebug && packet.GetChunkReference() != nil {
-				packet.GetChunkReference().RemoveFromChannel()
-				packet.GetChunkReference().AddCallStack("service.handleServicePackets")
+				packet.GetChunkReference().TickChannel()
+				fp = packet.GetChunkReference().AddFootPrint("service.handleServicePackets")
 			}
 			// Extract SYN and ACK flags from the packet
 			isSYN := packet.Flags&SYNFlag != 0
@@ -115,7 +116,7 @@ func (s *Service) handleIncomingPackets() {
 				s.handleDataPacket(packet)
 			}
 			if PoolDebug && packet.GetChunkReference() != nil {
-				packet.GetChunkReference().PopCallStack()
+				packet.GetChunkReference().TickFootPrint(fp)
 			}
 		}
 	}
@@ -123,8 +124,9 @@ func (s *Service) handleIncomingPackets() {
 
 // handleDataPacket forward Data packet to corresponding open connection if present.
 func (s *Service) handleDataPacket(packet *PcpPacket) {
+	var fp int
 	if PoolDebug && packet.GetChunkReference() != nil {
-		packet.GetChunkReference().AddCallStack("service.handleDataPacket")
+		fp = packet.GetChunkReference().AddFootPrint("service.handleDataPacket")
 	}
 	// Extract destination IP and port from the packet
 	sourceIP := packet.SrcAddr.(*net.IPAddr).IP.String()
@@ -137,11 +139,11 @@ func (s *Service) handleDataPacket(packet *PcpPacket) {
 	conn, ok := s.connectionMap[connKey]
 	if ok && !conn.IsClosed {
 		// Dispatch the packet to the corresponding connection's input channel
-		conn.InputChannel <- packet
 		if PoolDebug && packet.GetChunkReference() != nil {
-			packet.GetChunkReference().AddToChannel("Conn.InputChannel")
-			packet.GetChunkReference().PopCallStack()
+			packet.GetChunkReference().TickFootPrint(fp)
+			packet.GetChunkReference().AddChannel("Conn.InputChannel")
 		}
+		conn.InputChannel <- packet
 		return
 	}
 
@@ -150,11 +152,11 @@ func (s *Service) handleDataPacket(packet *PcpPacket) {
 	if ok && !tempConn.IsClosed {
 		if len(packet.Payload) == 0 && packet.SequenceNumber-tempConn.InitialPeerSeq < 2 {
 			// Dispatch the packet to the corresponding connection's input channel
-			tempConn.InputChannel <- packet
 			if PoolDebug && packet.GetChunkReference() != nil {
-				packet.GetChunkReference().AddToChannel("TempConn.InputChannel")
-				packet.GetChunkReference().PopCallStack()
+				packet.GetChunkReference().TickFootPrint(fp)
+				packet.GetChunkReference().AddChannel("TempConn.InputChannel")
 			}
+			tempConn.InputChannel <- packet
 			return
 		} else if len(packet.Payload) > 0 {
 			// since the connection is not ready yet, discard the data packet for the time being

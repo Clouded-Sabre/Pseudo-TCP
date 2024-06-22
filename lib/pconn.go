@@ -204,8 +204,8 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *ConnectionConfi
 
 func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	var (
-		err error
-		n   int
+		err   error
+		n, fp int
 	)
 	// Set a read deadline to ensure non-blocking behavior
 	p.ClientConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // Example timeout of 100 milliseconds
@@ -250,7 +250,7 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	//fmt.Printf("Got packet:\n %+v\n", packet)
 
 	if PoolDebug && packet.GetChunkReference() != nil {
-		packet.GetChunkReference().AddCallStack("pcpProtocolConn.handleIncomingPackets")
+		fp = packet.GetChunkReference().AddFootPrint("pcpProtocolConn.handleIncomingPackets")
 	}
 
 	// Extract destination IP and port from the packet
@@ -265,11 +265,13 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	conn, ok := p.ConnectionMap[connKey]
 	if ok && !conn.IsClosed {
 		// open connection. Dispatch the packet to the corresponding connection's input channel
-		conn.InputChannel <- packet
 		if PoolDebug && packet.GetChunkReference() != nil {
-			packet.GetChunkReference().AddToChannel("Conn.InputChannel")
-			packet.GetChunkReference().PopCallStack()
+			packet.GetChunkReference().TickFootPrint(fp)
+			packet.GetChunkReference().AddChannel("Conn.InputChannel")
+
 		}
+		conn.InputChannel <- packet
+
 		return
 	}
 
@@ -278,11 +280,11 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	if ok && !tempConn.IsClosed {
 		if len(packet.Payload) == 0 && packet.AcknowledgmentNum-tempConn.InitialSeq < 2 {
 			// forward to that connection's input channel
-			tempConn.InputChannel <- packet
 			if PoolDebug && packet.GetChunkReference() != nil {
-				packet.GetChunkReference().AddToChannel("TempConn.InputChannel")
-				packet.GetChunkReference().PopCallStack()
+				packet.GetChunkReference().TickFootPrint(fp)
+				packet.GetChunkReference().AddChannel("TempConn.InputChannel")
 			}
+			tempConn.InputChannel <- packet
 			return
 		} else if len(packet.Payload) > 0 {
 			// since the connection is not ready yet, discard the data packet for the time being
@@ -297,6 +299,8 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 }
 
 func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
+	var fp int
+
 	pcpFrame := buffer[TcpPseudoHeaderLength:] // the first lib.TcpPseudoHeaderLength bytes are reserved for Tcp pseudo header
 	// Set a read deadline to ensure non-blocking behavior
 	p.ServerConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // Example timeout of 100 milliseconds
@@ -328,7 +332,7 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 	}
 
 	if PoolDebug && packet.GetChunkReference() != nil {
-		packet.GetChunkReference().AddCallStack("pcpProtocolConn.handleIncomingPackets")
+		fp = packet.GetChunkReference().AddFootPrint("pcpProtocolConn.handleIncomingPackets")
 	}
 
 	destPort := packet.DestinationPort
@@ -353,8 +357,8 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 
 	// Dispatch the packet to the corresponding service's input channel
 	if PoolDebug && packet.GetChunkReference() != nil {
-		packet.GetChunkReference().AddToChannel("Service.InputChannel")
-		packet.GetChunkReference().PopCallStack()
+		packet.GetChunkReference().TickFootPrint(fp)
+		packet.GetChunkReference().AddChannel("Service.InputChannel")
 	}
 	service.InputChannel <- packet
 }
@@ -397,6 +401,7 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 		lostCount  = 0
 		frameBytes = make([]byte, p.config.PreferredMSS+TcpHeaderLength+TcpOptionsMaxLength+TcpPseudoHeaderLength)
 		n          = 0
+		fp         int
 		err        error
 		packet     *PcpPacket
 	)
@@ -416,8 +421,8 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 		}
 
 		if PoolDebug && packet.GetChunkReference() != nil {
-			packet.GetChunkReference().RemoveFromChannel()
-			packet.GetChunkReference().AddCallStack("pcpProtocolConnection.handleOutgoingPackets")
+			packet.GetChunkReference().TickChannel()
+			fp = packet.GetChunkReference().AddFootPrint("pcpProtocolConnection.handleOutgoingPackets")
 		}
 
 		if p.config.PacketLostSimulation {
@@ -470,7 +475,7 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 		packetLost = false
 
 		if PoolDebug && packet.GetChunkReference() != nil {
-			packet.GetChunkReference().PopCallStack()
+			packet.GetChunkReference().TickFootPrint(fp)
 		}
 	}
 }

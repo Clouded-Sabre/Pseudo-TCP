@@ -35,8 +35,9 @@ type PcpPacket struct {
 
 // Marshal converts a PcpPacket to a byte slice
 func (p *PcpPacket) Marshal(protocolId uint8, buffer []byte) (int, error) {
+	var fp int
 	if PoolDebug && p.chunk != nil {
-		p.chunk.AddCallStack("p.Marshal")
+		fp = p.chunk.AddFootPrint("p.Marshal")
 	}
 	// Calculate the length of the options field (including padding)
 	optionsLength := 0
@@ -183,15 +184,16 @@ func (p *PcpPacket) Marshal(protocolId uint8, buffer []byte) (int, error) {
 	binary.BigEndian.PutUint16(frame[16:18], checksum)
 
 	if PoolDebug && p.chunk != nil {
-		p.chunk.PopCallStack()
+		p.chunk.TickFootPrint(fp)
 	}
 	return pcpFrameLength, nil
 }
 
 // Unmarshal converts a byte slice to a PcpPacket
 func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) error {
+	var fp int
 	if PoolDebug && p.chunk != nil {
-		p.chunk.AddCallStack("p.Unmarshal")
+		fp = p.chunk.AddFootPrint("p.Unmarshal")
 	}
 	if len(data) < TcpHeaderLength {
 		return fmt.Errorf("the length(%d) of data is too short to be unmarshalled", len(data))
@@ -294,7 +296,7 @@ func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) error {
 	p.Checksum = binary.BigEndian.Uint16(data[16:18]) // Assuming checksum field is at byte 16 and 17
 
 	if PoolDebug && p.chunk != nil {
-		p.chunk.PopCallStack()
+		p.chunk.TickFootPrint(fp)
 	}
 
 	return nil
@@ -533,6 +535,8 @@ func (r *ResendPackets) UpdateSentPacket(seqNum uint32) error {
 
 // Function to remove a sent packet from the map
 func (r *ResendPackets) RemoveSentPacket(seqNum uint32) {
+	var fp int
+
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 	packet, ok := r.packets[seqNum]
@@ -543,12 +547,15 @@ func (r *ResendPackets) RemoveSentPacket(seqNum uint32) {
 		return
 	}
 	if PoolDebug && packet.Data.chunk != nil {
-		packet.Data.chunk.AddCallStack("ResendPackets.RemoveSentPacket")
+		fp = packet.Data.chunk.AddFootPrint("ResendPackets.RemoveSentPacket")
 	}
 
 	delete(r.packets, seqNum)
 	// now that we delete packet from SentPackets, we no longer
 	// need it so it's time to return its chunk
+	if PoolDebug && packet.Data.chunk != nil {
+		packet.Data.chunk.TickFootPrint(fp)
+	}
 	packet.Data.ReturnChunk()
 }
 

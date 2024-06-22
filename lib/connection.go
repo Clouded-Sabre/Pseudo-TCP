@@ -150,6 +150,7 @@ func (c *Connection) HandleIncomingPackets() {
 	var (
 		packet                                   *PcpPacket
 		isSYN, isACK, isFIN, isRST, isDataPacket bool
+		fp                                       int
 	)
 	// Create a loop to read from connection's input channel
 	for {
@@ -160,8 +161,8 @@ func (c *Connection) HandleIncomingPackets() {
 			return
 		case packet = <-c.InputChannel:
 			if c.config.Debug && packet.chunk != nil {
-				packet.chunk.RemoveFromChannel()
-				packet.chunk.AddCallStack("Connection.HandleIncomingPackets")
+				packet.chunk.TickChannel()
+				fp = packet.chunk.AddFootPrint("Connection.HandleIncomingPackets")
 			}
 			// reset the keepalive timer
 			if c.config.KeepAliveEnabled {
@@ -269,7 +270,7 @@ func (c *Connection) HandleIncomingPackets() {
 				}
 			}
 			if c.config.Debug && packet.chunk != nil {
-				packet.chunk.PopCallStack()
+				packet.chunk.TickFootPrint(fp)
 			}
 		}
 	}
@@ -355,8 +356,9 @@ func (c *Connection) acknowledge() {
 
 // Handle data packet function for Pcp connection
 func (c *Connection) handleDataPacket(packet *PcpPacket) {
+	var fp int
 	if c.config.Debug && packet.chunk != nil {
-		packet.chunk.AddCallStack("Connection.handleDataPacket")
+		fp = packet.chunk.AddFootPrint("Connection.handleDataPacket")
 	}
 	// if the packet was already acknowledged by us, ignore it
 	if packet.SequenceNumber < c.LastAckNumber {
@@ -425,7 +427,8 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 		for _, seqNum := range packetsToDelete {
 			packetToBeRemoved, _ = c.RevPacketCache.GetPacket(seqNum)
 			if c.config.Debug && packet.chunk != nil {
-				packetToBeRemoved.Packet.chunk.AddToChannel("c.ReadChannel")
+				packetToBeRemoved.Packet.chunk.TickFootPrint(fp)
+				packetToBeRemoved.Packet.chunk.AddChannel("c.ReadChannel")
 			}
 			c.ReadChannel <- packetToBeRemoved.Packet
 			c.RevPacketCache.RemovePacket(seqNum) // remove the packet from RevPacketCache but do not return the chunk yet
@@ -436,7 +439,8 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 			// put packet payload to read channel
 			c.ReadChannel <- packet
 			if c.config.Debug && packet.chunk != nil {
-				packet.chunk.AddToChannel("c.ReadChannel")
+				packet.chunk.TickFootPrint(fp)
+				packet.chunk.AddChannel("c.ReadChannel")
 			}
 			c.LastAckNumber = SeqIncrementBy(packet.SequenceNumber, uint32(len(packet.Payload)))
 		} else {
@@ -450,7 +454,7 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 	c.acknowledge()
 
 	if c.config.Debug && packet.chunk != nil {
-		packet.chunk.PopCallStack()
+		packet.chunk.TickFootPrint(fp)
 	}
 }
 
@@ -473,7 +477,10 @@ func (c *Connection) trimOutSackOption(newlastAckNum uint32) {
 
 func (c *Connection) Read(buffer []byte) (int, error) {
 	// mimicking net lib TCP read function interface
-	var packet *PcpPacket
+	var (
+		packet *PcpPacket
+		fp     int
+	)
 	if c == nil {
 		return 0, io.EOF
 	}
@@ -485,8 +492,8 @@ func (c *Connection) Read(buffer []byte) (int, error) {
 		}
 
 		if c.config.Debug && packet.chunk != nil {
-			packet.chunk.RemoveFromChannel()
-			packet.chunk.AddCallStack("Connection.Read")
+			packet.chunk.TickChannel()
+			fp = packet.chunk.AddFootPrint("Connection.Read")
 		}
 
 		payloadLength := len(packet.Payload)
@@ -499,6 +506,9 @@ func (c *Connection) Read(buffer []byte) (int, error) {
 		}
 		copy(buffer[:payloadLength], packet.Payload)
 		// now that the payload is copied to buffer, we no longer need the packet
+
+		packet.chunk.TickFootPrint(fp)
+
 		// it's time to return the chunk to pool
 		packet.ReturnChunk()
 
@@ -533,6 +543,7 @@ func (c *Connection) SetReadDeadline(t time.Time) error {
 func (c *Connection) Write(buffer []byte) (int, error) {
 	// send out message to the other end
 	// mimicking net lib TCP write function interface
+	var fp int
 
 	if c.WriteOnHold {
 		err := fmt.Errorf("Connection termination in process")
@@ -552,25 +563,21 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 		// Construct a packet with the current segment
 		packet := NewPcpPacket(c.NextSequenceNumber, c.LastAckNumber, ACKFlag, buffer[:segmentLength], c)
 		if c.config.Debug && packet.chunk != nil {
-			packet.chunk.AddCallStack("Connection.Write")
+			fp = packet.chunk.AddFootPrint("Connection.Write")
 		}
 
 		c.NextSequenceNumber = SeqIncrementBy(c.NextSequenceNumber, uint32(segmentLength)) // Update sequence number. Implicit modulo included
-		c.Params.OutputChan <- packet
-		//fmt.Println("buffer length is", len(buffer))
 		if c.config.Debug && packet.chunk != nil {
-			packet.chunk.AddToChannel("c.OutputChan")
+			packet.chunk.TickFootPrint(fp)
+			packet.chunk.AddChannel("c.OutputChan")
 		}
+		c.Params.OutputChan <- packet
 
 		// Adjust buffer to exclude the sent segment
 		buffer = buffer[segmentLength:]
 
 		// Update total bytes written
 		totalBytesWritten += segmentLength
-
-		if c.config.Debug && packet.chunk != nil {
-			packet.chunk.PopCallStack()
-		}
 	}
 
 	return totalBytesWritten, nil
@@ -688,6 +695,8 @@ func (c *Connection) ClearConnResource() {
 
 // Function to resend lost packets based on SACK blocks and resend packet information
 func (c *Connection) resendLostPacket() {
+	var fp int
+
 	if c.IsClosed {
 		return
 	}
@@ -706,7 +715,7 @@ func (c *Connection) resendLostPacket() {
 		}
 
 		if c.config.Debug && packetInfo.Data.chunk != nil {
-			packetInfo.Data.chunk.AddCallStack("Connection.ResendLostPacket")
+			fp = packetInfo.Data.chunk.AddFootPrint("Connection.ResendLostPacket")
 		}
 		if packetInfo.ResendCount < c.config.MaxResendCount {
 			// Check if the packet has been marked as lost based on SACK blocks
@@ -735,7 +744,7 @@ func (c *Connection) resendLostPacket() {
 		}
 
 		if c.config.Debug && packetInfo.Data.chunk != nil {
-			packetInfo.Data.chunk.PopCallStack()
+			packetInfo.Data.chunk.TickFootPrint(fp)
 		}
 	}
 
@@ -760,19 +769,20 @@ func (c *Connection) StartResendTimer() {
 }
 
 func (c *Connection) sendKeepalivePacket() {
+	var fp int
 	// Create and send the keepalive packet
 	keepalivePacket := NewPcpPacket(c.NextSequenceNumber-1, c.LastAckNumber, ACKFlag, []byte{0}, c)
 
 	if c.config.Debug && keepalivePacket.chunk != nil {
-		keepalivePacket.chunk.AddCallStack("connection.sendKeepalivePacket")
+		fp = keepalivePacket.chunk.AddFootPrint("connection.sendKeepalivePacket")
 	}
 
 	keepalivePacket.IsKeepAliveMassege = true
 	c.Params.OutputChan <- keepalivePacket
 	fmt.Println("Sending keepalive packet...")
 	if c.config.Debug && keepalivePacket.chunk != nil {
-		keepalivePacket.chunk.PopCallStack()
-		keepalivePacket.chunk.AddToChannel("c.OutputChan")
+		keepalivePacket.chunk.TickFootPrint(fp)
+		keepalivePacket.chunk.AddChannel("c.OutputChan")
 	}
 }
 
@@ -914,8 +924,9 @@ func removeSACKBlock(blocks []SACKBlock, index int) []SACKBlock {
 }
 
 func (c *Connection) UpdateResendPacketsOnAck(packet *PcpPacket) {
+	var fp int
 	if c.config.Debug && packet.chunk != nil {
-		packet.chunk.AddCallStack("c.UpdateResendPacketsOnAck")
+		fp = packet.chunk.AddFootPrint("c.UpdateResendPacketsOnAck")
 	}
 	// Sort SACK blocks by LeftEdge
 	sort.Slice(c.TcpOptions.InSACKOption.Blocks, func(i, j int) bool {
@@ -957,7 +968,7 @@ func (c *Connection) UpdateResendPacketsOnAck(packet *PcpPacket) {
 	}
 
 	if c.config.Debug && packet.chunk != nil {
-		packet.chunk.PopCallStack()
+		packet.chunk.TickFootPrint(fp)
 	}
 }
 
