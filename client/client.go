@@ -31,31 +31,6 @@ func main() {
 		log.Fatalln("Configurtion file error:", err)
 	}
 
-	connConfig := &lib.ConnectionConfig{
-		WindowScale:             config.AppConfig.WindowScale,
-		PreferredMSS:            config.AppConfig.PreferredMSS,
-		SackPermitSupport:       config.AppConfig.SackPermitSupport,
-		SackOptionSupport:       config.AppConfig.SackOptionSupport,
-		IdleTimeout:             config.AppConfig.IdleTimeout,
-		KeepAliveEnabled:        config.AppConfig.KeepAliveEnabled,
-		KeepaliveInterval:       config.AppConfig.KeepaliveInterval,
-		MaxKeepaliveAttempts:    config.AppConfig.MaxKeepaliveAttempts,
-		ResendInterval:          config.AppConfig.ResendInterval,
-		MaxResendCount:          config.AppConfig.MaxResendCount,
-		Debug:                   true,
-		WindowSizeWithScale:     config.AppConfig.WindowSizeWithScale,
-		ConnSignalRetryInterval: config.AppConfig.ConnSignalRetryInterval,
-		ConnSignalRetry:         config.AppConfig.ConnSignalRetry,
-	}
-	pcpConfig := &lib.PcpProtocolConnConfig{
-		IptableRuleDaley:     config.AppConfig.IptableRuleDaley,
-		PreferredMSS:         config.AppConfig.PreferredMSS,
-		PacketLostSimulation: config.AppConfig.PacketLostSimulation,
-		PConnTimeout:         config.AppConfig.PConnTimeout,
-		ClientPortUpper:      config.AppConfig.ClientPortUpper,
-		ClientPortLower:      config.AppConfig.ClientPortLower,
-		ConnConfig:           connConfig,
-	}
 	pcpCoreConfig := &lib.PcpCoreConfig{
 		ProtocolID:      uint8(config.AppConfig.ProtocolID),
 		PreferredMSS:    config.AppConfig.PreferredMSS,
@@ -71,7 +46,7 @@ func main() {
 	buffer := make([]byte, config.AppConfig.PreferredMSS)
 	for j := 0; j < iteration; j++ {
 		// Dial to the server
-		conn, err := pcpCoreObj.DialPcp(*sourceIP, *serverIP, uint16(*serverPort), pcpConfig)
+		conn, err := pcpCoreObj.DialPcp(*sourceIP, *serverIP, uint16(*serverPort), config.AppConfig)
 		if err != nil {
 			fmt.Println("Error connecting:", err)
 			return

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strconv"
 
+	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 	rp "github.com/Clouded-Sabre/ringpool/lib"
 
 	"sync"
@@ -19,8 +20,8 @@ type PcpCoreConfig struct {
 }
 
 type PcpCore struct {
-	ProtocolID         uint8
-	ProtoConnectionMap map[string]*PcpProtocolConnection // keep track of all protocolConn created by dialIP
+	config             *PcpCoreConfig                    // config
+	protoConnectionMap map[string]*PcpProtocolConnection // keep track of all protocolConn created by dialIP
 	pConnCloseSignal   chan *PcpProtocolConnection
 	closeSignal        chan struct{}  // used to send close signal to go routines to stop when timeout arrives
 	wg                 sync.WaitGroup // WaitGroup to synchronize goroutines
@@ -30,8 +31,8 @@ func NewPcpCore(pcpcoreConfig *PcpCoreConfig) (*PcpCore, error) {
 	// starts the PCP core main service
 	// the main role is to create PcpCore object - one per system
 	pcpServerObj := &PcpCore{
-		ProtocolID:         uint8(pcpcoreConfig.ProtocolID),
-		ProtoConnectionMap: make(map[string]*PcpProtocolConnection),
+		config:             pcpcoreConfig,
+		protoConnectionMap: make(map[string]*PcpProtocolConnection),
 		pConnCloseSignal:   make(chan *PcpProtocolConnection),
 		closeSignal:        make(chan struct{}),
 	}
@@ -49,7 +50,7 @@ func NewPcpCore(pcpcoreConfig *PcpCoreConfig) (*PcpCore, error) {
 }
 
 // dialPcp simulates the TCP dial function interface for PCP.
-func (p *PcpCore) DialPcp(localIP string, serverIP string, serverPort uint16, pcpConfig *PcpProtocolConnConfig) (*Connection, error) {
+func (p *PcpCore) DialPcp(localIP string, serverIP string, serverPort uint16, pcpConfig *config.Config) (*Connection, error) {
 	// first normalize IP address string before making key
 	serverAddr, err := net.ResolveIPAddr("ip", serverIP)
 	if err != nil {
@@ -61,21 +62,22 @@ func (p *PcpCore) DialPcp(localIP string, serverIP string, serverPort uint16, pc
 		return nil, err
 	}
 
+	pcpConnConfig := newPcpProtocolConnConfig(pcpConfig)
 	pConnKey := fmt.Sprintf("%s-%s", serverAddr.IP.To4().String(), localAddr.IP.To4().String())
 	// Check if the connection exists in the connection map
-	pConn, ok := p.ProtoConnectionMap[pConnKey]
+	pConn, ok := p.protoConnectionMap[pConnKey]
 	if !ok {
 		// need to create new protocol connection
-		pConn, err = newPcpProtocolConnection(pConnKey, false, int(p.ProtocolID), serverAddr, localAddr, p.pConnCloseSignal, pcpConfig)
+		pConn, err = newPcpProtocolConnection(pConnKey, false, int(p.config.ProtocolID), serverAddr, localAddr, p.pConnCloseSignal, pcpConnConfig)
 		if err != nil {
 			fmt.Println("Error creating Pcp Client Protocol Connection:", err)
 			return nil, err
 		}
 		// add it to ProtoConnectionMap
-		p.ProtoConnectionMap[pConnKey] = pConn
+		p.protoConnectionMap[pConnKey] = pConn
 	}
 
-	newClientConn, err := pConn.dial(int(serverPort), pcpConfig.ConnConfig)
+	newClientConn, err := pConn.dial(int(serverPort), pcpConnConfig.connConfig)
 	if err != nil {
 		fmt.Println("Error creating Pcp Client Connection:", err)
 		return nil, err
@@ -85,7 +87,7 @@ func (p *PcpCore) DialPcp(localIP string, serverIP string, serverPort uint16, pc
 }
 
 // ListenPcp starts listening for incoming packets on the service's port.
-func (p *PcpCore) ListenPcp(serviceIP string, port int, pcpConfig *PcpProtocolConnConfig) (*Service, error) {
+func (p *PcpCore) ListenPcp(serviceIP string, port int, pcpConfig *config.Config) (*Service, error) {
 	// first check if corresponding PcpServerProtocolConnection obj exists or not
 	// Normalize IP address string before making key from it
 	serviceAddr, err := net.ResolveIPAddr("ip", serviceIP)
@@ -95,26 +97,27 @@ func (p *PcpCore) ListenPcp(serviceIP string, port int, pcpConfig *PcpProtocolCo
 	}
 	normServiceIpString := serviceAddr.IP.To4().String()
 
+	pcpConnConfig := newPcpProtocolConnConfig(pcpConfig)
 	pConnKey := normServiceIpString
 	// Check if the connection exists in the connection map
-	pConn, ok := p.ProtoConnectionMap[pConnKey]
+	pConn, ok := p.protoConnectionMap[pConnKey]
 	if !ok {
 		// need to create new protocol connection
-		pConn, err = newPcpProtocolConnection(pConnKey, true, int(p.ProtocolID), serviceAddr, nil, p.pConnCloseSignal, pcpConfig)
+		pConn, err = newPcpProtocolConnection(pConnKey, true, int(p.config.ProtocolID), serviceAddr, nil, p.pConnCloseSignal, pcpConnConfig)
 		if err != nil {
 			log.Println("Error creating Pcp Client Protocol Connection:", err)
 			return nil, err
 		}
 		// add it to ProtoConnectionMap
-		p.ProtoConnectionMap[pConnKey] = pConn
+		p.protoConnectionMap[pConnKey] = pConn
 	}
 
 	// then we need to check if there is already a service listening at that serviceIP and port
-	_, ok = pConn.ServiceMap[port]
+	_, ok = pConn.serviceMap[port]
 	if !ok {
 		// need to create new service
 		// create new Pcp service
-		srv, err := newService(pConn, serviceAddr, port, pConn.OutputChan, pConn.sigOutputChan, pConn.serviceCloseSignal, pcpConfig.ConnConfig)
+		srv, err := newService(pConn, serviceAddr, port, pConn.outputChan, pConn.sigOutputChan, pConn.serviceCloseSignal, pcpConnConfig.connConfig)
 		if err != nil {
 			log.Println("Error creating service:", err)
 			return nil, err
@@ -129,7 +132,7 @@ func (p *PcpCore) ListenPcp(serviceIP string, port int, pcpConfig *PcpProtocolCo
 		SleepForMs(500) // sleep for 500ms to make sure iptables rule takes effect
 
 		// add it to ServiceMap
-		pConn.ServiceMap[port] = srv
+		pConn.serviceMap[port] = srv
 
 		return srv, nil
 	} else {
@@ -148,28 +151,28 @@ func (p *PcpCore) handleClosePConnConnection() {
 			return // gracefully stop the go routine
 		case pConn := <-p.pConnCloseSignal:
 			// clear it from p.ConnectionMap
-			_, ok := p.ProtoConnectionMap[pConn.Key] // just make sure it really in ConnectionMap for debug purpose
+			_, ok := p.protoConnectionMap[pConn.key] // just make sure it really in ConnectionMap for debug purpose
 			if !ok {
 				// connection does not exist in ConnectionMap
-				log.Printf("Pcp Protocol Connection %s does not exist in service map", pConn.ServerAddr.IP.String())
+				log.Printf("Pcp Protocol Connection %s does not exist in service map", pConn.serverAddr.IP.String())
 				continue
 			}
 
 			// delete the clientConn from ConnectionMap
-			delete(p.ProtoConnectionMap, pConn.Key)
-			log.Printf("Pcp protocol connection %s terminated and removed.", pConn.ServerAddr.IP.String())
+			delete(p.protoConnectionMap, pConn.key)
+			log.Printf("Pcp protocol connection %s terminated and removed.", pConn.serverAddr.IP.String())
 		}
 	}
 }
 
 func (p *PcpCore) Close() error {
 	// Close all pcpProtocolConnection instances
-	for _, pConn := range p.ProtoConnectionMap {
+	for _, pConn := range p.protoConnectionMap {
 		pConn.Close()
 		if pConn.isServer {
 			// remove iptable rules for server protocol connection
 			for port := range pConn.iptableRules {
-				err := removeServerIptablesRule(pConn.ServerAddr.IP.String(), port)
+				err := removeServerIptablesRule(pConn.serverAddr.IP.String(), port)
 				if err != nil {
 					log.Println(err)
 					return err
@@ -177,7 +180,7 @@ func (p *PcpCore) Close() error {
 			}
 		}
 	}
-	p.ProtoConnectionMap = nil // Clear the map after closing all connections
+	p.protoConnectionMap = nil // Clear the map after closing all connections
 
 	// Send closeSignal to all goroutines
 	close(p.closeSignal)

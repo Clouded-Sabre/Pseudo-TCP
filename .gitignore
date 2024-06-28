@@ -3,3 +3,6 @@ server/server
 server/server_amd64
 server/config.yaml
 client/config.yaml
+test/clientcompare/clientcompare
+test/clientcompare/build/linux_amd64/clientcompare
+test/testserver/testserver

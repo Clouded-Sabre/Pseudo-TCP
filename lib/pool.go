@@ -8,7 +8,7 @@ import (
 )
 
 var (
-	PoolDebug  = rp.Debug
+	//PoolDebug  = rp.Debug
 	emptySlice []byte
 	Pool       *rp.RingPool
 )

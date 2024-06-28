@@ -5,41 +5,45 @@ import (
 	"log"
 	"net"
 	"sync"
+
+	rp "github.com/Clouded-Sabre/ringpool/lib"
 	//"github.com/Clouded-Sabre/Pseudo-TCP/config"
 )
 
 // Service represents a service listening on a specific port.
 type Service struct {
-	pcpProtocolConnection     *PcpProtocolConnection // point back to parent pcp server
-	ServiceAddr               net.Addr
-	Port                      int
-	InputChannel              chan *PcpPacket        // channel for incoming packets of the whole services (including packets for all connections)
-	OutputChan, sigOutputChan chan *PcpPacket        // output channels for ordinary outgoing packets and priority signalling packets
+	// static
+	connConfig            *connectionConfig      // Connection Config
+	pcpProtocolConnection *PcpProtocolConnection // point back to parent pcp server
+	serviceAddr           net.Addr
+	port                  int
+	// variables
+	inputChannel              chan *PcpPacket        // channel for incoming packets of the whole services (including packets for all connections)
+	outputChan, sigOutputChan chan *PcpPacket        // output channels for ordinary outgoing packets and priority signalling packets
 	connectionMap             map[string]*Connection // open connections
 	tempConnMap               map[string]*Connection // temporary connection map for completing 3-way handshake
 	newConnChannel            chan *Connection       // new connection all be placed here are 3-way handshake
 	serviceCloseSignal        chan *Service          // signal for sending service close signal to parent pcpProtocolConnection
-	ConnCloseSignal           chan *Connection       // signal for connection close
+	connCloseSignal           chan *Connection       // signal for connection close
 	closeSignal               chan struct{}          // signal for closing service
 	connSignalFailed          chan *Connection       // signal for closing temp connection due to openning signalling failed
 	wg                        sync.WaitGroup         // WaitGroup to synchronize goroutines
-	IsClosed                  bool                   // used to denote that the service is close so parent PCP Protocol connection won't forward more packets to it
-	connConfig                *ConnectionConfig      // Connection Config
+	isClosed                  bool                   // used to denote that the service is close so parent PCP Protocol connection won't forward more packets to it
 }
 
 // NewService creates a new service listening on the specified port.
-func newService(pcpProtocolConn *PcpProtocolConnection, serviceAddr net.Addr, port int, outputChan, sigOutputChan chan *PcpPacket, serviceCloseSignal chan *Service, connConfig *ConnectionConfig) (*Service, error) {
+func newService(pcpProtocolConn *PcpProtocolConnection, serviceAddr net.Addr, port int, outputChan, sigOutputChan chan *PcpPacket, serviceCloseSignal chan *Service, connConfig *connectionConfig) (*Service, error) {
 	newSrv := &Service{
 		pcpProtocolConnection: pcpProtocolConn,
-		ServiceAddr:           serviceAddr,
-		Port:                  port,
-		InputChannel:          make(chan *PcpPacket),
-		OutputChan:            outputChan,
+		serviceAddr:           serviceAddr,
+		port:                  port,
+		inputChannel:          make(chan *PcpPacket),
+		outputChan:            outputChan,
 		sigOutputChan:         sigOutputChan,
 		connectionMap:         make(map[string]*Connection),
 		tempConnMap:           make(map[string]*Connection),
 		newConnChannel:        make(chan *Connection),
-		ConnCloseSignal:       make(chan *Connection),
+		connCloseSignal:       make(chan *Connection),
 		connSignalFailed:      make(chan *Connection),
 		serviceCloseSignal:    serviceCloseSignal,
 		closeSignal:           make(chan struct{}),
@@ -65,23 +69,23 @@ func (s *Service) Accept() (*Connection, error) {
 		case newConn := <-s.newConnChannel: // Wait for new connection to come
 
 			// Check if the connection exists in the temporary connection map
-			_, ok := s.tempConnMap[newConn.Params.Key]
+			_, ok := s.tempConnMap[newConn.params.key]
 			if !ok {
-				log.Printf("Received ACK packet for non-existent connection: %s. Ignore it!\n", newConn.Params.Key)
+				log.Printf("Received ACK packet for non-existent connection: %s. Ignore it!\n", newConn.params.key)
 				continue
 			}
 
 			// Remove the connection from the temporary connection map
-			delete(s.tempConnMap, newConn.Params.Key)
+			delete(s.tempConnMap, newConn.params.key)
 
 			// adding the connection to ConnectionMap
-			s.connectionMap[newConn.Params.Key] = newConn
+			s.connectionMap[newConn.params.key] = newConn
 
 			// start go routine to handle the connection traffic
-			newConn.Wg.Add(1)
-			go newConn.HandleIncomingPackets()
+			newConn.wg.Add(1)
+			go newConn.handleIncomingPackets()
 
-			log.Printf("New connection is ready: %s\n", newConn.Params.Key)
+			log.Printf("New connection is ready: %s\n", newConn.params.key)
 
 			return newConn, nil
 		}
@@ -100,8 +104,8 @@ func (s *Service) handleIncomingPackets() {
 			log.Println("Closing service handleIncomingPackets go routine")
 			// Close the handleServicePackets goroutine to gracefully shutdown
 			return
-		case packet := <-s.InputChannel:
-			if PoolDebug && packet.GetChunkReference() != nil {
+		case packet := <-s.inputChannel:
+			if rp.Debug && packet.GetChunkReference() != nil {
 				packet.GetChunkReference().TickChannel()
 				fp = packet.GetChunkReference().AddFootPrint("service.handleServicePackets")
 			}
@@ -115,7 +119,7 @@ func (s *Service) handleIncomingPackets() {
 			} else {
 				s.handleDataPacket(packet)
 			}
-			if PoolDebug && packet.GetChunkReference() != nil {
+			if rp.Debug && packet.GetChunkReference() != nil {
 				packet.GetChunkReference().TickFootPrint(fp)
 			}
 		}
@@ -125,7 +129,7 @@ func (s *Service) handleIncomingPackets() {
 // handleDataPacket forward Data packet to corresponding open connection if present.
 func (s *Service) handleDataPacket(packet *PcpPacket) {
 	var fp int
-	if PoolDebug && packet.GetChunkReference() != nil {
+	if rp.Debug && packet.GetChunkReference() != nil {
 		fp = packet.GetChunkReference().AddFootPrint("service.handleDataPacket")
 	}
 	// Extract destination IP and port from the packet
@@ -137,26 +141,26 @@ func (s *Service) handleDataPacket(packet *PcpPacket) {
 
 	// Check if the connection exists in the connection map
 	conn, ok := s.connectionMap[connKey]
-	if ok && !conn.IsClosed {
+	if ok && !conn.isClosed {
 		// Dispatch the packet to the corresponding connection's input channel
-		if PoolDebug && packet.GetChunkReference() != nil {
+		if rp.Debug && packet.GetChunkReference() != nil {
 			packet.GetChunkReference().TickFootPrint(fp)
 			packet.GetChunkReference().AddChannel("Conn.InputChannel")
 		}
-		conn.InputChannel <- packet
+		conn.inputChannel <- packet
 		return
 	}
 
 	// then check if the connection exists in temp connection map
 	tempConn, ok := s.tempConnMap[connKey]
-	if ok && !tempConn.IsClosed {
-		if len(packet.Payload) == 0 && packet.SequenceNumber-tempConn.InitialPeerSeq < 2 {
+	if ok && !tempConn.isClosed {
+		if len(packet.Payload) == 0 && packet.SequenceNumber-tempConn.initialPeerSeq < 2 {
 			// Dispatch the packet to the corresponding connection's input channel
-			if PoolDebug && packet.GetChunkReference() != nil {
+			if rp.Debug && packet.GetChunkReference() != nil {
 				packet.GetChunkReference().TickFootPrint(fp)
 				packet.GetChunkReference().AddChannel("TempConn.InputChannel")
 			}
-			tempConn.InputChannel <- packet
+			tempConn.inputChannel <- packet
 			return
 		} else if len(packet.Payload) > 0 {
 			// since the connection is not ready yet, discard the data packet for the time being
@@ -193,64 +197,64 @@ func (s *Service) handleSynPacket(packet *PcpPacket) {
 	}
 
 	// Create a new temporary connection object for the 3-way handshake
-	connParams := &ConnectionParams{
-		Key:                      connKey,
-		IsServer:                 true,
-		RemoteAddr:               sourceAddr,
-		RemotePort:               int(sourcePort),
-		LocalAddr:                s.ServiceAddr,
-		LocalPort:                s.Port,
-		OutputChan:               s.OutputChan,
-		SigOutputChan:            s.sigOutputChan,
-		ConnCloseSignalChan:      s.ConnCloseSignal,
-		NewConnChannel:           s.newConnChannel,
-		ConnSignalFailedToParent: s.connSignalFailed,
+	connParams := &connectionParams{
+		key:                      connKey,
+		isServer:                 true,
+		remoteAddr:               sourceAddr,
+		remotePort:               int(sourcePort),
+		localAddr:                s.serviceAddr,
+		localPort:                s.port,
+		outputChan:               s.outputChan,
+		sigOutputChan:            s.sigOutputChan,
+		connCloseSignalChan:      s.connCloseSignal,
+		newConnChannel:           s.newConnChannel,
+		connSignalFailedToParent: s.connSignalFailed,
 	}
 	//newConn, err := NewConnection(connKey, true, sourceAddr, int(sourcePort), s.ServiceAddr, s.Port, s.OutputChan, s.sigOutputChan, s.ConnCloseSignal, s.newConnChannel, s.connSignalFailed)
-	newConn, err := NewConnection(connParams, s.connConfig)
+	newConn, err := newConnection(connParams, s.connConfig)
 	if err != nil {
 		log.Printf("Error creating new connection for %s: %s\n", connKey, err)
 		return
 	}
 
-	newConn.InitServerState = SynReceived
+	newConn.initServerState = SynReceived
 
 	// Add the new connection to the temporary connection map
 	s.tempConnMap[connKey] = newConn
 
 	// TCP options support
 	// MSS support negotiation
-	if packet.TcpOptions.MSS > 0 {
-		if packet.TcpOptions.MSS < newConn.TcpOptions.MSS {
-			newConn.TcpOptions.MSS = packet.TcpOptions.MSS // default value is config.PreferredMSS
+	if packet.TcpOptions.mss > 0 {
+		if packet.TcpOptions.mss < newConn.tcpOptions.mss {
+			newConn.tcpOptions.mss = packet.TcpOptions.mss // default value is config.PreferredMSS
 		}
 	} else {
-		newConn.TcpOptions.MSS = 0 // disble MSS
+		newConn.tcpOptions.mss = 0 // disble MSS
 	}
 
 	// Window Scaling support
-	if packet.TcpOptions.WindowScaleShiftCount == 0 {
-		newConn.TcpOptions.WindowScaleShiftCount = 0 // Disable it
+	if packet.TcpOptions.windowScaleShiftCount == 0 {
+		newConn.tcpOptions.windowScaleShiftCount = 0 // Disable it
 	}
 
 	// SACK support
-	newConn.TcpOptions.PermitSack = newConn.TcpOptions.PermitSack && packet.TcpOptions.PermitSack    // both sides need to permit SACK
-	newConn.TcpOptions.SackEnabled = newConn.TcpOptions.PermitSack && newConn.TcpOptions.SackEnabled // Sack Option support also needs to be manually enabled
+	newConn.tcpOptions.permitSack = newConn.tcpOptions.permitSack && packet.TcpOptions.permitSack    // both sides need to permit SACK
+	newConn.tcpOptions.SackEnabled = newConn.tcpOptions.permitSack && newConn.tcpOptions.SackEnabled // Sack Option support also needs to be manually enabled
 
 	// timestamp support
-	newConn.TcpOptions.TimestampEnabled = packet.TcpOptions.TimestampEnabled
-	newConn.TcpOptions.TsEchoReplyValue = packet.TcpOptions.Timestamp
+	newConn.tcpOptions.timestampEnabled = packet.TcpOptions.timestampEnabled
+	newConn.tcpOptions.tsEchoReplyValue = packet.TcpOptions.timestamp
 
 	// start the temp connection's goroutine to handle 3-way handshaking process
-	newConn.Wg.Add(1)
-	go newConn.Handle3WayHandshake()
+	newConn.wg.Add(1)
+	go newConn.handle3WayHandshake()
 
 	// Send SYN-ACK packet to the SYN packet sender
-	newConn.LastAckNumber = SeqIncrement(packet.SequenceNumber)
-	newConn.InitialPeerSeq = packet.SequenceNumber
-	newConn.InitSendSynAck()
-	newConn.StartConnSignalTimer()
-	newConn.NextSequenceNumber = SeqIncrement(newConn.NextSequenceNumber) // implicit modulo op
+	newConn.lastAckNumber = SeqIncrement(packet.SequenceNumber)
+	newConn.initialPeerSeq = packet.SequenceNumber
+	newConn.initSendSynAck()
+	newConn.startConnSignalTimer()
+	newConn.nextSequenceNumber = SeqIncrement(newConn.nextSequenceNumber) // implicit modulo op
 
 	log.Printf("Sent SYN-ACK packet to: %s\n", connKey)
 }
@@ -269,26 +273,26 @@ func (s *Service) handleCloseConnections() {
 			return
 		case conn = <-s.connSignalFailed:
 			// clear it from p.ConnectionMap
-			_, ok := s.connectionMap[conn.Params.Key] // just make sure it really in ConnectionMap for debug purpose
+			_, ok := s.connectionMap[conn.params.key] // just make sure it really in ConnectionMap for debug purpose
 			if !ok {
 				// connection does not exist in ConnectionMap
-				log.Printf("Pcp connection does not exist in %s:%d->%s:%d", conn.Params.LocalAddr.(*net.IPAddr).IP.String(), conn.Params.LocalPort, conn.Params.RemoteAddr.(*net.IPAddr).IP.String(), conn.Params.RemotePort)
+				log.Printf("Pcp connection does not exist in %s:%d->%s:%d", conn.params.localAddr.(*net.IPAddr).IP.String(), conn.params.localPort, conn.params.remoteAddr.(*net.IPAddr).IP.String(), conn.params.remotePort)
 				continue
 			}
-			log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.Params.LocalAddr.(*net.IPAddr).IP.String(), conn.Params.LocalPort, conn.Params.RemoteAddr.(*net.IPAddr).IP.String(), conn.Params.RemotePort)
+			log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.params.localAddr.(*net.IPAddr).IP.String(), conn.params.localPort, conn.params.remoteAddr.(*net.IPAddr).IP.String(), conn.params.remotePort)
 			return
-		case conn = <-s.ConnCloseSignal:
+		case conn = <-s.connCloseSignal:
 			// clear it from p.ConnectionMap
-			_, ok := s.connectionMap[conn.Params.Key] // just make sure it really in ConnectionMap for debug purpose
+			_, ok := s.connectionMap[conn.params.key] // just make sure it really in ConnectionMap for debug purpose
 			if !ok {
 				// connection does not exist in ConnectionMap
-				log.Printf("Pcp connection does not exist in %s:%d->%s:%d", conn.Params.LocalAddr.(*net.IPAddr).IP.String(), conn.Params.LocalPort, conn.Params.RemoteAddr.(*net.IPAddr).IP.String(), conn.Params.RemotePort)
+				log.Printf("Pcp connection does not exist in %s:%d->%s:%d", conn.params.localAddr.(*net.IPAddr).IP.String(), conn.params.localPort, conn.params.remoteAddr.(*net.IPAddr).IP.String(), conn.params.remotePort)
 				continue
 			}
 
 			// delete the clientConn from ConnectionMap
-			delete(s.connectionMap, conn.Params.Key)
-			log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.Params.LocalAddr.(*net.IPAddr).IP.String(), conn.Params.LocalPort, conn.Params.RemoteAddr.(*net.IPAddr).IP.String(), conn.Params.RemotePort)
+			delete(s.connectionMap, conn.params.key)
+			log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.params.localAddr.(*net.IPAddr).IP.String(), conn.params.localPort, conn.params.remoteAddr.(*net.IPAddr).IP.String(), conn.params.remotePort)
 		}
 
 	}
@@ -300,21 +304,21 @@ func (s *Service) Close() error {
 	var wg sync.WaitGroup
 	for _, conn := range s.connectionMap {
 		wg.Add(1)
-		go conn.CloseForcefully(&wg)
+		go conn.closeForcefully(&wg)
 	}
 
 	wg.Wait() // wait for connections to close
 
 	// Close all temp connections associated with this service
 	for _, tempConn := range s.tempConnMap {
-		close(tempConn.ConnSignalFailed)
+		close(tempConn.connSignalFailed)
 	}
 
 	// wait for 500ms to allow temp connections to finish closing
 	SleepForMs(500)
 
 	// begin close the service itself and clear resources
-	s.IsClosed = true
+	s.isClosed = true
 
 	// send signal to service go routines to gracefully close them
 	close(s.closeSignal)
@@ -322,9 +326,9 @@ func (s *Service) Close() error {
 	s.wg.Wait()
 
 	// close channels created by the service
-	close(s.InputChannel)
+	close(s.inputChannel)
 	close(s.newConnChannel)
-	close(s.ConnCloseSignal)
+	close(s.connCloseSignal)
 	close(s.connSignalFailed)
 
 	log.Println("Service resource cleared.")
@@ -333,13 +337,13 @@ func (s *Service) Close() error {
 	log.Println("signal sent to parent PCP service to remove service entry.")
 
 	// remove the iptable rules for the service
-	err := removeIptablesRule(s.ServiceAddr.(*net.IPAddr).IP.String(), s.Port)
+	err := removeIptablesRule(s.serviceAddr.(*net.IPAddr).IP.String(), s.port)
 	if err != nil {
-		log.Printf("Error removing iptable rules for service %s:%d: %s", s.ServiceAddr.(*net.IPAddr).IP.String(), s.Port, err)
+		log.Printf("Error removing iptable rules for service %s:%d: %s", s.serviceAddr.(*net.IPAddr).IP.String(), s.port, err)
 		return err
 	}
 
-	log.Printf("Service %s:%d is shutting down.\n", s.ServiceAddr.(*net.IPAddr).IP.String(), s.Port)
+	log.Printf("Service %s:%d is shutting down.\n", s.serviceAddr.(*net.IPAddr).IP.String(), s.port)
 
 	return nil
 }

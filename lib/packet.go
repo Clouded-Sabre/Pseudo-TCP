@@ -26,7 +26,7 @@ type PcpPacket struct {
 	UrgentPointer      uint16 // UrgentPointer indicates the end of the urgent data (empty for now)
 	Checksum           uint16 // Checksum is the checksum of the packet
 	Payload            []byte // Payload represents the payload data
-	TcpOptions         *Options
+	TcpOptions         *options
 	IsOpenConnection   bool        // only used in outgoing packet to denote if the connection is open or in 3-way handshake stage
 	Conn               *Connection // used for outgoing packets only to denote which connection it belongs to
 	chunk              *rp.Element // point to memory chunk used to store payload
@@ -36,35 +36,35 @@ type PcpPacket struct {
 // Marshal converts a PcpPacket to a byte slice
 func (p *PcpPacket) Marshal(protocolId uint8, buffer []byte) (int, error) {
 	var fp int
-	if PoolDebug && p.chunk != nil {
+	if rp.Debug && p.chunk != nil {
 		fp = p.chunk.AddFootPrint("p.Marshal")
 	}
 	// Calculate the length of the options field (including padding)
 	optionsLength := 0
 	optionsPresent := false
-	if !p.IsOpenConnection && p.TcpOptions.WindowScaleShiftCount > 0 { // Window Scaling is enabled
+	if !p.IsOpenConnection && p.TcpOptions.windowScaleShiftCount > 0 { // Window Scaling is enabled
 		// Window scaling option: kind (1 byte), length (1 byte), shift count (1 byte)
 		optionsLength += 3
 		optionsPresent = true
 	}
-	if !p.IsOpenConnection && p.TcpOptions.MSS > 0 { // MSS is enabled
+	if !p.IsOpenConnection && p.TcpOptions.mss > 0 { // MSS is enabled
 		// MSS option: kind (1 byte), length (1 byte), MSS value (2 bytes)
 		optionsLength += 4
 		optionsPresent = true
 	}
-	if !p.IsOpenConnection && p.TcpOptions.PermitSack {
+	if !p.IsOpenConnection && p.TcpOptions.permitSack {
 		// MSS option: kind (1 byte), length (1 byte)
 		optionsLength += 2
 		optionsPresent = true
 	}
 	if p.IsOpenConnection && p.TcpOptions.SackEnabled {
-		if len(p.TcpOptions.OutSACKOption.Blocks) > 0 {
+		if len(p.TcpOptions.outSACKOption.blocks) > 0 {
 			// SACK option kind 5: kind (1 byte), length (1 byte), SACK blocks
-			optionsLength += 2 + len(p.TcpOptions.OutSACKOption.Blocks)*8 // 8 bytes per SACK block
+			optionsLength += 2 + len(p.TcpOptions.outSACKOption.blocks)*8 // 8 bytes per SACK block
 			optionsPresent = true
 		}
 	}
-	if p.TcpOptions.TimestampEnabled {
+	if p.TcpOptions.timestampEnabled {
 		// Timestamp option: kind (1 byte), length (1 byte), timestamp value (4 bytes), echo reply value (4 bytes)
 		optionsLength += 10
 		optionsPresent = true
@@ -112,51 +112,51 @@ func (p *PcpPacket) Marshal(protocolId uint8, buffer []byte) (int, error) {
 
 	// Construct options
 	optionOffset := TcpHeaderLength
-	if !p.IsOpenConnection && p.TcpOptions.WindowScaleShiftCount > 0 {
+	if !p.IsOpenConnection && p.TcpOptions.windowScaleShiftCount > 0 {
 		// Window scaling option: kind (1 byte), length (1 byte), shift count (1 byte)
 		frame[optionOffset] = 3   // Kind: Window Scale
 		frame[optionOffset+1] = 3 // Length: 3 bytes
-		frame[optionOffset+2] = p.TcpOptions.WindowScaleShiftCount
+		frame[optionOffset+2] = p.TcpOptions.windowScaleShiftCount
 		optionOffset += 3
 	}
-	if !p.IsOpenConnection && p.TcpOptions.MSS > 0 {
+	if !p.IsOpenConnection && p.TcpOptions.mss > 0 {
 		// MSS option: kind (1 byte), length (1 byte), MSS value (2 bytes)
 		frame[optionOffset] = 2   // Kind: Maximum Segment Size
 		frame[optionOffset+1] = 4 // Length: 4 bytes
-		binary.BigEndian.PutUint16(frame[optionOffset+2:optionOffset+4], p.TcpOptions.MSS)
+		binary.BigEndian.PutUint16(frame[optionOffset+2:optionOffset+4], p.TcpOptions.mss)
 		optionOffset += 4
 	}
-	if !p.IsOpenConnection && p.TcpOptions.PermitSack {
+	if !p.IsOpenConnection && p.TcpOptions.permitSack {
 		// SACK permit option: kind (1 byte), length (1 byte)
 		frame[optionOffset] = 4   // Kind: SACK permitted
 		frame[optionOffset+1] = 2 // Length: 2 bytes
 		optionOffset += 2
 	}
 	if p.IsOpenConnection && p.TcpOptions.SackEnabled {
-		if len(p.TcpOptions.OutSACKOption.Blocks) > 0 {
+		if len(p.TcpOptions.outSACKOption.blocks) > 0 {
 			// SACK option kind 5: kind (1 byte), length (1 byte), SACK blocks
 			frame[optionOffset] = 5                                                    // Kind: SACK
-			frame[optionOffset+1] = byte(2 + len(p.TcpOptions.OutSACKOption.Blocks)*8) // Length: variable
+			frame[optionOffset+1] = byte(2 + len(p.TcpOptions.outSACKOption.blocks)*8) // Length: variable
 			optionOffset += 2
 			// Write SACK blocks
-			for _, block := range p.TcpOptions.OutSACKOption.Blocks {
+			for _, block := range p.TcpOptions.outSACKOption.blocks {
 				if optionOffset+8 >= TcpHeaderLength+TcpOptionsMaxLength {
 					break
 				}
-				binary.BigEndian.PutUint32(frame[optionOffset:optionOffset+4], block.LeftEdge)
-				binary.BigEndian.PutUint32(frame[optionOffset+4:optionOffset+8], block.RightEdge)
+				binary.BigEndian.PutUint32(frame[optionOffset:optionOffset+4], block.leftEdge)
+				binary.BigEndian.PutUint32(frame[optionOffset+4:optionOffset+8], block.rightEdge)
 				optionOffset += 8
 			}
 		}
 	}
-	if p.TcpOptions.TimestampEnabled {
+	if p.TcpOptions.timestampEnabled {
 		if optionOffset+10 < TcpHeaderLength+TcpOptionsMaxLength {
 			// Timestamp option: kind (1 byte), length (1 byte), timestamp value (4 bytes), echo reply value (4 bytes)
 			frame[optionOffset] = 8    // Kind: Timestamp
 			frame[optionOffset+1] = 10 // Length: 10 bytes (timestamp value + echo reply value)
 			// Write timestamp value (current time) and echo reply value
 			timestamp := time.Now().UnixMicro()
-			echoReplyValue := p.TcpOptions.TsEchoReplyValue
+			echoReplyValue := p.TcpOptions.tsEchoReplyValue
 			binary.BigEndian.PutUint32(frame[optionOffset+2:optionOffset+6], uint32(timestamp))
 			binary.BigEndian.PutUint32(frame[optionOffset+6:optionOffset+10], uint32(echoReplyValue))
 			optionOffset += 10
@@ -183,7 +183,7 @@ func (p *PcpPacket) Marshal(protocolId uint8, buffer []byte) (int, error) {
 	checksum := CalculateChecksum(buffer[:TcpPseudoHeaderLength+pcpFrameLength])
 	binary.BigEndian.PutUint16(frame[16:18], checksum)
 
-	if PoolDebug && p.chunk != nil {
+	if rp.Debug && p.chunk != nil {
 		p.chunk.TickFootPrint(fp)
 	}
 	return pcpFrameLength, nil
@@ -192,7 +192,7 @@ func (p *PcpPacket) Marshal(protocolId uint8, buffer []byte) (int, error) {
 // Unmarshal converts a byte slice to a PcpPacket
 func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) error {
 	var fp int
-	if PoolDebug && p.chunk != nil {
+	if rp.Debug && p.chunk != nil {
 		fp = p.chunk.AddFootPrint("p.Unmarshal")
 	}
 	if len(data) < TcpHeaderLength {
@@ -216,17 +216,17 @@ func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) error {
 	}
 
 	// Extract options from the data
-	options := data[TcpHeaderLength : TcpHeaderLength+optionsLength]
+	optionsBytes := data[TcpHeaderLength : TcpHeaderLength+optionsLength]
 
 	if p.TcpOptions == nil {
-		p.TcpOptions = &Options{} // all attributes set to zero for which means disabled
+		p.TcpOptions = &options{} // all attributes set to zero for which means disabled
 	}
 	// Parse options to extract Window Scale and MSS values
 	var (
 		optionLength, optionKind byte
 	)
 	for i := 0; i < optionsLength-1; {
-		optionKind = options[i]
+		optionKind = optionsBytes[i]
 		//fmt.Println("Scan to option kind", optionKind)
 
 		if optionKind == 0 {
@@ -236,48 +236,48 @@ func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) error {
 			case 1: // no op
 				optionLength = 1
 			case 3: // Window Scale
-				optionLength = options[i+1]
+				optionLength = optionsBytes[i+1]
 				if optionLength == 3 && i+3 <= optionsLength {
-					p.TcpOptions.WindowScaleShiftCount = options[i+2]
+					p.TcpOptions.windowScaleShiftCount = optionsBytes[i+2]
 				}
 			case 2: // Maximum Segment Size (MSS)
-				optionLength = options[i+1]
+				optionLength = optionsBytes[i+1]
 				if optionLength == 4 && i+4 <= optionsLength {
-					p.TcpOptions.MSS = binary.BigEndian.Uint16(options[i+2 : i+4])
+					p.TcpOptions.mss = binary.BigEndian.Uint16(optionsBytes[i+2 : i+4])
 				}
 			case 4: // SACK support
-				optionLength = options[i+1]
+				optionLength = optionsBytes[i+1]
 				if optionLength == 2 {
-					p.TcpOptions.PermitSack = true
+					p.TcpOptions.permitSack = true
 				}
 			case 5: // SACK option
-				optionLength = options[i+1]
+				optionLength = optionsBytes[i+1]
 				if optionLength > 2 && i+int(optionLength) <= optionsLength {
 					// Parse SACK blocks
-					sackBlocks := make([]SACKBlock, 0)
+					sackBlocks := make([]sackblock, 0)
 					for j := i + 2; j < i+int(optionLength); j += 8 {
-						leftEdge := binary.BigEndian.Uint32(options[j : j+4])
-						rightEdge := binary.BigEndian.Uint32(options[j+4 : j+8])
-						sackBlocks = append(sackBlocks, SACKBlock{LeftEdge: leftEdge, RightEdge: rightEdge})
+						leftEdge := binary.BigEndian.Uint32(optionsBytes[j : j+4])
+						rightEdge := binary.BigEndian.Uint32(optionsBytes[j+4 : j+8])
+						sackBlocks = append(sackBlocks, sackblock{leftEdge: leftEdge, rightEdge: rightEdge})
 					}
-					if p.TcpOptions.InSACKOption.Blocks == nil {
-						p.TcpOptions.InSACKOption.Blocks = make([]SACKBlock, 0)
+					if p.TcpOptions.inSACKOption.blocks == nil {
+						p.TcpOptions.inSACKOption.blocks = make([]sackblock, 0)
 					}
-					p.TcpOptions.InSACKOption.Blocks = append(p.TcpOptions.InSACKOption.Blocks, sackBlocks...)
+					p.TcpOptions.inSACKOption.blocks = append(p.TcpOptions.inSACKOption.blocks, sackBlocks...)
 				}
 			case 8: // Timestamp option
-				optionLength = options[i+1]
+				optionLength = optionsBytes[i+1]
 				if optionLength == 10 && i+10 <= optionsLength {
 					// Extract timestamp value and echo reply value
-					timestamp := binary.BigEndian.Uint32(options[i+2 : i+6])
-					echoReplyValue := binary.BigEndian.Uint32(options[i+6 : i+10])
-					p.TcpOptions.TimestampEnabled = true
-					p.TcpOptions.Timestamp = timestamp
-					p.TcpOptions.TsEchoReplyValue = echoReplyValue
+					timestamp := binary.BigEndian.Uint32(optionsBytes[i+2 : i+6])
+					echoReplyValue := binary.BigEndian.Uint32(optionsBytes[i+6 : i+10])
+					p.TcpOptions.timestampEnabled = true
+					p.TcpOptions.timestamp = timestamp
+					p.TcpOptions.tsEchoReplyValue = echoReplyValue
 					//log.Printf("Got TSval:%d and TsErv:%d", timestamp, echoReplyValue)
 				}
 			default:
-				optionLength = options[i+1]
+				optionLength = optionsBytes[i+1]
 			}
 			// Move to the next option
 			i += int(optionLength)
@@ -295,7 +295,7 @@ func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) error {
 	// Retrieve the checksum from the packet
 	p.Checksum = binary.BigEndian.Uint16(data[16:18]) // Assuming checksum field is at byte 16 and 17
 
-	if PoolDebug && p.chunk != nil {
+	if rp.Debug && p.chunk != nil {
 		p.chunk.TickFootPrint(fp)
 	}
 
@@ -316,17 +316,17 @@ func NewPcpPacket(seqNum, ackNum uint32, flags uint8, data []byte, conn *Connect
 		}
 	}*/
 	newPacket := &PcpPacket{
-		SrcAddr:           conn.Params.LocalAddr,
-		DestAddr:          conn.Params.RemoteAddr,
-		SourcePort:        uint16(conn.Params.LocalPort),
-		DestinationPort:   uint16(conn.Params.RemotePort),
+		SrcAddr:           conn.params.localAddr,
+		DestAddr:          conn.params.remoteAddr,
+		SourcePort:        uint16(conn.params.localPort),
+		DestinationPort:   uint16(conn.params.remotePort),
 		SequenceNumber:    seqNum,
 		AcknowledgmentNum: ackNum,
 		Flags:             flags,
-		WindowSize:        conn.WindowSize,
+		WindowSize:        conn.windowSize,
 		//Payload:           data,
-		IsOpenConnection: conn.IsOpenConnection,
-		TcpOptions:       conn.TcpOptions,
+		IsOpenConnection: conn.isOpenConnection,
+		TcpOptions:       conn.tcpOptions,
 		//TcpOptions:        tcpOptionsCopy,
 		Conn: conn,
 	}
@@ -366,6 +366,22 @@ func (p *PcpPacket) GetChunk() {
 
 func (p *PcpPacket) GetChunkReference() *rp.Element {
 	return p.chunk
+}
+
+func (p *PcpPacket) AddFootPrint(fpStr string) int {
+	return p.chunk.AddFootPrint(fpStr)
+}
+
+func (p *PcpPacket) TickFootPrint(fp int) {
+	p.chunk.TickFootPrint(fp)
+}
+
+func (p *PcpPacket) AddChannel(chanStr string) {
+	p.chunk.AddChannel(chanStr)
+}
+
+func (p *PcpPacket) TickChannel() {
+	p.chunk.TickChannel()
 }
 
 func CalculateChecksum(buffer []byte) uint16 {
@@ -541,19 +557,19 @@ func (r *ResendPackets) RemoveSentPacket(seqNum uint32) {
 	defer r.mutex.Unlock()
 	packet, ok := r.packets[seqNum]
 	if !ok {
-		if PoolDebug && packet.Data.chunk != nil {
+		if rp.Debug && packet.Data.chunk != nil {
 			log.Println("RemoveSentPackact error: No such packets with SEQ", seqNum)
 		}
 		return
 	}
-	if PoolDebug && packet.Data.chunk != nil {
+	if rp.Debug && packet.Data.chunk != nil {
 		fp = packet.Data.chunk.AddFootPrint("ResendPackets.RemoveSentPacket")
 	}
 
 	delete(r.packets, seqNum)
 	// now that we delete packet from SentPackets, we no longer
 	// need it so it's time to return its chunk
-	if PoolDebug && packet.Data.chunk != nil {
+	if rp.Debug && packet.Data.chunk != nil {
 		packet.Data.chunk.TickFootPrint(fp)
 	}
 	packet.Data.ReturnChunk()

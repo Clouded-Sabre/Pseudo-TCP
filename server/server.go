@@ -42,32 +42,6 @@ func main() {
 		log.Fatalln("Configurtion file error:", err)
 	}
 
-	connConfig := &lib.ConnectionConfig{
-		WindowScale:             config.AppConfig.WindowScale,
-		PreferredMSS:            config.AppConfig.PreferredMSS,
-		SackPermitSupport:       config.AppConfig.SackPermitSupport,
-		SackOptionSupport:       config.AppConfig.SackOptionSupport,
-		IdleTimeout:             config.AppConfig.IdleTimeout,
-		KeepAliveEnabled:        config.AppConfig.KeepAliveEnabled,
-		KeepaliveInterval:       config.AppConfig.KeepaliveInterval,
-		MaxKeepaliveAttempts:    config.AppConfig.MaxKeepaliveAttempts,
-		ResendInterval:          config.AppConfig.ResendInterval,
-		MaxResendCount:          config.AppConfig.MaxResendCount,
-		Debug:                   true,
-		WindowSizeWithScale:     config.AppConfig.WindowSizeWithScale,
-		ConnSignalRetryInterval: config.AppConfig.ConnSignalRetryInterval,
-		ConnSignalRetry:         config.AppConfig.ConnSignalRetry,
-	}
-	pcpConfig := &lib.PcpProtocolConnConfig{
-		IptableRuleDaley:     config.AppConfig.IptableRuleDaley,
-		PreferredMSS:         config.AppConfig.PreferredMSS,
-		PacketLostSimulation: config.AppConfig.PacketLostSimulation,
-		PConnTimeout:         config.AppConfig.PConnTimeout,
-		ClientPortUpper:      config.AppConfig.ClientPortUpper,
-		ClientPortLower:      config.AppConfig.ClientPortLower,
-		ConnConfig:           connConfig,
-	}
-
 	pcpCoreConfig := &lib.PcpCoreConfig{
 		ProtocolID:      uint8(config.AppConfig.ProtocolID),
 		PreferredMSS:    config.AppConfig.PreferredMSS,
@@ -77,10 +51,10 @@ func main() {
 	// Create PCP server
 	pcpCoreObj, err = lib.NewPcpCore(pcpCoreConfig)
 	if err != nil {
-		log.Println("Error creating PCP server:", err)
+		log.Println("Error creating PCP core:", err)
 		return
 	}
-	log.Println("PCP server started.")
+	log.Println("PCP core started.")
 
 	// Listen for interrupt signal (Ctrl+C)
 	signalChan := make(chan os.Signal, 1)
@@ -89,7 +63,7 @@ func main() {
 	closeChan := make(chan struct{})
 
 	// Start the PCP server
-	srv, err := pcpCoreObj.ListenPcp(serverIP, serverPort, pcpConfig)
+	srv, err := pcpCoreObj.ListenPcp(serverIP, serverPort, config.AppConfig)
 	if err != nil {
 		log.Printf("PCP server error listening at %s:%d: %s", serverIP, serverPort, err)
 		return
