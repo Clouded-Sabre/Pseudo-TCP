@@ -21,7 +21,7 @@ type Connection struct {
 	windowSize     uint16            // PCP windows size, static once connection establishes
 	initialSeq     uint32            // connection's initial SEQ, static once connection establishes
 	initialPeerSeq uint32            // the initial SEQ from Peer, static once connection establishes
-	//varoables
+	//variables
 	nextSequenceNumber             uint32          // the SEQ sequence number of the next outgoing packet
 	lastAckNumber                  uint32          // the last acknowleged incoming packet
 	termStartSeq, termStartPeerSeq uint32          // Seq and Peer Seq when 4-way termination starts
