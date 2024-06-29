@@ -165,6 +165,22 @@ func newConnection(connParams *connectionParams, connConfig *connectionConfig) (
 	return newConn, nil
 }
 
+func (c *Connection) LocalAddr() *net.IPAddr {
+	return c.params.localAddr.(*net.IPAddr)
+}
+
+func (c *Connection) LocalPort() int {
+	return c.params.localPort
+}
+
+func (c *Connection) RemoteAddr() *net.IPAddr {
+	return c.params.remoteAddr.(*net.IPAddr)
+}
+
+func (c *Connection) RemotePort() int {
+	return c.params.remotePort
+}
+
 func (c *Connection) handleIncomingPackets() {
 	// Decrease WaitGroup counter when the goroutine completes
 	defer c.wg.Done()
@@ -994,14 +1010,6 @@ func (c *Connection) startConnSignalTimer() {
 
 func (c *Connection) stopConnSignalTimer() {
 	c.connSignalTimer.Stop()
-}
-
-func (c *Connection) RemoteAddr() *net.Addr {
-	return &c.params.remoteAddr
-}
-
-func (c *Connection) RemotePort() int {
-	return c.params.remotePort
 }
 
 func (c *Connection) closeForcefully(wg *sync.WaitGroup) error {

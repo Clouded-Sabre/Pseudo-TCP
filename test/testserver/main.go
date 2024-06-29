@@ -64,7 +64,7 @@ func handleClient(conn *lib.Connection, closeChan chan struct{}, wg *sync.WaitGr
 				break
 			}
 
-			log.Printf("Sent packet with length %d to %s:%d\n", n, (*conn.RemoteAddr()).(*net.IPAddr).String(), conn.RemotePort())
+			log.Printf("Sent packet with length %d to %s:%d\n", n, conn.RemoteAddr().IP, conn.RemotePort())
 
 			// Sleep for a random duration between 0 and maxGapMs milliseconds
 			sleepDuration := time.Duration(rand.Intn(maxGapMs)) * time.Millisecond
