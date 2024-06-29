@@ -106,8 +106,11 @@ func (s *Service) handleIncomingPackets() {
 			return
 		case packet := <-s.inputChannel:
 			if rp.Debug && packet.GetChunkReference() != nil {
-				packet.GetChunkReference().TickChannel()
-				fp = packet.GetChunkReference().AddFootPrint("service.handleServicePackets")
+				err := packet.TickChannel()
+				if err != nil {
+					log.Println("Service.handleIncomingPackets:", err)
+				}
+				fp = packet.AddFootPrint("service.handleServicePackets")
 			}
 			// Extract SYN and ACK flags from the packet
 			isSYN := packet.Flags&SYNFlag != 0
@@ -115,22 +118,23 @@ func (s *Service) handleIncomingPackets() {
 
 			// If it's a SYN only packet, handle it
 			if isSYN && !isACK {
+				// no need to tick zero length SYN packet
 				s.handleSynPacket(packet)
 			} else {
-				s.handleDataPacket(packet)
-			}
-			if rp.Debug && packet.GetChunkReference() != nil {
-				packet.GetChunkReference().TickFootPrint(fp)
+				if rp.Debug && packet.GetChunkReference() != nil {
+					packet.TickFootPrint(fp)
+				}
+				s.handleOtherPacket(packet)
 			}
 		}
 	}
 }
 
-// handleDataPacket forward Data packet to corresponding open connection if present.
-func (s *Service) handleDataPacket(packet *PcpPacket) {
+// handleDataPacket forward non-syn packet to corresponding open connection if present.
+func (s *Service) handleOtherPacket(packet *PcpPacket) {
 	var fp int
 	if rp.Debug && packet.GetChunkReference() != nil {
-		fp = packet.GetChunkReference().AddFootPrint("service.handleDataPacket")
+		fp = packet.AddFootPrint("service.handleDataPacket")
 	}
 	// Extract destination IP and port from the packet
 	sourceIP := packet.SrcAddr.(*net.IPAddr).IP.String()
@@ -144,8 +148,8 @@ func (s *Service) handleDataPacket(packet *PcpPacket) {
 	if ok && !conn.isClosed {
 		// Dispatch the packet to the corresponding connection's input channel
 		if rp.Debug && packet.GetChunkReference() != nil {
-			packet.GetChunkReference().TickFootPrint(fp)
-			packet.GetChunkReference().AddChannel("Conn.InputChannel")
+			packet.TickFootPrint(fp)
+			packet.AddChannel("Conn.InputChannel")
 		}
 		conn.inputChannel <- packet
 		return
@@ -154,22 +158,30 @@ func (s *Service) handleDataPacket(packet *PcpPacket) {
 	// then check if the connection exists in temp connection map
 	tempConn, ok := s.tempConnMap[connKey]
 	if ok && !tempConn.isClosed {
-		if len(packet.Payload) == 0 && packet.SequenceNumber-tempConn.initialPeerSeq < 2 {
+		if len(packet.Payload) == 0 && isLess(packet.SequenceNumber, SeqIncrementBy(tempConn.initialPeerSeq, 2)) {
 			// Dispatch the packet to the corresponding connection's input channel
 			if rp.Debug && packet.GetChunkReference() != nil {
-				packet.GetChunkReference().TickFootPrint(fp)
-				packet.GetChunkReference().AddChannel("TempConn.InputChannel")
+				packet.TickFootPrint(fp)
 			}
 			tempConn.inputChannel <- packet
 			return
-		} else if len(packet.Payload) > 0 {
-			// since the connection is not ready yet, discard the data packet for the time being
-			packet.ReturnChunk()
-			return
+		} else {
+			// non-signalling packet should not be sent to temp connection
+			if s.connConfig.debug {
+				log.Println("non-signalling packet should not be sent to temp connection. Discard it")
+				if rp.Debug && packet.GetChunkReference() != nil {
+					packet.TickFootPrint(fp)
+				}
+				packet.ReturnChunk()
+				return
+			}
 		}
 	}
 
-	log.Printf("Received data packet for non-existent connection: %s\n", connKey)
+	log.Printf("Received non-SYN packet for non-existent connection: %s\n", connKey)
+	if rp.Debug && packet.GetChunkReference() != nil {
+		packet.TickFootPrint(fp)
+	}
 	packet.ReturnChunk()
 }
 

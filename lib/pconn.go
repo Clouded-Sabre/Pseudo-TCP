@@ -302,8 +302,11 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 			}
 			tempConn.inputChannel <- packet
 			return
-		} else if len(packet.Payload) > 0 {
+		} else if len(packet.Payload) > 0 { // data packet
 			// since the connection is not ready yet, discard the data packet for the time being
+			if rp.Debug && packet.GetChunkReference() != nil {
+				packet.TickFootPrint(fp)
+			}
 			packet.ReturnChunk()
 			return
 		}
@@ -311,6 +314,9 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 
 	fmt.Printf("Received data packet for non-existent connection: %s\n", connKey)
 	// return the packet chunk now that it's destined to an unknown connection
+	if rp.Debug && packet.GetChunkReference() != nil {
+		packet.TickFootPrint(fp)
+	}
 	packet.ReturnChunk()
 }
 
@@ -348,7 +354,7 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 	}
 
 	if rp.Debug && packet.GetChunkReference() != nil {
-		fp = packet.GetChunkReference().AddFootPrint("pcpProtocolConn.handleIncomingPackets")
+		fp = packet.AddFootPrint("pcpProtocolConn.handleIncomingPackets")
 	}
 
 	destPort := packet.DestinationPort
@@ -362,19 +368,26 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 	if !ok {
 		//fmt.Println("No service registered for port:", destPort)
 		// return the packet's chunk
+		if rp.Debug && packet.GetChunkReference() != nil {
+			packet.TickFootPrint(fp)
+		}
 		packet.ReturnChunk()
 		return
 	}
-	if ok && service.isClosed {
+
+	if service.isClosed { // OK but sevice is closed
 		log.Println("Packet is destined to a closed service. Ignore it.")
+		if rp.Debug && packet.GetChunkReference() != nil {
+			packet.TickFootPrint(fp)
+		}
 		packet.ReturnChunk()
 		return
 	}
 
 	// Dispatch the packet to the corresponding service's input channel
 	if rp.Debug && packet.GetChunkReference() != nil {
-		packet.GetChunkReference().TickFootPrint(fp)
-		packet.GetChunkReference().AddChannel("Service.InputChannel")
+		packet.TickFootPrint(fp)
+		packet.AddChannel("Service.InputChannel")
 	}
 	service.inputChannel <- packet
 }
@@ -437,8 +450,11 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 		}
 
 		if rp.Debug && packet.GetChunkReference() != nil {
-			packet.GetChunkReference().TickChannel()
-			fp = packet.GetChunkReference().AddFootPrint("pcpProtocolConnection.handleOutgoingPackets")
+			err := packet.TickChannel()
+			if err != nil {
+				log.Println("PCPProtocolConnection.handleOutgoingPackets:", err)
+			}
+			fp = packet.AddFootPrint("pcpProtocolConnection.handleOutgoingPackets")
 		}
 
 		if p.config.packetLostSimulation {
@@ -474,13 +490,25 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 		// add packet to the connection's ResendPackets to wait for acknowledgement from peer or resend if lost
 		if len(packet.Payload) > 0 {
 			if packet.Conn.tcpOptions.SackEnabled && !packet.IsKeepAliveMassege {
-				// if the packet is already in ResendPackets, it is a resend packet. Ignore it. Otherwise, add it to
+				// if the packet is already in ResendPackets, it is a resend packet. Ignore it. Otherwise, add it to ResendPackets
 				if _, found := packet.Conn.resendPackets.GetSentPacket(packet.SequenceNumber); !found {
+					if rp.Debug && packet.GetChunkReference() != nil {
+						packet.TickFootPrint(fp)
+					}
 					packet.Conn.resendPackets.AddSentPacket(packet)
 				} else {
-					//fmt.Println("this is a resent packet. Do not put it into ResendPackets")
+					if p.config.connConfig.debug {
+						fmt.Println("this is a resent packet. Do not put it into ResendPackets")
+					}
+					if rp.Debug && packet.GetChunkReference() != nil {
+						packet.TickFootPrint(fp)
+					}
+					packet.ReturnChunk() //return its chunk to pool
 				}
 			} else { // SACK is not enabled or it is a keepalive massage
+				if rp.Debug && packet.GetChunkReference() != nil {
+					packet.TickFootPrint(fp)
+				}
 				packet.ReturnChunk() //return its chunk to pool
 			}
 		}
@@ -489,10 +517,6 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 			count = (count + 1) % 10
 		}
 		packetLost = false
-
-		if rp.Debug && packet.GetChunkReference() != nil {
-			packet.GetChunkReference().TickFootPrint(fp)
-		}
 	}
 }
 

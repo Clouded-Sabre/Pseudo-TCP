@@ -36,8 +36,8 @@ type PcpPacket struct {
 // Marshal converts a PcpPacket to a byte slice
 func (p *PcpPacket) Marshal(protocolId uint8, buffer []byte) (int, error) {
 	var fp int
-	if rp.Debug && p.chunk != nil {
-		fp = p.chunk.AddFootPrint("p.Marshal")
+	if rp.Debug && p.GetChunkReference() != nil {
+		fp = p.AddFootPrint("p.Marshal")
 	}
 	// Calculate the length of the options field (including padding)
 	optionsLength := 0
@@ -192,8 +192,8 @@ func (p *PcpPacket) Marshal(protocolId uint8, buffer []byte) (int, error) {
 // Unmarshal converts a byte slice to a PcpPacket
 func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) error {
 	var fp int
-	if rp.Debug && p.chunk != nil {
-		fp = p.chunk.AddFootPrint("p.Unmarshal")
+	if rp.Debug && p.GetChunkReference() != nil {
+		fp = p.AddFootPrint("p.Unmarshal")
 	}
 	if len(data) < TcpHeaderLength {
 		return fmt.Errorf("the length(%d) of data is too short to be unmarshalled", len(data))
@@ -295,8 +295,8 @@ func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) error {
 	// Retrieve the checksum from the packet
 	p.Checksum = binary.BigEndian.Uint16(data[16:18]) // Assuming checksum field is at byte 16 and 17
 
-	if rp.Debug && p.chunk != nil {
-		p.chunk.TickFootPrint(fp)
+	if rp.Debug && p.GetChunkReference() != nil {
+		p.TickFootPrint(fp)
 	}
 
 	return nil
@@ -334,6 +334,15 @@ func NewPcpPacket(seqNum, ackNum uint32, flags uint8, data []byte, conn *Connect
 		newPacket.CopyToPayload(data)
 	}
 	return newPacket
+}
+
+func (p *PcpPacket) Duplicate() (*PcpPacket, error) {
+	dPacket := NewPcpPacket(p.SequenceNumber, p.AcknowledgmentNum, p.Flags, p.chunk.Data.(*Payload).GetSlice(), p.Conn)
+	if dPacket == nil {
+		return nil, fmt.Errorf("failed to duplicate packet")
+	}
+
+	return dPacket, nil
 }
 
 func (p *PcpPacket) CopyToPayload(src []byte) error {
@@ -380,8 +389,12 @@ func (p *PcpPacket) AddChannel(chanStr string) {
 	p.chunk.AddChannel(chanStr)
 }
 
-func (p *PcpPacket) TickChannel() {
-	p.chunk.TickChannel()
+func (p *PcpPacket) TickChannel() error {
+	return p.chunk.TickChannel()
+}
+
+func (p *PcpPacket) GetPayloadLength() int {
+	return len(p.chunk.Data.(*Payload).GetSlice())
 }
 
 func CalculateChecksum(buffer []byte) uint16 {
@@ -557,20 +570,18 @@ func (r *ResendPackets) RemoveSentPacket(seqNum uint32) {
 	defer r.mutex.Unlock()
 	packet, ok := r.packets[seqNum]
 	if !ok {
-		if rp.Debug && packet.Data.chunk != nil {
-			log.Println("RemoveSentPackact error: No such packets with SEQ", seqNum)
-		}
+		log.Println("RemoveSentPackact error: No such packets with SEQ", seqNum)
 		return
 	}
-	if rp.Debug && packet.Data.chunk != nil {
-		fp = packet.Data.chunk.AddFootPrint("ResendPackets.RemoveSentPacket")
+	if rp.Debug && packet.Data.GetChunkReference() != nil {
+		fp = packet.Data.AddFootPrint("ResendPackets.RemoveSentPacket")
 	}
 
 	delete(r.packets, seqNum)
 	// now that we delete packet from SentPackets, we no longer
 	// need it so it's time to return its chunk
-	if rp.Debug && packet.Data.chunk != nil {
-		packet.Data.chunk.TickFootPrint(fp)
+	if rp.Debug && packet.Data.GetChunkReference() != nil {
+		packet.Data.TickFootPrint(fp)
 	}
 	packet.Data.ReturnChunk()
 }
