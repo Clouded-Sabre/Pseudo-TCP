@@ -36,6 +36,7 @@ type Config struct {
 	ConnSignalRetryInterval int    `yaml:"conn_signal_retry_interval"`
 	PConnTimeout            int    `yaml:"pconn_time_out"`
 	IptableRuleDaley        int    `yaml:"iptable_rule_daley"`
+	ChecksumVerification    bool   `yaml:"checksum_verification"`
 }
 
 var AppConfig *Config

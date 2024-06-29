@@ -45,6 +45,7 @@ type pcpProtocolConnConfig struct {
 	pConnTimeout                     int
 	clientPortUpper, clientPortLower int
 	connConfig                       *connectionConfig
+	verifyChecksum                   bool
 }
 
 func newPcpProtocolConnConfig(pcpConfig *config.Config) *pcpProtocolConnConfig {
@@ -56,6 +57,7 @@ func newPcpProtocolConnConfig(pcpConfig *config.Config) *pcpProtocolConnConfig {
 		clientPortUpper:      pcpConfig.ClientPortUpper,
 		clientPortLower:      pcpConfig.ClientPortLower,
 		connConfig:           newConnectionConfig(pcpConfig),
+		verifyChecksum:       pcpConfig.ChecksumVerification,
 	}
 }
 
@@ -249,9 +251,11 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	//log.Println("extracted PCP frame length is", len(pcpFrame), pcpFrame)
 	// check PCP packet checksum
 	// please note the first TcpPseudoHeaderLength bytes are reseved for Tcp pseudo header
-	if !VerifyChecksum(buffer[index-TcpPseudoHeaderLength:n], p.serverAddr, p.localAddr, uint8(p.protocolId)) {
-		log.Println("Packet checksum verification failed. Skip this packet.")
-		return
+	if p.config.verifyChecksum {
+		if !VerifyChecksum(buffer[index-TcpPseudoHeaderLength:n], p.serverAddr, p.localAddr, uint8(p.protocolId)) {
+			log.Println("Packet checksum verification failed. Skip this packet.")
+			return
+		}
 	}
 
 	// Extract destination port
@@ -340,9 +344,11 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 	}
 
 	// check PCP packet checksum
-	if !VerifyChecksum(buffer[:TcpPseudoHeaderLength+n], addr, p.serverAddr, uint8(p.protocolId)) {
-		log.Println("Packet checksum verification failed. Skip this packet.")
-		return
+	if p.config.verifyChecksum {
+		if !VerifyChecksum(buffer[:TcpPseudoHeaderLength+n], addr, p.serverAddr, uint8(p.protocolId)) {
+			log.Println("Packet checksum verification failed. Skip this packet.")
+			return
+		}
 	}
 
 	// Extract destination port

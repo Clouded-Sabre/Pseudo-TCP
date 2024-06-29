@@ -21,3 +21,4 @@ conn_signal_retry: 5
 conn_signal_retry_interval: 2   # in seconds
 pconn_time_out: 10 # in seconds
 iptable_rule_daley: 200 # in milliseconds
+checksum_verification: false
