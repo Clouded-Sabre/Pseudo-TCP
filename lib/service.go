@@ -158,24 +158,25 @@ func (s *Service) handleOtherPacket(packet *PcpPacket) {
 	// then check if the connection exists in temp connection map
 	tempConn, ok := s.tempConnMap[connKey]
 	if ok && !tempConn.isClosed {
-		if len(packet.Payload) == 0 && isLess(packet.SequenceNumber, SeqIncrementBy(tempConn.initialPeerSeq, 2)) {
-			// Dispatch the packet to the corresponding connection's input channel
+		//if len(packet.Payload) == 0 && isLess(packet.SequenceNumber, SeqIncrementBy(tempConn.initialPeerSeq, 2)) {
+		//if len(packet.Payload) == 0 && isLess(packet.SequenceNumber, SeqIncrementBy(tempConn.initialPeerSeq, 2)) {
+		// Dispatch the packet to the corresponding connection's input channel
+		if rp.Debug && packet.GetChunkReference() != nil {
+			packet.TickFootPrint(fp)
+		}
+		tempConn.inputChannel <- packet
+		return
+		/*} else {
+		// non-signalling packet should not be sent to temp connection
+		if s.connConfig.debug {
+			log.Println("non-signalling packet should not be sent to temp connection. Discard it")
 			if rp.Debug && packet.GetChunkReference() != nil {
 				packet.TickFootPrint(fp)
 			}
-			tempConn.inputChannel <- packet
+			packet.ReturnChunk()
 			return
-		} else {
-			// non-signalling packet should not be sent to temp connection
-			if s.connConfig.debug {
-				log.Println("non-signalling packet should not be sent to temp connection. Discard it")
-				if rp.Debug && packet.GetChunkReference() != nil {
-					packet.TickFootPrint(fp)
-				}
-				packet.ReturnChunk()
-				return
-			}
-		}
+		}*/
+		//}
 	}
 
 	log.Printf("Received non-SYN packet for non-existent connection: %s\n", connKey)
@@ -327,7 +328,7 @@ func (s *Service) Close() error {
 	}
 
 	// wait for 500ms to allow temp connections to finish closing
-	SleepForMs(500)
+	SleepForMs(100)
 
 	// begin close the service itself and clear resources
 	s.isClosed = true

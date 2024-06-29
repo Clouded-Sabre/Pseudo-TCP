@@ -615,116 +615,6 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 	return totalBytesWritten, nil
 }
 
-func (c *Connection) closeForcefully(wg *sync.WaitGroup) error {
-	defer wg.Done()
-	err := c.Close()
-	if err != nil {
-		return err
-	}
-
-	SleepForMs(6000)
-	if !c.isClosed {
-		c.clearConnResource()
-	}
-	return nil
-}
-
-func (c *Connection) Close() error {
-	// mimicking net lib TCP close function interface
-	// initiate connection close by sending FIN to the other side
-	// set and check connection's TerminationCallerState along the way of 4-way termination process
-
-	// put write channel on hold so that no data packet interfere with termination process
-	c.writeOnHold = true
-
-	// send syn packet to peer
-	c.termStartSeq = c.nextSequenceNumber
-	c.termStartPeerSeq = c.lastAckNumber
-	c.termCallerSendFin()
-	c.nextSequenceNumber = SeqIncrement(c.nextSequenceNumber) // implicit modulo op
-	c.startConnSignalTimer()
-
-	log.Println("4-way termination caller sent FIN packet")
-
-	return nil
-}
-
-// clear connection resources and send close signal to paranet
-func (c *Connection) clearConnResource() {
-	log.Println("Start clearing connection resource")
-	c.isClosed = true
-
-	// Lock to ensure exclusive access to the timer
-	c.keepaliveTimerMutex.Lock()
-	defer c.keepaliveTimerMutex.Unlock()
-
-	// Stop the keepalive timer if it's running
-	if c.keepaliveTimer != nil {
-		c.keepaliveTimer.Stop()
-		c.keepaliveTimer = nil
-	}
-	log.Println("Keepalive timer cleared")
-
-	// Lock to ensure exclusive access to the timer
-	c.resendTimerMutex.Lock()
-	defer c.resendTimerMutex.Unlock()
-
-	// Stop the resend timer if it's running
-	if c.resendTimer != nil {
-		c.resendTimer.Stop()
-		c.resendTimer = nil
-	}
-	log.Println("Resender timer cleared")
-
-	// stop ConnSignalTimer
-	if c.connSignalTimer != nil {
-		c.connSignalTimer.Stop()
-		c.connSignalTimer = nil
-	}
-	log.Println("ConnSignalTimer timer cleared")
-
-	// Close connection go routines first
-	close(c.closeSigal) // Close the channel to signal termination
-	log.Println("close signal sent to go routine")
-
-	c.wg.Wait() // wait for go routine to close
-
-	// close channels
-	close(c.inputChannel)
-	close(c.readChannel)
-
-	endOfConnClose := func() {
-		log.Println("Connection close signal already sent to parent. Now we start to return all chunks")
-		// if SACK option is enabled, release all packets in the sendPackets and RevPacketCache
-		if c.tcpOptions.SackEnabled {
-			// Return chunks of all packets in c.ResendPackets to pool
-			for _, packet := range c.resendPackets.packets {
-				packet.Data.ReturnChunk()
-			}
-			log.Printf("Released %d chunks from ResendPackets\n", len(c.resendPackets.packets))
-
-			// Return chunks of all packets in c.RevPacketCache to pool
-			for _, packet := range c.revPacketCache.packets {
-				packet.Packet.ReturnChunk()
-			}
-			log.Printf("Released %d chunks from RevPacketCache\n", len(c.revPacketCache.packets))
-		}
-		log.Printf("Connection %s resource cleared.\n", c.params.key)
-	}
-
-	// then send close connection signal to parent to clear connection resource
-	defer func() {
-		if r := recover(); r != nil {
-			// Handle the panic caused by sending to a closed channel
-			fmt.Println("Parent is already closed. No need to notify it anymore", r)
-			endOfConnClose()
-		}
-	}()
-	c.params.connCloseSignalChan <- c
-
-	endOfConnClose()
-}
-
 // Function to resend lost packets based on SACK blocks and resend packet information
 func (c *Connection) resendLostPacket() {
 	var fp int
@@ -1112,4 +1002,129 @@ func (c *Connection) RemoteAddr() *net.Addr {
 
 func (c *Connection) RemotePort() int {
 	return c.params.remotePort
+}
+
+func (c *Connection) closeForcefully(wg *sync.WaitGroup) error {
+	defer wg.Done()
+
+	log.Printf("waiting for pcp connection %s:%d to close...\n", c.params.remoteAddr.(*net.IPAddr).IP, c.params.remotePort)
+	err := c.Close()
+	if err != nil {
+		return err
+	}
+
+	timeout := time.After(6 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			if !c.isClosed {
+				log.Printf("pcp connection %s:%d timed out waiting for peer closing response. Close the connection forcifully...\n", c.params.remoteAddr.(*net.IPAddr).IP, c.params.remotePort)
+				c.clearConnResource()
+			}
+			return nil
+		case <-ticker.C:
+			if c.isClosed {
+				return nil
+			}
+		}
+	}
+}
+
+func (c *Connection) Close() error {
+	// mimicking net lib TCP close function interface
+	// initiate connection close by sending FIN to the other side
+	// set and check connection's TerminationCallerState along the way of 4-way termination process
+
+	// put write channel on hold so that no data packet interfere with termination process
+	c.writeOnHold = true
+
+	// send syn packet to peer
+	c.termStartSeq = c.nextSequenceNumber
+	c.termStartPeerSeq = c.lastAckNumber
+	c.termCallerSendFin()
+	c.nextSequenceNumber = SeqIncrement(c.nextSequenceNumber) // implicit modulo op
+	c.startConnSignalTimer()
+
+	log.Println("4-way termination caller sent FIN packet")
+
+	return nil
+}
+
+// clear connection resources and send close signal to paranet
+func (c *Connection) clearConnResource() {
+	log.Println("Start clearing connection resource")
+	c.isClosed = true
+
+	// Lock to ensure exclusive access to the timer
+	c.keepaliveTimerMutex.Lock()
+	defer c.keepaliveTimerMutex.Unlock()
+
+	// Stop the keepalive timer if it's running
+	if c.keepaliveTimer != nil {
+		c.keepaliveTimer.Stop()
+		c.keepaliveTimer = nil
+	}
+	log.Println("Keepalive timer cleared")
+
+	// Lock to ensure exclusive access to the timer
+	c.resendTimerMutex.Lock()
+	defer c.resendTimerMutex.Unlock()
+
+	// Stop the resend timer if it's running
+	if c.resendTimer != nil {
+		c.resendTimer.Stop()
+		c.resendTimer = nil
+	}
+	log.Println("Resender timer cleared")
+
+	// stop ConnSignalTimer
+	if c.connSignalTimer != nil {
+		c.connSignalTimer.Stop()
+		c.connSignalTimer = nil
+	}
+	log.Println("ConnSignalTimer timer cleared")
+
+	// Close connection go routines first
+	close(c.closeSigal) // Close the channel to signal termination
+	log.Println("close signal sent to go routine")
+
+	c.wg.Wait() // wait for go routine to close
+
+	// close channels
+	close(c.inputChannel)
+	close(c.readChannel)
+
+	endOfConnClose := func() {
+		// if SACK option is enabled, release all packets in the sendPackets and RevPacketCache
+		if c.tcpOptions.SackEnabled {
+			log.Println("Connection close signal already sent to parent. Now we start to return all chunks")
+			// Return chunks of all packets in c.ResendPackets to pool
+			for _, packet := range c.resendPackets.packets {
+				packet.Data.ReturnChunk()
+			}
+			log.Printf("Released %d chunks from ResendPackets\n", len(c.resendPackets.packets))
+
+			// Return chunks of all packets in c.RevPacketCache to pool
+			for _, packet := range c.revPacketCache.packets {
+				packet.Packet.ReturnChunk()
+			}
+			log.Printf("Released %d chunks from RevPacketCache\n", len(c.revPacketCache.packets))
+		}
+		log.Printf("Connection %s resource cleared.\n", c.params.key)
+	}
+
+	// then send close connection signal to parent to clear connection resource
+	defer func() {
+		if r := recover(); r != nil {
+			// Handle the panic caused by sending to a closed channel
+			fmt.Println("Parent is already closed. No need to notify it anymore", r)
+			endOfConnClose()
+		}
+	}()
+	c.params.connCloseSignalChan <- c
+
+	endOfConnClose()
 }

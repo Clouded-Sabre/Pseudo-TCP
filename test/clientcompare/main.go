@@ -19,7 +19,7 @@ func main() {
 	serverAddrFlag := flag.String("server", "127.0.0.1:3333", "Server address in the format 'host:port'")
 	filePathFlag := flag.String("file", "book.txt", "Path to the file for comparison")
 	sourceIpStr := flag.String("sourceIP", "127.0.0.4", "local source IP address")
-	mtuFlag := flag.Int("mtu", 1400, "MTU (Maximum Transmission Unit) size")
+	mtuFlag := flag.Int("MTU", 1400, "MTU (Maximum Transmission Unit) size")
 
 	// Parse command-line arguments
 	flag.Parse()

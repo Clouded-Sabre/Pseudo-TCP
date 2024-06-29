@@ -38,7 +38,7 @@ func NewPcpCore(pcpcoreConfig *PcpCoreConfig) (*PcpCore, error) {
 	}
 
 	rp.Debug = true
-	Pool = rp.NewRingPool("PCP", pcpcoreConfig.PayloadPoolSize, NewPayload, pcpcoreConfig.PreferredMSS)
+	Pool = rp.NewRingPool("PCP: ", pcpcoreConfig.PayloadPoolSize, NewPayload, pcpcoreConfig.PreferredMSS)
 
 	// Start goroutines
 	pcpServerObj.wg.Add(1) // Increase WaitGroup counter by 1 for the handleClosePConnConnection goroutines

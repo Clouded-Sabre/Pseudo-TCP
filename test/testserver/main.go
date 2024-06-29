@@ -97,7 +97,7 @@ var (
 func init() {
 	// Define CLI flags for server IP and port
 	flag.StringVar(&svcAddrStr, "svcaddr", "127.0.0.1:8080", "SFDP service address(IP:Port)")
-	flag.StringVar(&filePath, "filepath", "book.txt", "file path to the book txt file")
+	flag.StringVar(&filePath, "file", "book.txt", "file path to the book txt file")
 	flag.IntVar(&mtu, "MTU", 1300, "payload MTU")
 	flag.IntVar(&maxGapMs, "max-gap-ms", 1300, "Max gap in ms between two consecutive packets")
 	flag.Parse()
