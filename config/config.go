@@ -37,6 +37,7 @@ type Config struct {
 	PConnTimeout            int    `yaml:"pconn_time_out"`
 	IptableRuleDaley        int    `yaml:"iptable_rule_daley"`
 	ChecksumVerification    bool   `yaml:"checksum_verification"`
+	Debug                   bool   `yaml:"debug"`
 }
 
 var AppConfig *Config

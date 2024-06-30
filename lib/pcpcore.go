@@ -17,6 +17,7 @@ type PcpCoreConfig struct {
 	ProtocolID      uint8 // protocol id which should be 6
 	PayloadPoolSize int   // how many number of packet payload chunks in the pool
 	PreferredMSS    int   // preferred MSS
+	Debug           bool
 }
 
 type PcpCore struct {
@@ -37,7 +38,7 @@ func NewPcpCore(pcpcoreConfig *PcpCoreConfig) (*PcpCore, error) {
 		closeSignal:        make(chan struct{}),
 	}
 
-	rp.Debug = true
+	rp.Debug = pcpcoreConfig.Debug
 	Pool = rp.NewRingPool("PCP: ", pcpcoreConfig.PayloadPoolSize, NewPayload, pcpcoreConfig.PreferredMSS)
 
 	// Start goroutines
