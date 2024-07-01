@@ -610,6 +610,9 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 
 		// Construct a packet with the current segment
 		packet := NewPcpPacket(c.nextSequenceNumber, c.lastAckNumber, ACKFlag, buffer[:segmentLength], c)
+		if packet == nil {
+			return 0, fmt.Errorf("pcp connection write: failed to create new packet with payoad length %d", segmentLength)
+		}
 		if rp.Debug && packet.GetChunkReference() != nil {
 			fp = packet.chunk.AddFootPrint("Connection.Write")
 		}
@@ -632,7 +635,7 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 }
 
 // Function to resend lost packets based on SACK blocks and resend packet information
-func (c *Connection) resendLostPacket() {
+func (c *Connection) resendLostPackets() {
 	var fp int
 
 	if c.isClosed {
@@ -674,7 +677,8 @@ func (c *Connection) resendLostPacket() {
 					// make a copy of packetInfo.Data and resend it
 					dPacket, err := packetInfo.Data.Duplicate()
 					if err != nil {
-						log.Fatal(err)
+						log.Println("PCP connection resendLostPacket:", err)
+						continue
 					}
 					if rp.Debug && dPacket.GetChunkReference() != nil {
 						fpd := dPacket.AddFootPrint("Connection.ResendLostPacket")
@@ -710,7 +714,7 @@ func (c *Connection) startResendTimer() {
 		defer c.resendTimerMutex.Unlock()
 		if c.resendTimer != nil {
 			c.resendTimer.Stop()
-			c.resendLostPacket()
+			c.resendLostPackets()
 			c.startResendTimer()
 		}
 	})
@@ -720,6 +724,10 @@ func (c *Connection) sendKeepalivePacket() {
 	var fp int
 	// Create and send the keepalive packet
 	keepalivePacket := NewPcpPacket(c.nextSequenceNumber-1, c.lastAckNumber, ACKFlag, []byte{0}, c)
+	if keepalivePacket == nil {
+		log.Println("failed to create keepalive message with payload length 1")
+		return
+	}
 
 	if rp.Debug && keepalivePacket.GetChunkReference() != nil {
 		fp = keepalivePacket.chunk.AddFootPrint("connection.sendKeepalivePacket")

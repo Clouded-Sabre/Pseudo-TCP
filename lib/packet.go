@@ -286,7 +286,10 @@ func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) error {
 
 	// Extract payload from the data
 	if len(data[TcpHeaderLength+optionsLength:]) > 0 {
-		p.CopyToPayload(data[TcpHeaderLength+optionsLength:])
+		err := p.CopyToPayload(data[TcpHeaderLength+optionsLength:])
+		if err != nil {
+			return fmt.Errorf("packet unmarshal: error copying packet payload - %s", err)
+		}
 	} else {
 		p.Payload = nil
 	}
@@ -331,7 +334,11 @@ func NewPcpPacket(seqNum, ackNum uint32, flags uint8, data []byte, conn *Connect
 		Conn: conn,
 	}
 	if len(data) > 0 {
-		newPacket.CopyToPayload(data)
+		err := newPacket.CopyToPayload(data)
+		if err != nil {
+			log.Println("newPcpPacket error:", err)
+			return nil
+		}
 	}
 	return newPacket
 }
@@ -357,7 +364,10 @@ func (p *PcpPacket) CopyToPayload(src []byte) error {
 		log.Println(err)
 		return err
 	}
-	p.chunk.Data.(*Payload).Copy(src)
+	err := p.chunk.Data.(*Payload).Copy(src)
+	if err != nil {
+		return err
+	}
 	p.Payload = p.chunk.Data.(*Payload).GetSlice()
 	return nil
 }
