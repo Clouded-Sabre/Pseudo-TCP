@@ -10,7 +10,7 @@ window_size_with_scale: 12800
 keepalive_interval: 5
 idle_timeout: 25
 max_keepalive_attempts: 3
-keep_alive_enabled: true
+keep_alive_enabled: false
 packet_lost_simulation: false
 max_resend_count: 5
 resend_interval: 1000

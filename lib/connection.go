@@ -50,7 +50,7 @@ type Connection struct {
 	resendTimerMutex               sync.Mutex      // mutex for resendTimer
 	revPacketCache                 PacketGapMap    // Cache for received packets who has gap before it due to packet loss or out-of-order
 	isClosed                       bool            // denote that the conneciton is closed so that no packets should be accepted
-	closeSigal                     chan struct{}   // used to send close signal to HandleIncomingPackets go routine to stop when keepalive failed
+	closeSignal                    chan struct{}   // used to send close signal to HandleIncomingPackets go routine to stop when keepalive failed
 	connSignalFailed               chan struct{}   // used to notify Connection signalling process (3-way handshake and 4-way termination) failed
 	wg                             sync.WaitGroup  // wait group for go routine
 }
@@ -152,7 +152,7 @@ func newConnection(connParams *connectionParams, connConfig *connectionConfig) (
 		resendInterval:    time.Duration(connConfig.resendInterval) * time.Millisecond,
 		revPacketCache:    *NewPacketGapMap(),
 
-		closeSigal:       make(chan struct{}),
+		closeSignal:      make(chan struct{}),
 		connSignalFailed: make(chan struct{}),
 		wg:               sync.WaitGroup{},
 	}
@@ -189,17 +189,18 @@ func (c *Connection) handleIncomingPackets() {
 		packet                                   *PcpPacket
 		isSYN, isACK, isFIN, isRST, isDataPacket bool
 		//fp                                       int
+		err error
 	)
 	// Create a loop to read from connection's input channel
 	for {
 		select {
-		case <-c.closeSigal:
+		case <-c.closeSignal:
 			// connection close signal received. quit this go routine
 			log.Printf("Closing HandleIncomingPackets for connection %s\n", c.params.key)
 			return
 		case packet = <-c.inputChannel:
 			if rp.Debug && packet.GetChunkReference() != nil {
-				err := packet.TickChannel()
+				err = packet.TickChannel()
 				if err != nil {
 					log.Println("Connection.handleIncomingPackets", err)
 				}
@@ -398,14 +399,11 @@ func (c *Connection) acknowledge() {
 
 // Handle data packet function for Pcp connection
 func (c *Connection) handleDataPacket(packet *PcpPacket) {
-	var fp int
-	if rp.Debug && packet.GetChunkReference() != nil {
-		fp = packet.AddFootPrint("Connection.handleDataPacket")
-	}
 	// if the packet was already acknowledged by us, ignore it
 	if packet.SequenceNumber < c.lastAckNumber {
 		// received packet which we already received and put into readchannel. Ignore it.
 		if rp.Debug && packet.GetChunkReference() != nil {
+			fp := packet.AddFootPrint("Connection.handleDataPacket")
 			packet.TickFootPrint(fp)
 		}
 		packet.ReturnChunk()
@@ -416,6 +414,7 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 		// if the packet is already in RevPacketCache, ignore it
 		if _, found := c.revPacketCache.GetPacket(packet.SequenceNumber); found {
 			if rp.Debug && packet.GetChunkReference() != nil {
+				fp := packet.AddFootPrint("Connection.handleDataPacket")
 				packet.TickFootPrint(fp)
 			}
 			packet.ReturnChunk()
@@ -471,12 +470,16 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 		}
 
 		// Delete packets from RevPacketCache after the loop has finished
-		var packetToBeRemoved *ReceivedPacket
+		var (
+			packetToBeRemoved *ReceivedPacket
+			fp                int
+		)
 		for _, seqNum := range packetsToDelete {
 			packetToBeRemoved, _ = c.revPacketCache.GetPacket(seqNum)
-			if rp.Debug && packet.GetChunkReference() != nil {
+			if rp.Debug && packetToBeRemoved.Packet.GetChunkReference() != nil {
+				fp = packetToBeRemoved.Packet.AddFootPrint("PCPConnection.handleDataPacket")
 				packetToBeRemoved.Packet.TickFootPrint(fp)
-				packetToBeRemoved.Packet.AddChannel("c.ReadChannel")
+				packetToBeRemoved.Packet.AddChannel("pcpconnection.ReadChannel")
 			}
 			c.readChannel <- packetToBeRemoved.Packet
 			c.revPacketCache.RemovePacket(seqNum) // remove the packet from RevPacketCache but do not return the chunk yet
@@ -489,6 +492,7 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 			c.lastAckNumber = SeqIncrementBy(packet.SequenceNumber, uint32(len(packet.Payload)))
 		}
 		if rp.Debug && packet.GetChunkReference() != nil {
+			fp := packet.AddFootPrint("Connection.handleDataPacket")
 			packet.TickFootPrint(fp)
 			packet.AddChannel("c.ReadChannel")
 		}
@@ -982,10 +986,12 @@ func (c *Connection) startConnSignalTimer() {
 		c.connSignalTimer.Stop()
 	}
 
+	log.Println("Pcp connection connSignalTimer started")
 	// Restart the timer
 	c.connSignalTimer = time.AfterFunc(time.Second*time.Duration(c.config.connSignalRetryInterval), func() {
 		// Increment ConnSignalRetryCount
 		c.connSignalRetryCount++
+		log.Printf("Pcp connection connSignalTimer fired #%d\n", c.connSignalRetryCount)
 
 		// Check if retries exceed the maximum allowed retries
 		if c.connSignalRetryCount >= c.config.connSignalRetry {
@@ -1071,7 +1077,7 @@ func (c *Connection) Close() error {
 
 // clear connection resources and send close signal to paranet
 func (c *Connection) clearConnResource() {
-	log.Println("Start clearing connection resource")
+	log.Println("Pcp Connection Start clearing connection resource")
 	c.isClosed = true
 
 	// Lock to ensure exclusive access to the timer
@@ -1083,7 +1089,7 @@ func (c *Connection) clearConnResource() {
 		c.keepaliveTimer.Stop()
 		c.keepaliveTimer = nil
 	}
-	log.Println("Keepalive timer cleared")
+	log.Println("Pcp Connection Keepalive timer cleared")
 
 	// Lock to ensure exclusive access to the timer
 	c.resendTimerMutex.Lock()
@@ -1094,20 +1100,21 @@ func (c *Connection) clearConnResource() {
 		c.resendTimer.Stop()
 		c.resendTimer = nil
 	}
-	log.Println("Resender timer cleared")
+	log.Println("Pcp Connection Resender timer cleared")
 
 	// stop ConnSignalTimer
 	if c.connSignalTimer != nil {
 		c.connSignalTimer.Stop()
 		c.connSignalTimer = nil
 	}
-	log.Println("ConnSignalTimer timer cleared")
+	log.Println("Pcp Connection ConnSignalTimer timer cleared")
 
 	// Close connection go routines first
-	close(c.closeSigal) // Close the channel to signal termination
-	log.Println("close signal sent to go routine")
+	close(c.closeSignal) // Close the channel to signal termination
+	log.Println("Pcp Connection close signal sent to go routine")
 
 	c.wg.Wait() // wait for go routine to close
+	log.Println("Pcp Connection go routine stopped successfully")
 
 	// close channels
 	close(c.inputChannel)
@@ -1116,27 +1123,27 @@ func (c *Connection) clearConnResource() {
 	endOfConnClose := func() {
 		// if SACK option is enabled, release all packets in the sendPackets and RevPacketCache
 		if c.tcpOptions.SackEnabled {
-			log.Println("Connection close signal already sent to parent. Now we start to return all chunks")
+			log.Println("Pcp Connection close signal already sent to parent. Now we start to return all chunks")
 			// Return chunks of all packets in c.ResendPackets to pool
 			for _, packet := range c.resendPackets.packets {
 				packet.Data.ReturnChunk()
 			}
-			log.Printf("Released %d chunks from ResendPackets\n", len(c.resendPackets.packets))
+			log.Printf("Pcp Connection Released %d chunks from ResendPackets\n", len(c.resendPackets.packets))
 
 			// Return chunks of all packets in c.RevPacketCache to pool
 			for _, packet := range c.revPacketCache.packets {
 				packet.Packet.ReturnChunk()
 			}
-			log.Printf("Released %d chunks from RevPacketCache\n", len(c.revPacketCache.packets))
+			log.Printf("Pcp Connection Released %d chunks from RevPacketCache\n", len(c.revPacketCache.packets))
 		}
-		log.Printf("Connection %s resource cleared.\n", c.params.key)
+		log.Printf("Pcp Connection %s resource cleared.\n", c.params.key)
 	}
 
 	// then send close connection signal to parent to clear connection resource
 	defer func() {
 		if r := recover(); r != nil {
 			// Handle the panic caused by sending to a closed channel
-			fmt.Println("Parent is already closed. No need to notify it anymore", r)
+			fmt.Println("Pcp connection: Parent is already closed. No need to notify it anymore", r)
 			endOfConnClose()
 		}
 	}()

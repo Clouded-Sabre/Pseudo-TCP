@@ -28,14 +28,15 @@ type PcpProtocolConnection struct {
 	outputChan, sigOutputChan chan *PcpPacket             // output channel for normal packets and signalling packets respectively
 	connectionMap             map[string]*Connection      // used for client side only
 	tempConnectionMap         map[string]*Connection      // used for client side only
-	connCloseSignal           chan *Connection            // receiving close signal from pcp connection. used for client side only
 	serviceMap                map[int]*Service            // used for server side only
+	connCloseSignal           chan *Connection            // receiving close signal from pcp connection. used for client side only
 	serviceCloseSignal        chan *Service               // receiving close signal from pcp service. used for service side only
 	pConnCloseSignal          chan *PcpProtocolConnection // used to send signal to parent service to tell it to clear this connection from its map
 	closeSignal               chan struct{}               // used to send close signal to HandleIncomingPackets, handleOutgoingPackets, handleCloseConnection go routines to stop when timeout arrives
 	emptyMapTimer             *time.Timer                 // if this pcpProtocolConnection has no connection for 10 seconds, close it. used for client side only
 	wg                        sync.WaitGroup              // WaitGroup to synchronize goroutines
 	iptableRules              []int                       // slice of port number on server address which has iptables rules. used for client side only
+	mu                        sync.Mutex                  // to protect maps access
 }
 
 type pcpProtocolConnConfig struct {
@@ -105,6 +106,7 @@ func newPcpProtocolConnection(key string, isServer bool, protocolId int, serverA
 		wg:               sync.WaitGroup{},
 		iptableRules:     make([]int, 0),
 		config:           config,
+		mu:               sync.Mutex{},
 	}
 
 	// Start goroutines
@@ -146,7 +148,9 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *connectionConfi
 	}
 
 	// Add the new connection to the temporary connection map
+	p.mu.Lock()
 	p.tempConnectionMap[connKey] = newConn
+	p.mu.Unlock()
 
 	// Add iptables rule to drop RST packets
 	if err := addIptablesRule(p.serverAddr.IP.To4().String(), serverPort); err != nil {
@@ -172,7 +176,9 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *connectionConfi
 			// dial action failed
 			// Connection dialing failed, remove newConn from tempClientConnections
 			newConn.isClosed = true
+			p.mu.Lock()
 			delete(p.tempConnectionMap, connKey)
+			p.mu.Unlock()
 
 			if newConn.connSignalTimer != nil {
 				newConn.stopConnSignalTimer()
@@ -193,7 +199,9 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *connectionConfi
 				newConn.initSendAck()
 
 				// Connection established, remove newConn from tempClientConnections, and place it into clientConnections pool
+				p.mu.Lock()
 				delete(p.tempConnectionMap, connKey)
+				p.mu.Unlock()
 
 				newConn.isOpenConnection = true
 				newConn.tcpOptions.timestampEnabled = packet.TcpOptions.timestampEnabled
@@ -201,7 +209,9 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *connectionConfi
 				newConn.tcpOptions.permitSack = newConn.tcpOptions.permitSack && packet.TcpOptions.permitSack    // both sides need to permit SACK
 				newConn.tcpOptions.SackEnabled = newConn.tcpOptions.permitSack && newConn.tcpOptions.SackEnabled // Sack Option support also needs to be manually enabled
 
+				p.mu.Lock()
 				p.connectionMap[connKey] = newConn
+				p.mu.Unlock()
 
 				// start go routine to handle incoming packets for new connection
 				newConn.wg.Add(1)
@@ -283,7 +293,9 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	connKey := fmt.Sprintf("%d:%d", destPort, sourcePort)
 
 	// First check if the connection exists in the connection map
+	p.mu.Lock()
 	conn, ok := p.connectionMap[connKey]
+	p.mu.Unlock()
 	if ok && !conn.isClosed {
 		// open connection. Dispatch the packet to the corresponding connection's input channel
 		if rp.Debug && packet.GetChunkReference() != nil {
@@ -296,7 +308,9 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	}
 
 	// then check if packet belongs to an temp connection.
+	p.mu.Lock()
 	tempConn, ok := p.tempConnectionMap[connKey]
+	p.mu.Unlock()
 	if ok && !tempConn.isClosed {
 		if len(packet.Payload) == 0 && packet.AcknowledgmentNum-tempConn.initialSeq < 2 {
 			// forward to that connection's input channel
@@ -355,7 +369,7 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 	packet := &PcpPacket{}
 	err = packet.Unmarshal(pcpFrame[:n], addr, p.serverAddr)
 	if err != nil {
-		log.Println("Received TCP frame is il-formated. Ignore it!")
+		log.Println("PCP packet unmarshal error:", err)
 		return
 	}
 
@@ -367,9 +381,9 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 	//log.Printf("Got packet with options: %+v\n", packet.TcpOptions)
 
 	// Check if a connection is registered for the packet
-	//config.Mu.Lock()
+	p.mu.Lock()
 	service, ok := p.serviceMap[int(destPort)]
-	//config.Mu.Unlock()
+	p.mu.Unlock()
 
 	if !ok {
 		//fmt.Println("No service registered for port:", destPort)
@@ -521,8 +535,8 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 
 		if p.config.packetLostSimulation {
 			count = (count + 1) % 10
+			packetLost = false
 		}
-		packetLost = false
 	}
 }
 
@@ -537,7 +551,9 @@ func (p *PcpProtocolConnection) handleCloseConnection() {
 			return
 		case conn := <-p.connCloseSignal:
 			// clear it from p.ConnectionMap
+			p.mu.Lock()
 			_, ok := p.connectionMap[conn.params.key]
+			p.mu.Unlock()
 			if !ok {
 				// connection does not exist in ConnectionMap
 				log.Printf("Pcp Client connection does not exist in %s:%d->%s:%d", conn.params.localAddr.(*net.IPAddr).IP.String(), conn.params.localPort, conn.params.remoteAddr.(*net.IPAddr).IP.String(), conn.params.remotePort)
@@ -545,12 +561,17 @@ func (p *PcpProtocolConnection) handleCloseConnection() {
 			}
 
 			// delete the clientConn from ConnectionMap
+			p.mu.Lock()
 			delete(p.connectionMap, conn.params.key)
+			p.mu.Unlock()
 			log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.params.localAddr.(*net.IPAddr).IP.String(), conn.params.localPort, conn.params.remoteAddr.(*net.IPAddr).IP.String(), conn.params.remotePort)
 
 			// if pcpProtocolConnection does not have any connection for 10 seconds, close it
 			// Start or reset the timer if ConnectionMap becomes empty
-			if len(p.connectionMap) == 0 {
+			p.mu.Lock()
+			length := len(p.connectionMap)
+			p.mu.Unlock()
+			if length == 0 {
 				// Stop the previous timer if it exists
 				if p.emptyMapTimer != nil {
 					p.emptyMapTimer.Stop()
@@ -562,7 +583,10 @@ func (p *PcpProtocolConnection) handleCloseConnection() {
 					// Close the connection by sending closeSignal to all goroutines and clear resources
 					if p.emptyMapTimer != nil {
 						p.emptyMapTimer.Stop()
-						if len(p.connectionMap) == 0 {
+						p.mu.Lock()
+						length := len(p.connectionMap)
+						p.mu.Unlock()
+						if length == 0 {
 							p.Close()
 						}
 					}
@@ -570,7 +594,9 @@ func (p *PcpProtocolConnection) handleCloseConnection() {
 			}
 		case srv := <-p.serviceCloseSignal:
 			// clear it from p.ConnectionMap
+			p.mu.Lock()
 			_, ok := p.serviceMap[srv.port] // just make sure it really in ConnectionMap for debug purpose
+			p.mu.Unlock()
 			if !ok {
 				// Service does not exist in ConnectionMap
 				log.Printf("Pcp Service %s:%d does not exist in service map.\n", srv.serviceAddr.(*net.IPAddr).IP.String(), srv.port)
@@ -578,7 +604,9 @@ func (p *PcpProtocolConnection) handleCloseConnection() {
 			}
 
 			// delete the clientConn from ConnectionMap
+			p.mu.Lock()
 			delete(p.serviceMap, srv.port)
+			p.mu.Unlock()
 			log.Printf("Pcp service %s:%d stopped.", srv.serviceAddr.(*net.IPAddr).IP.String(), srv.port)
 		}
 	}
@@ -586,6 +614,9 @@ func (p *PcpProtocolConnection) handleCloseConnection() {
 
 // Function to close the connection gracefully
 func (p *PcpProtocolConnection) Close() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	// Close all PCP Connections
 	for _, conn := range p.connectionMap {
 		go conn.Close()
@@ -641,6 +672,7 @@ func (p *PcpProtocolConnection) getAvailableRandomClientPort() int {
 	// Create a map to store all existing client ports
 	existingPorts := make(map[int]bool)
 
+	p.mu.Lock()
 	// Populate the map with existing client ports
 	for _, conn := range p.connectionMap {
 		existingPorts[conn.params.localPort] = true
@@ -649,6 +681,7 @@ func (p *PcpProtocolConnection) getAvailableRandomClientPort() int {
 	for _, conn := range p.tempConnectionMap {
 		existingPorts[conn.params.localPort] = true
 	}
+	p.mu.Unlock()
 
 	// Generate a random port number until it's not in the existingPorts map
 	var randomPort int

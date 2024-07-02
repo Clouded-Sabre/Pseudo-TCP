@@ -114,7 +114,9 @@ func (p *PcpCore) ListenPcp(serviceIP string, port int, pcpConfig *config.Config
 	}
 
 	// then we need to check if there is already a service listening at that serviceIP and port
+	pConn.mu.Lock()
 	_, ok = pConn.serviceMap[port]
+	pConn.mu.Unlock()
 	if !ok {
 		// need to create new service
 		// create new Pcp service
@@ -133,7 +135,9 @@ func (p *PcpCore) ListenPcp(serviceIP string, port int, pcpConfig *config.Config
 		SleepForMs(500) // sleep for 500ms to make sure iptables rule takes effect
 
 		// add it to ServiceMap
+		pConn.mu.Lock()
 		pConn.serviceMap[port] = srv
+		pConn.mu.Unlock()
 
 		return srv, nil
 	} else {

@@ -58,6 +58,7 @@ func main() {
 		ProtocolID:      uint8(config.AppConfig.ProtocolID),
 		PreferredMSS:    config.AppConfig.PreferredMSS,
 		PayloadPoolSize: config.AppConfig.PayloadPoolSize,
+		Debug:           config.AppConfig.Debug,
 	}
 	pcpCoreObj, err := lib.NewPcpCore(pcpCoreConfig)
 	if err != nil {

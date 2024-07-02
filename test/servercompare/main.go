@@ -61,6 +61,7 @@ func main() {
 		ProtocolID:      uint8(config.AppConfig.ProtocolID),
 		PreferredMSS:    config.AppConfig.PreferredMSS,
 		PayloadPoolSize: config.AppConfig.PayloadPoolSize,
+		Debug:           config.AppConfig.Debug,
 	}
 
 	// Create PCP server

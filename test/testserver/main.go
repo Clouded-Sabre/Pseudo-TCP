@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net"
@@ -22,67 +23,6 @@ const (
 	PCP      = 1
 	UDP      = 0
 )
-
-func handleClient(conn *lib.Connection, closeChan chan struct{}, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	buffer := make([]byte, mtu)
-
-	file, err := os.Open(filePath)
-	if err != nil {
-		log.Println("Error opening file:", err)
-		return
-	}
-
-	for {
-		select {
-		case <-closeChan:
-			log.Println("handleClient got interuption. Stop and exit.")
-			return
-		default:
-			// Generate a random chunk size between 1 and mtu
-			//chunkSize := 1 + rand.Intn(mtu-1)
-			chunkSize := rand.Intn(mtu) //start from zero
-
-			// Read data from the file
-			n, err := file.Read(buffer[:chunkSize])
-			if err != nil {
-				log.Println("Error reading from file:", err)
-				file.Close()
-				break
-			}
-
-			// Send the packet to the client
-			if n > 0 {
-				_, err = conn.Write(buffer[:n])
-			} else {
-				_, err = conn.Write(nil)
-			}
-
-			if err != nil {
-				log.Println("Error sending packet:", err)
-				break
-			}
-
-			log.Printf("Sent packet with length %d to %s:%d\n", n, conn.RemoteAddr().IP, conn.RemotePort())
-
-			// Sleep for a random duration between 0 and maxGapMs milliseconds
-			sleepDuration := time.Duration(rand.Intn(maxGapMs)) * time.Millisecond
-			time.Sleep(sleepDuration)
-
-			// Check if we have reached the end of the file
-			if n < chunkSize {
-				// Reset the read pointer to the beginning of the file
-				_, err = file.Seek(0, 0)
-				if err != nil {
-					log.Println("Error seeking to the beginning of the file:", err)
-					return
-				}
-				//break
-			}
-		}
-	}
-}
 
 var (
 	svcAddrStr, svcIPstr, svcPortStr string
@@ -169,7 +109,9 @@ func main() {
 			break
 		} else {
 			wg.Add(1)
-			go handleClient(conn, closeChan, &wg)
+			go handleClientOutput(conn, closeChan, &wg)
+			wg.Add(1)
+			go handleClientInput(conn, closeChan, &wg)
 		}
 	}
 
@@ -177,4 +119,97 @@ func main() {
 	log.Println("Server exiting...")
 	pcpCoreObj.Close()
 	os.Exit(0)
+}
+
+func handleClientOutput(conn *lib.Connection, closeChan chan struct{}, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	buffer := make([]byte, mtu)
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		log.Println("Error opening file:", err)
+		return
+	}
+
+	for {
+		select {
+		case <-closeChan:
+			log.Println("handleClientOutput got interuption. Stop and exit.")
+			return
+		default:
+			// Generate a random chunk size between 1 and mtu
+			//chunkSize := 1 + rand.Intn(mtu-1)
+			chunkSize := rand.Intn(mtu) //start from zero
+
+			// Read data from the file
+			n, err := file.Read(buffer[:chunkSize])
+			if err != nil {
+				log.Println("Error reading from file:", err)
+				file.Close()
+				break
+			}
+
+			// Send the packet to the client
+			if n > 0 {
+				_, err = conn.Write(buffer[:n])
+			} else {
+				_, err = conn.Write(nil)
+			}
+
+			if err != nil {
+				log.Println("Error sending packet:", err)
+				break
+			}
+
+			log.Printf("Sent packet with length %d to %s:%d\n", n, conn.RemoteAddr().IP, conn.RemotePort())
+
+			// Sleep for a random duration between 0 and maxGapMs milliseconds
+			sleepDuration := time.Duration(rand.Intn(maxGapMs)) * time.Millisecond
+			time.Sleep(sleepDuration)
+
+			// Check if we have reached the end of the file
+			if n < chunkSize {
+				// Reset the read pointer to the beginning of the file
+				_, err = file.Seek(0, 0)
+				if err != nil {
+					log.Println("Error seeking to the beginning of the file:", err)
+					return
+				}
+				//break
+			}
+		}
+	}
+}
+
+func handleClientInput(conn *lib.Connection, closeChan chan struct{}, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	buffer := make([]byte, mtu)
+	for {
+		select {
+		case <-closeChan:
+			log.Println("Stop handleClient gracefully")
+			return
+		default:
+			conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // read wait for 500 ms
+			n, err := conn.Read(buffer)
+			if err != nil {
+				// Check if the error is a timeout
+				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					// Handle timeout error (no data received within the timeout period)
+					continue // Continue waiting for incoming packets or handling closeSignal
+				}
+				if err == io.EOF {
+					log.Println("handleClient got interuption. Stop and exit.")
+					return
+				}
+				fmt.Println("Error reading packet:", err)
+				return
+			}
+
+			message := buffer[:n]
+			log.Println("Got message from client:", message)
+		}
+	}
 }

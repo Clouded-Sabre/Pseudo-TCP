@@ -29,6 +29,7 @@ type Service struct {
 	connSignalFailed          chan *Connection       // signal for closing temp connection due to openning signalling failed
 	wg                        sync.WaitGroup         // WaitGroup to synchronize goroutines
 	isClosed                  bool                   // used to denote that the service is close so parent PCP Protocol connection won't forward more packets to it
+	mu                        sync.Mutex             // to protect maps
 }
 
 // NewService creates a new service listening on the specified port.
@@ -49,6 +50,7 @@ func newService(pcpProtocolConn *PcpProtocolConnection, serviceAddr net.Addr, po
 		closeSignal:           make(chan struct{}),
 		wg:                    sync.WaitGroup{},
 		connConfig:            connConfig,
+		mu:                    sync.Mutex{},
 	}
 
 	// Start goroutines
@@ -69,17 +71,21 @@ func (s *Service) Accept() (*Connection, error) {
 		case newConn := <-s.newConnChannel: // Wait for new connection to come
 
 			// Check if the connection exists in the temporary connection map
+			s.mu.Lock()
 			_, ok := s.tempConnMap[newConn.params.key]
+			s.mu.Unlock()
 			if !ok {
 				log.Printf("Received ACK packet for non-existent connection: %s. Ignore it!\n", newConn.params.key)
 				continue
 			}
 
+			s.mu.Lock()
 			// Remove the connection from the temporary connection map
 			delete(s.tempConnMap, newConn.params.key)
 
 			// adding the connection to ConnectionMap
 			s.connectionMap[newConn.params.key] = newConn
+			s.mu.Unlock()
 
 			// start go routine to handle the connection traffic
 			newConn.wg.Add(1)
@@ -144,42 +150,34 @@ func (s *Service) handleOtherPacket(packet *PcpPacket) {
 	connKey := fmt.Sprintf("%s:%d", sourceIP, sourcePort)
 
 	// Check if the connection exists in the connection map
+	s.mu.Lock()
 	conn, ok := s.connectionMap[connKey]
+	s.mu.Unlock()
 	if ok && !conn.isClosed {
 		// Dispatch the packet to the corresponding connection's input channel
 		if rp.Debug && packet.GetChunkReference() != nil {
 			packet.TickFootPrint(fp)
-			packet.AddChannel("Conn.InputChannel")
+			packet.AddChannel("pcpConn.InputChannel")
 		}
 		conn.inputChannel <- packet
 		return
 	}
 
 	// then check if the connection exists in temp connection map
+	s.mu.Lock()
 	tempConn, ok := s.tempConnMap[connKey]
+	s.mu.Unlock()
 	if ok && !tempConn.isClosed {
-		//if len(packet.Payload) == 0 && isLess(packet.SequenceNumber, SeqIncrementBy(tempConn.initialPeerSeq, 2)) {
-		//if len(packet.Payload) == 0 && isLess(packet.SequenceNumber, SeqIncrementBy(tempConn.initialPeerSeq, 2)) {
 		// Dispatch the packet to the corresponding connection's input channel
 		if rp.Debug && packet.GetChunkReference() != nil {
 			packet.TickFootPrint(fp)
+			packet.AddChannel("pcpConn.InputChannel")
 		}
 		tempConn.inputChannel <- packet
 		return
-		/*} else {
-		// non-signalling packet should not be sent to temp connection
-		if s.connConfig.debug {
-			log.Println("non-signalling packet should not be sent to temp connection. Discard it")
-			if rp.Debug && packet.GetChunkReference() != nil {
-				packet.TickFootPrint(fp)
-			}
-			packet.ReturnChunk()
-			return
-		}*/
-		//}
 	}
 
-	log.Printf("Received non-SYN packet for non-existent connection: %s\n", connKey)
+	log.Printf("Received non-SYN packet for non-existent or closed connection: %s\n", connKey)
 	if rp.Debug && packet.GetChunkReference() != nil {
 		packet.TickFootPrint(fp)
 	}
@@ -196,14 +194,18 @@ func (s *Service) handleSynPacket(packet *PcpPacket) {
 	connKey := fmt.Sprintf("%s:%d", sourceAddr.(*net.IPAddr).IP.To4().String(), sourcePort)
 
 	// Check if the connection already exists in the connection map
+	s.mu.Lock()
 	_, ok := s.connectionMap[connKey]
+	s.mu.Unlock()
 	if ok {
 		log.Printf("Received SYN packet for existing connection: %s. Ignore it.\n", connKey)
 		return
 	}
 
 	// then check if the connection exists in temp connection map
+	s.mu.Lock()
 	_, ok = s.tempConnMap[connKey]
+	s.mu.Unlock()
 	if ok {
 		log.Printf("Received SYN packet for existing temp connection: %s. Ignore it.\n", connKey)
 		return
@@ -233,7 +235,9 @@ func (s *Service) handleSynPacket(packet *PcpPacket) {
 	newConn.initServerState = SynReceived
 
 	// Add the new connection to the temporary connection map
+	s.mu.Lock()
 	s.tempConnMap[connKey] = newConn
+	s.mu.Unlock()
 
 	// TCP options support
 	// MSS support negotiation
@@ -286,7 +290,9 @@ func (s *Service) handleCloseConnections() {
 			return
 		case conn = <-s.connSignalFailed:
 			// clear it from p.ConnectionMap
+			s.mu.Lock()
 			_, ok := s.connectionMap[conn.params.key] // just make sure it really in ConnectionMap for debug purpose
+			s.mu.Unlock()
 			if !ok {
 				// connection does not exist in ConnectionMap
 				log.Printf("Pcp connection does not exist in %s:%d->%s:%d", conn.params.localAddr.(*net.IPAddr).IP.String(), conn.params.localPort, conn.params.remoteAddr.(*net.IPAddr).IP.String(), conn.params.remotePort)
@@ -296,7 +302,9 @@ func (s *Service) handleCloseConnections() {
 			return
 		case conn = <-s.connCloseSignal:
 			// clear it from p.ConnectionMap
+			s.mu.Lock()
 			_, ok := s.connectionMap[conn.params.key] // just make sure it really in ConnectionMap for debug purpose
+			s.mu.Unlock()
 			if !ok {
 				// connection does not exist in ConnectionMap
 				log.Printf("Pcp connection does not exist in %s:%d->%s:%d", conn.params.localAddr.(*net.IPAddr).IP.String(), conn.params.localPort, conn.params.remoteAddr.(*net.IPAddr).IP.String(), conn.params.remotePort)
@@ -304,7 +312,9 @@ func (s *Service) handleCloseConnections() {
 			}
 
 			// delete the clientConn from ConnectionMap
+			s.mu.Lock()
 			delete(s.connectionMap, conn.params.key)
+			s.mu.Unlock()
 			log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.params.localAddr.(*net.IPAddr).IP.String(), conn.params.localPort, conn.params.remoteAddr.(*net.IPAddr).IP.String(), conn.params.remotePort)
 		}
 
@@ -312,19 +322,35 @@ func (s *Service) handleCloseConnections() {
 }
 
 func (s *Service) Close() error {
+	var openConns []*Connection
+
 	log.Println("Beginning service shutdown...")
 	// Close all connections associated with this service
-	var wg sync.WaitGroup
+	s.mu.Lock()
 	for _, conn := range s.connectionMap {
-		wg.Add(1)
-		go conn.closeForcefully(&wg)
+		openConns = append(openConns, conn)
+	}
+	s.mu.Unlock()
+	var wg sync.WaitGroup
+	for _, conn := range openConns {
+		if conn != nil {
+			wg.Add(1)
+			go conn.closeForcefully(&wg)
+		}
 	}
 
 	wg.Wait() // wait for connections to close
-
+	var tempConns []*Connection
 	// Close all temp connections associated with this service
+	s.mu.Lock()
 	for _, tempConn := range s.tempConnMap {
-		close(tempConn.connSignalFailed)
+		tempConns = append(tempConns, tempConn)
+	}
+	s.mu.Unlock()
+	for _, tempConn := range tempConns {
+		if tempConn != nil {
+			close(tempConn.connSignalFailed)
+		}
 	}
 
 	// wait for 500ms to allow temp connections to finish closing
