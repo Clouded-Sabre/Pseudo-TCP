@@ -1061,6 +1061,7 @@ func (c *Connection) Close() error {
 		return nil
 	}
 	c.connCloseBegins = true
+	c.writeOnHold = true
 
 	// mimicking net lib TCP close function interfaceisClosed
 	c.termStartPeerSeq = c.lastAckNumber
