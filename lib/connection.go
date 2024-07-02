@@ -50,6 +50,7 @@ type Connection struct {
 	resendTimerMutex               sync.Mutex      // mutex for resendTimer
 	revPacketCache                 PacketGapMap    // Cache for received packets who has gap before it due to packet loss or out-of-order
 	isClosed                       bool            // denote that the conneciton is closed so that no packets should be accepted
+	connCloseBegins                bool            // denote if pcp connection close already began. Used to prevent calling close more than once
 	closeSignal                    chan struct{}   // used to send close signal to HandleIncomingPackets go routine to stop when keepalive failed
 	connSignalFailed               chan struct{}   // used to notify Connection signalling process (3-way handshake and 4-way termination) failed
 	wg                             sync.WaitGroup  // wait group for go routine
@@ -1056,15 +1057,12 @@ func (c *Connection) closeForcefully(wg *sync.WaitGroup) error {
 }
 
 func (c *Connection) Close() error {
-	// mimicking net lib TCP close function interface
-	// initiate connection close by sending FIN to the other side
-	// set and check connection's TerminationCallerState along the way of 4-way termination process
+	if c.connCloseBegins {
+		return nil
+	}
+	c.connCloseBegins = true
 
-	// put write channel on hold so that no data packet interfere with termination process
-	c.writeOnHold = true
-
-	// send syn packet to peer
-	c.termStartSeq = c.nextSequenceNumber
+	// mimicking net lib TCP close function interfaceisClosed
 	c.termStartPeerSeq = c.lastAckNumber
 	c.termCallerSendFin()
 	c.nextSequenceNumber = SeqIncrement(c.nextSequenceNumber) // implicit modulo op
