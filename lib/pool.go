@@ -65,12 +65,12 @@ func (p *Payload) PrintContent() {
 func (p *Payload) Copy(src []byte) error {
 	if len(src) > len(p.payloadBytes) {
 		err := fmt.Errorf("Payload Copy: Source byte slice(%d) is longer than bufferLength(%d)", len(src), len(p.payloadBytes))
-		log.Println(err)
+		//log.Println(err)
 		return err
 	}
 	if len(src) == 0 {
 		err := fmt.Errorf("Payload Copy: Source byte slice is empty")
-		log.Println(err)
+		//log.Println(err)
 		return err
 	}
 	copy(p.payloadBytes, src)
