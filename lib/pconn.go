@@ -370,6 +370,7 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 	err = packet.Unmarshal(pcpFrame[:n], addr, p.serverAddr)
 	if err != nil {
 		log.Println("PCP packet unmarshal error:", err)
+		// don't need to return chunk because it is done in copyToPayload
 		return
 	}
 
