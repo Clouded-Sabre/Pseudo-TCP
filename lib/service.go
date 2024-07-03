@@ -322,10 +322,15 @@ func (s *Service) handleCloseConnections() {
 }
 
 func (s *Service) Close() error {
-	var openConns []*Connection
+	if s.isClosed {
+		return nil
+	}
+	// begin close the service itself and clear resources
+	s.isClosed = true
 
 	log.Println("Beginning service shutdown...")
 	// Close all connections associated with this service
+	var openConns []*Connection
 	s.mu.Lock()
 	for _, conn := range s.connectionMap {
 		openConns = append(openConns, conn)
@@ -338,6 +343,10 @@ func (s *Service) Close() error {
 			go conn.closeForcefully(&wg)
 		}
 	}
+	s.mu.Lock()
+	s.connectionMap = nil
+	s.mu.Unlock()
+	log.Println("PCP service closed all open connections")
 
 	wg.Wait() // wait for connections to close
 	var tempConns []*Connection
@@ -352,12 +361,13 @@ func (s *Service) Close() error {
 			close(tempConn.connSignalFailed)
 		}
 	}
+	s.mu.Lock()
+	s.tempConnMap = nil
+	s.mu.Unlock()
+	log.Println("PCP service closed all temp connections")
 
 	// wait for 500ms to allow temp connections to finish closing
 	SleepForMs(100)
-
-	// begin close the service itself and clear resources
-	s.isClosed = true
 
 	// send signal to service go routines to gracefully close them
 	close(s.closeSignal)

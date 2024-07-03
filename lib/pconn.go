@@ -36,6 +36,7 @@ type PcpProtocolConnection struct {
 	emptyMapTimer             *time.Timer                 // if this pcpProtocolConnection has no connection for 10 seconds, close it. used for client side only
 	wg                        sync.WaitGroup              // WaitGroup to synchronize goroutines
 	iptableRules              []int                       // slice of port number on server address which has iptables rules. used for client side only
+	isClosed                  bool                        // to prevent calling close multiple time
 	mu                        sync.Mutex                  // to protect maps access
 }
 
@@ -615,19 +616,38 @@ func (p *PcpProtocolConnection) handleCloseConnection() {
 
 // Function to close the connection gracefully
 func (p *PcpProtocolConnection) Close() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	if p.isClosed {
+		return
+	}
+	p.isClosed = true
 
 	// Close all PCP Connections
+	var connectionsToRemove []*Connection
+	p.mu.Lock()
 	for _, conn := range p.connectionMap {
+		connectionsToRemove = append(connectionsToRemove, conn)
+	}
+	p.mu.Unlock()
+	for _, conn := range connectionsToRemove {
 		go conn.Close()
 	}
+	p.mu.Lock()
 	p.connectionMap = nil // Clear the map after closing all connections
+	p.mu.Unlock()
 
 	// Close all connections associated with this service
-	for _, srv := range p.serviceMap {
-		srv.Close()
+	var svcsToRemove []*Service
+	p.mu.Lock()
+	for _, svc := range p.serviceMap {
+		svcsToRemove = append(svcsToRemove, svc)
 	}
+	p.mu.Unlock()
+	for _, svc := range svcsToRemove {
+		svc.Close()
+	}
+	p.mu.Lock()
+	p.serviceMap = nil // Clear the map after closing all services
+	p.mu.Unlock()
 
 	// Send closeSignal to all goroutines
 	close(p.closeSignal)
