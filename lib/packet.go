@@ -367,7 +367,7 @@ func (p *PcpPacket) CopyToPayload(src []byte) error {
 	err := p.chunk.Data.(*Payload).Copy(src)
 	if err != nil {
 		p.ReturnChunk()
-		return err
+		return fmt.Errorf("PcpPacket.CopyToPayload: %s", err)
 	}
 	p.Payload = p.chunk.Data.(*Payload).GetSlice()
 	return nil
