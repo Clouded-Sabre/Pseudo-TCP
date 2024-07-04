@@ -144,7 +144,7 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *connectionConfi
 	//newConn, err := NewConnection(connKey, false, p.ServerAddr, int(serverPort), p.LocalAddr, clientPort, p.OutputChan, p.sigOutputChan, p.ConnCloseSignal, nil, nil)
 	newConn, err := newConnection(connParam, connConfig)
 	if err != nil {
-		fmt.Printf("Error creating new connection to %s:%d because of error: %s\n", p.serverAddr.IP.To4().String(), serverPort, err)
+		fmt.Printf("PcpProtocolConnection.dial: Error creating new connection to %s:%d because of error: %s\n", p.serverAddr.IP.To4().String(), serverPort, err)
 		return nil, err
 	}
 
@@ -155,7 +155,7 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *connectionConfi
 
 	// Add iptables rule to drop RST packets
 	if err := addIptablesRule(p.serverAddr.IP.To4().String(), serverPort); err != nil {
-		log.Println("Error adding iptables rule:", err)
+		log.Println("PcpProtocolConnection.dial: Error adding iptables rule:", err)
 		return nil, err
 	}
 	p.iptableRules = append(p.iptableRules, serverPort) // record it for later deletion of the rules when connection closes
@@ -167,7 +167,7 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *connectionConfi
 	newConn.initSendSyn()
 	newConn.startConnSignalTimer()
 	newConn.nextSequenceNumber = SeqIncrement(newConn.nextSequenceNumber) // implicit modulo op
-	log.Println("Initiated connection to server with connKey:", connKey)
+	log.Println("PcpProtocolConnection.dial: Initiated connection to server with connKey:", connKey)
 
 	// Wait for SYN-ACK
 	// Create a loop to read from connection's input channel till we see SYN-ACK packet from the other end
@@ -185,7 +185,7 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *connectionConfi
 				newConn.stopConnSignalTimer()
 				newConn.connSignalTimer = nil
 			}
-			err = fmt.Errorf("dialing PCP connection failed due to timeout")
+			err = fmt.Errorf("PcpProtocolConnection.dial: dialing PCP connection failed due to timeout")
 			log.Println(err)
 			return nil, err
 
@@ -256,7 +256,7 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	// extract Pcp frame from the received IP frame
 	index, err := ExtractIpPayload(buffer[:n])
 	if err != nil {
-		log.Println("Received IP frame is il-formated. Ignore it!")
+		log.Println("PcpProtocolConnection.clientProcessingIncomingPacket: Received IP frame is il-formated. Ignore it!", err)
 		return
 	}
 	//log.Println("extracted PCP frame length is", len(pcpFrame), pcpFrame)
@@ -264,7 +264,7 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	// please note the first TcpPseudoHeaderLength bytes are reseved for Tcp pseudo header
 	if p.config.verifyChecksum {
 		if !VerifyChecksum(buffer[index-TcpPseudoHeaderLength:n], p.serverAddr, p.localAddr, uint8(p.protocolId)) {
-			log.Println("Packet checksum verification failed. Skip this packet.")
+			log.Println("PcpProtocolConnection.clientProcessingIncomingPacket: Packet checksum verification failed. Skip this packet.")
 			return
 		}
 	}
@@ -274,7 +274,7 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	packet := &PcpPacket{}
 	err = packet.Unmarshal(pcpFrame, p.serverAddr, p.localAddr)
 	if err != nil {
-		log.Println("Received TCP frame is il-formated. Ignore it!")
+		log.Println("PcpProtocolConnection.clientProcessingIncomingPacket: Received TCP frame is il-formated. Ignore it!", err)
 		// because chunk won't be allocated unless the marshalling is success, there is no need to return the chunk
 		return
 	}
@@ -331,7 +331,7 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 		}
 	}
 
-	fmt.Printf("Received data packet for non-existent connection: %s\n", connKey)
+	fmt.Printf("PcpProtocolConnection.clientProcessingIncomingPacket: Received data packet for non-existent connection: %s\n", connKey)
 	// return the packet chunk now that it's destined to an unknown connection
 	if rp.Debug && packet.GetChunkReference() != nil {
 		packet.TickFootPrint(fp)
@@ -361,7 +361,7 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 	// check PCP packet checksum
 	if p.config.verifyChecksum {
 		if !VerifyChecksum(buffer[:TcpPseudoHeaderLength+n], addr, p.serverAddr, uint8(p.protocolId)) {
-			log.Println("Packet checksum verification failed. Skip this packet.")
+			log.Println("PcpProtocolConnection.serverProcessingIncomingPacket: Packet checksum verification failed. Skip this packet.")
 			return
 		}
 	}
@@ -370,7 +370,7 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 	packet := &PcpPacket{}
 	err = packet.Unmarshal(pcpFrame[:n], addr, p.serverAddr)
 	if err != nil {
-		log.Println("PCP packet unmarshal error:", err)
+		log.Println("PcpProtocolConnection.serverProcessingIncomingPacket: PCP packet unmarshal error. Ignore it!", err)
 		// don't need to return chunk because it is done in copyToPayload
 		return
 	}
@@ -398,7 +398,7 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 	}
 
 	if service.isClosed { // OK but sevice is closed
-		log.Println("Packet is destined to a closed service. Ignore it.")
+		log.Println("PcpProtocolConnection.serverProcessingIncomingPacket: Packet is destined to a closed service. Ignore it.")
 		if rp.Debug && packet.GetChunkReference() != nil {
 			packet.TickFootPrint(fp)
 		}
@@ -494,7 +494,7 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 			// Marshal the packet into bytes
 			n, err = packet.Marshal(uint8(p.protocolId), frameBytes)
 			if err != nil {
-				fmt.Println("Error marshalling packet:", err)
+				fmt.Println("PCPProtocolConnection.handleOutgoingPackets: Error marshalling packet:", err)
 				log.Fatal()
 			}
 			// Write the packet to the interface
@@ -505,7 +505,7 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 				_, err = p.clientConn.Write(frame[:n])
 			}
 			if err != nil {
-				log.Println("Error writing packet:", err, "Skip this packet.")
+				log.Println("PCPProtocolConnection.handleOutgoingPackets: Error writing packet:", err, "Skip this packet.")
 			}
 		}
 
@@ -520,7 +520,7 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 					packet.Conn.resendPackets.AddSentPacket(packet)
 				} else {
 					if p.config.connConfig.debug {
-						fmt.Println("this is a resent packet. Do not put it into ResendPackets")
+						fmt.Println("PCPProtocolConnection.handleOutgoingPackets: this is a resent packet. Do not put it into ResendPackets")
 					}
 					if rp.Debug && packet.GetChunkReference() != nil {
 						packet.TickFootPrint(fp)
@@ -558,7 +558,7 @@ func (p *PcpProtocolConnection) handleCloseConnection() {
 			p.mu.Unlock()
 			if !ok {
 				// connection does not exist in ConnectionMap
-				log.Printf("Pcp Client connection does not exist in %s:%d->%s:%d", conn.params.localAddr.(*net.IPAddr).IP.String(), conn.params.localPort, conn.params.remoteAddr.(*net.IPAddr).IP.String(), conn.params.remotePort)
+				log.Printf("PcpProtocolConnection.handleCloseConnection: Pcp Client connection does not exist in %s:%d->%s:%d", conn.params.localAddr.(*net.IPAddr).IP.String(), conn.params.localPort, conn.params.remoteAddr.(*net.IPAddr).IP.String(), conn.params.remotePort)
 				continue
 			}
 
@@ -566,7 +566,7 @@ func (p *PcpProtocolConnection) handleCloseConnection() {
 			p.mu.Lock()
 			delete(p.connectionMap, conn.params.key)
 			p.mu.Unlock()
-			log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.params.localAddr.(*net.IPAddr).IP.String(), conn.params.localPort, conn.params.remoteAddr.(*net.IPAddr).IP.String(), conn.params.remotePort)
+			log.Printf("PcpProtocolConnection.handleCloseConnection: Pcp connection %s:%d->%s:%d terminated and removed.", conn.params.localAddr.(*net.IPAddr).IP.String(), conn.params.localPort, conn.params.remoteAddr.(*net.IPAddr).IP.String(), conn.params.remotePort)
 
 			// if pcpProtocolConnection does not have any connection for 10 seconds, close it
 			// Start or reset the timer if ConnectionMap becomes empty
@@ -580,7 +580,7 @@ func (p *PcpProtocolConnection) handleCloseConnection() {
 				}
 
 				// Start a new timer for 10 seconds
-				log.Println("Wait for", p.config.pConnTimeout, "seconds before closing the PCP protocol connection")
+				log.Println("PcpProtocolConnection.handleCloseConnection: Wait for", p.config.pConnTimeout, "seconds before closing the PCP protocol connection")
 				p.emptyMapTimer = time.AfterFunc(time.Duration(p.config.pConnTimeout)*time.Second, func() {
 					// Close the connection by sending closeSignal to all goroutines and clear resources
 					if p.emptyMapTimer != nil {
@@ -601,7 +601,7 @@ func (p *PcpProtocolConnection) handleCloseConnection() {
 			p.mu.Unlock()
 			if !ok {
 				// Service does not exist in ConnectionMap
-				log.Printf("Pcp Service %s:%d does not exist in service map.\n", srv.serviceAddr.(*net.IPAddr).IP.String(), srv.port)
+				log.Printf("PcpProtocolConnection.handleCloseConnection: Pcp Service %s:%d does not exist in service map.\n", srv.serviceAddr.(*net.IPAddr).IP.String(), srv.port)
 				continue
 			}
 
@@ -609,7 +609,7 @@ func (p *PcpProtocolConnection) handleCloseConnection() {
 			p.mu.Lock()
 			delete(p.serviceMap, srv.port)
 			p.mu.Unlock()
-			log.Printf("Pcp service %s:%d stopped.", srv.serviceAddr.(*net.IPAddr).IP.String(), srv.port)
+			log.Printf("PcpProtocolConnection.handleCloseConnection: Pcp service %s:%d stopped.", srv.serviceAddr.(*net.IPAddr).IP.String(), srv.port)
 		}
 	}
 }
@@ -622,7 +622,7 @@ func (p *PcpProtocolConnection) Close() {
 	p.isClosed = true
 
 	// Close all PCP Connections
-	log.Println("Begin closing PcpProtocolConnection...")
+	log.Println("PcpProtocolConnection.Close: Begin closing PcpProtocolConnection...")
 	var connectionsToRemove []*Connection
 	p.mu.Lock()
 	for _, conn := range p.connectionMap {
@@ -635,7 +635,7 @@ func (p *PcpProtocolConnection) Close() {
 	p.mu.Lock()
 	p.connectionMap = nil // Clear the map after closing all connections
 	p.mu.Unlock()
-	log.Println("All Pcp Connections of PcpProtocolConnection closed...")
+	log.Println("PcpProtocolConnection.Close: All Pcp Connections of PcpProtocolConnection closed...")
 
 	// Close all connections associated with this service
 	var svcsToRemove []*Service
@@ -650,7 +650,7 @@ func (p *PcpProtocolConnection) Close() {
 	p.mu.Lock()
 	p.serviceMap = nil // Clear the map after closing all services
 	p.mu.Unlock()
-	log.Println("All Pcp services of PcpProtocolConnection closed...")
+	log.Println("PcpProtocolConnection.Close: All Pcp services of PcpProtocolConnection closed...")
 
 	// Send closeSignal to all goroutines
 	close(p.closeSignal)
