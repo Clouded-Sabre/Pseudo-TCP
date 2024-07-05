@@ -622,20 +622,23 @@ func (p *PcpProtocolConnection) Close() {
 	p.isClosed = true
 
 	// Close all PCP Connections
-	log.Println("PcpProtocolConnection.Close: Begin closing PcpProtocolConnection...")
+	log.Println("PcpProtocolConnection: begin to close...")
 	var connectionsToRemove []*Connection
 	p.mu.Lock()
 	for _, conn := range p.connectionMap {
 		connectionsToRemove = append(connectionsToRemove, conn)
 	}
 	p.mu.Unlock()
+	wg := sync.WaitGroup{}
 	for _, conn := range connectionsToRemove {
-		go conn.Close()
+		wg.Add(1)
+		go conn.CloseAsGoRoutine(&wg)
 	}
 	p.mu.Lock()
 	p.connectionMap = nil // Clear the map after closing all connections
 	p.mu.Unlock()
-	log.Println("PcpProtocolConnection.Close: All Pcp Connections of PcpProtocolConnection closed...")
+	wg.Wait() // wait for all pcp connections to close
+	log.Println("PcpProtocolConnection: All Pcp Connections of PcpProtocolConnection closed...")
 
 	// Close all connections associated with this service
 	var svcsToRemove []*Service
@@ -650,15 +653,15 @@ func (p *PcpProtocolConnection) Close() {
 	p.mu.Lock()
 	p.serviceMap = nil // Clear the map after closing all services
 	p.mu.Unlock()
-	log.Println("PcpProtocolConnection.Close: All Pcp services of PcpProtocolConnection closed...")
+	log.Println("PcpProtocolConnection: All Pcp services of PcpProtocolConnection closed...")
 
 	// Send closeSignal to all goroutines
 	close(p.closeSignal)
 
 	// Wait for all goroutines to finish
-	log.Println("PcpProtocolConnection.Close: Waiting for go routines to close")
+	log.Println("PcpProtocolConnection: Waiting for go routines to close")
 	p.wg.Wait()
-	log.Println("PcpProtocolConnection.Close: Go routines closed")
+	log.Println("PcpProtocolConnection: Go routines closed")
 
 	// Clear resources
 	if !p.isServer {
@@ -673,9 +676,9 @@ func (p *PcpProtocolConnection) Close() {
 		for _, port := range p.iptableRules {
 			err := removeIptablesRule(p.serverAddr.IP.To4().String(), port)
 			if err != nil {
-				log.Printf("PcpProtocolConnection.Close: Error removing iptables rule for port %d: %v\n", port, err)
+				log.Printf("PcpProtocolConnection: Error removing iptables rule for port %d: %v\n", port, err)
 			} else {
-				log.Printf("PcpProtocolConnection.Close: Removed iptables rule for port %d\n", port)
+				log.Printf("PcpProtocolConnection: Removed iptables rule for port %d\n", port)
 			}
 		}
 		p.iptableRules = nil // Clear the slice

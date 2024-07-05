@@ -1027,14 +1027,26 @@ func (c *Connection) stopConnSignalTimer() {
 	c.connSignalTimer.Stop()
 }
 
-func (c *Connection) closeForcefully(wg *sync.WaitGroup) error {
+// c.close function wrapped up as go routine
+func (c *Connection) CloseAsGoRoutine(wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	log.Printf("waiting for pcp connection %s:%d to close...\n", c.params.remoteAddr.(*net.IPAddr).IP, c.params.remotePort)
-	err := c.Close()
+	c.Close()
+}
+
+// PCP connection close
+func (c *Connection) Close() error {
+	if c.connCloseBegins {
+		return nil
+	}
+
+	c.connCloseBegins = true
+	log.Printf("Initiate termination of pcp connection %s:%d\n", c.params.remoteAddr.(*net.IPAddr).IP, c.params.remotePort)
+	err := c.initTermination()
 	if err != nil {
 		return err
 	}
+	log.Printf("Waiting for termination process of pcp connection %s:%d to complete...\n", c.params.remoteAddr.(*net.IPAddr).IP, c.params.remotePort)
 
 	timeout := time.After(6 * time.Second)
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -1044,7 +1056,7 @@ func (c *Connection) closeForcefully(wg *sync.WaitGroup) error {
 		select {
 		case <-timeout:
 			if !c.isClosed {
-				log.Printf("pcp connection %s:%d timed out waiting for peer closing response. Close the connection forcifully...\n", c.params.remoteAddr.(*net.IPAddr).IP, c.params.remotePort)
+				log.Printf("Pcp connection %s:%d timed out waiting for peer closing response. Close the connection forcifully...\n", c.params.remoteAddr.(*net.IPAddr).IP, c.params.remotePort)
 				c.clearConnResource()
 			}
 			return nil
@@ -1056,11 +1068,7 @@ func (c *Connection) closeForcefully(wg *sync.WaitGroup) error {
 	}
 }
 
-func (c *Connection) Close() error {
-	if c.connCloseBegins {
-		return nil
-	}
-	c.connCloseBegins = true
+func (c *Connection) initTermination() error {
 	c.writeOnHold = true
 
 	// mimicking net lib TCP close function interfaceisClosed
@@ -1076,7 +1084,11 @@ func (c *Connection) Close() error {
 
 // clear connection resources and send close signal to paranet
 func (c *Connection) clearConnResource() {
-	log.Println("Pcp Connection Start clearing connection resource")
+	if c.isClosed {
+		return
+	}
+
+	log.Println("Pcp Connection: Start clearing connection resource")
 	c.isClosed = true
 
 	// Lock to ensure exclusive access to the timer
@@ -1088,7 +1100,7 @@ func (c *Connection) clearConnResource() {
 		c.keepaliveTimer.Stop()
 		c.keepaliveTimer = nil
 	}
-	log.Println("Pcp Connection Keepalive timer cleared")
+	log.Println("Pcp Connection: Keepalive timer cleared")
 
 	// Lock to ensure exclusive access to the timer
 	c.resendTimerMutex.Lock()
@@ -1099,21 +1111,21 @@ func (c *Connection) clearConnResource() {
 		c.resendTimer.Stop()
 		c.resendTimer = nil
 	}
-	log.Println("Pcp Connection Resender timer cleared")
+	log.Println("Pcp Connection: Resender timer cleared")
 
 	// stop ConnSignalTimer
 	if c.connSignalTimer != nil {
 		c.connSignalTimer.Stop()
 		c.connSignalTimer = nil
 	}
-	log.Println("Pcp Connection ConnSignalTimer timer cleared")
+	log.Println("Pcp Connection: ConnSignalTimer timer cleared")
 
 	// Close connection go routines first
 	close(c.closeSignal) // Close the channel to signal termination
-	log.Println("Pcp Connection close signal sent to go routine")
+	log.Println("Pcp Connection: close signal sent to go routine")
 
 	c.wg.Wait() // wait for go routine to close
-	log.Println("Pcp Connection go routine stopped successfully")
+	log.Println("Pcp Connection: go routine stopped successfully")
 
 	// close channels
 	close(c.inputChannel)
@@ -1122,20 +1134,20 @@ func (c *Connection) clearConnResource() {
 	endOfConnClose := func() {
 		// if SACK option is enabled, release all packets in the sendPackets and RevPacketCache
 		if c.tcpOptions.SackEnabled {
-			log.Println("Pcp Connection close signal already sent to parent. Now we start to return all chunks")
+			log.Println("Pcp Connection: close signal already sent to parent. Now we start to return all chunks")
 			// Return chunks of all packets in c.ResendPackets to pool
 			for _, packet := range c.resendPackets.packets {
 				packet.Data.ReturnChunk()
 			}
-			log.Printf("Pcp Connection Released %d chunks from ResendPackets\n", len(c.resendPackets.packets))
+			log.Printf("Pcp Connection: released %d chunks from ResendPackets\n", len(c.resendPackets.packets))
 
 			// Return chunks of all packets in c.RevPacketCache to pool
 			for _, packet := range c.revPacketCache.packets {
 				packet.Packet.ReturnChunk()
 			}
-			log.Printf("Pcp Connection Released %d chunks from RevPacketCache\n", len(c.revPacketCache.packets))
+			log.Printf("Pcp Connection: Released %d chunks from RevPacketCache\n", len(c.revPacketCache.packets))
 		}
-		log.Printf("Pcp Connection %s resource cleared.\n", c.params.key)
+		log.Printf("Pcp Connection %s: resource cleared.\n", c.params.key)
 	}
 
 	// then send close connection signal to parent to clear connection resource

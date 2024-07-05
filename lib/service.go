@@ -328,7 +328,7 @@ func (s *Service) Close() error {
 	// begin close the service itself and clear resources
 	s.isClosed = true
 
-	log.Println("Beginning service shutdown...")
+	log.Println("Beginning PCP service shutdown...")
 	// Close all connections associated with this service
 	var openConns []*Connection
 	s.mu.Lock()
@@ -336,17 +336,17 @@ func (s *Service) Close() error {
 		openConns = append(openConns, conn)
 	}
 	s.mu.Unlock()
-	var wg sync.WaitGroup
+	wg := sync.WaitGroup{}
 	for _, conn := range openConns {
 		if conn != nil {
 			wg.Add(1)
-			go conn.closeForcefully(&wg)
+			go conn.CloseAsGoRoutine(&wg)
 		}
 	}
 	s.mu.Lock()
 	s.connectionMap = nil
 	s.mu.Unlock()
-	log.Println("PCP service closed all open connections")
+	log.Println("PCP service: all open connections closed")
 
 	wg.Wait() // wait for connections to close
 	var tempConns []*Connection
@@ -364,7 +364,7 @@ func (s *Service) Close() error {
 	s.mu.Lock()
 	s.tempConnMap = nil
 	s.mu.Unlock()
-	log.Println("PCP service closed all temp connections")
+	log.Println("PCP service: all temp connections closed")
 
 	// wait for 500ms to allow temp connections to finish closing
 	SleepForMs(100)
@@ -380,19 +380,19 @@ func (s *Service) Close() error {
 	close(s.connCloseSignal)
 	close(s.connSignalFailed)
 
-	log.Println("Service resource cleared.")
+	log.Println("PCP Service: resource cleared.")
 	// send signal to parent pcpProtocolConnection to clear service resource
 	s.serviceCloseSignal <- s
-	log.Println("signal sent to parent PCP service to remove service entry.")
+	log.Println("PCP Service: signal sent to parent PCP service to remove service entry.")
 
 	// remove the iptable rules for the service
 	err := removeIptablesRule(s.serviceAddr.(*net.IPAddr).IP.String(), s.port)
 	if err != nil {
-		log.Printf("Error removing iptable rules for service %s:%d: %s", s.serviceAddr.(*net.IPAddr).IP.String(), s.port, err)
+		log.Printf("PCP Service: Error removing iptable rules for service %s:%d: %s", s.serviceAddr.(*net.IPAddr).IP.String(), s.port, err)
 		return err
 	}
 
-	log.Printf("Service %s:%d is shutting down.\n", s.serviceAddr.(*net.IPAddr).IP.String(), s.port)
+	log.Printf("PCP Service %s:%d shut down successfully.\n", s.serviceAddr.(*net.IPAddr).IP.String(), s.port)
 
 	return nil
 }
