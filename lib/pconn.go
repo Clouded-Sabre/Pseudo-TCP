@@ -297,18 +297,21 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	p.mu.Lock()
 	conn, ok := p.connectionMap[connKey]
 	p.mu.Unlock()
-	conn.isClosedMu.Lock()
-	isClosed := conn.isClosed
-	conn.isClosedMu.Unlock()
-	if ok && !isClosed {
-		// open connection. Dispatch the packet to the corresponding connection's input channel
-		if rp.Debug && packet.GetChunkReference() != nil {
-			packet.TickFootPrint(fp)
-			packet.AddChannel("Conn.InputChannel")
-		}
-		conn.inputChannel <- packet
 
-		return
+	if ok {
+		conn.isClosedMu.Lock()
+		isClosed := conn.isClosed
+		conn.isClosedMu.Unlock()
+		if !isClosed {
+			// open connection. Dispatch the packet to the corresponding connection's input channel
+			if rp.Debug && packet.GetChunkReference() != nil {
+				packet.TickFootPrint(fp)
+				packet.AddChannel("Conn.InputChannel")
+			}
+			conn.inputChannel <- packet
+
+			return
+		}
 	}
 
 	// then check if packet belongs to an temp connection.
