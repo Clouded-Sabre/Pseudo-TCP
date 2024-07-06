@@ -301,7 +301,6 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	if ok {
 		conn.isClosedMu.Lock()
 		isClosed := conn.isClosed
-		conn.isClosedMu.Unlock()
 		if !isClosed {
 			// open connection. Dispatch the packet to the corresponding connection's input channel
 			if rp.Debug && packet.GetChunkReference() != nil {
@@ -310,8 +309,10 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 			}
 			conn.inputChannel <- packet
 
+			conn.isClosedMu.Unlock()
 			return
 		}
+		conn.isClosedMu.Unlock()
 	}
 
 	// then check if packet belongs to an temp connection.
