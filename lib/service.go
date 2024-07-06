@@ -67,7 +67,7 @@ func (s *Service) Accept() (*Connection, error) {
 		select {
 		case <-s.closeSignal:
 			// Close the accept function to gracefully shutdown
-			return nil, fmt.Errorf("service is closed")
+			return nil, net.ErrClosed
 		case newConn := <-s.newConnChannel: // Wait for new connection to come
 
 			// Check if the connection exists in the temporary connection map
