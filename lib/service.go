@@ -153,17 +153,19 @@ func (s *Service) handleOtherPacket(packet *PcpPacket) {
 	s.mu.Lock()
 	conn, ok := s.connectionMap[connKey]
 	s.mu.Unlock()
-	conn.isClosedMu.Lock()
-	isClosed := conn.isClosed
-	conn.isClosedMu.Unlock()
-	if ok && !isClosed {
-		// Dispatch the packet to the corresponding connection's input channel
-		if rp.Debug && packet.GetChunkReference() != nil {
-			packet.TickFootPrint(fp)
-			packet.AddChannel("pcpConn.InputChannel")
+	if ok {
+		conn.isClosedMu.Lock()
+		isClosed := conn.isClosed
+		conn.isClosedMu.Unlock()
+		if !isClosed {
+			// Dispatch the packet to the corresponding connection's input channel
+			if rp.Debug && packet.GetChunkReference() != nil {
+				packet.TickFootPrint(fp)
+				packet.AddChannel("pcpConn.InputChannel")
+			}
+			conn.inputChannel <- packet
+			return
 		}
-		conn.inputChannel <- packet
-		return
 	}
 
 	// then check if the connection exists in temp connection map
