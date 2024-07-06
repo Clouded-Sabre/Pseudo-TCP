@@ -50,6 +50,7 @@ type Connection struct {
 	resendTimerMutex               sync.Mutex      // mutex for resendTimer
 	revPacketCache                 PacketGapMap    // Cache for received packets who has gap before it due to packet loss or out-of-order
 	isClosed                       bool            // denote that the conneciton is closed so that no packets should be accepted
+	isClosedMu                     sync.Mutex      // prevent isClosed from concurrent access
 	connCloseBegins                bool            // denote if pcp connection close already began. Used to prevent calling close more than once
 	closeSignal                    chan struct{}   // used to send close signal to HandleIncomingPackets go routine to stop when keepalive failed
 	connSignalFailed               chan struct{}   // used to notify Connection signalling process (3-way handshake and 4-way termination) failed
@@ -156,6 +157,7 @@ func newConnection(connParams *connectionParams, connConfig *connectionConfig) (
 		closeSignal:      make(chan struct{}),
 		connSignalFailed: make(chan struct{}),
 		wg:               sync.WaitGroup{},
+		isClosedMu:       sync.Mutex{},
 	}
 
 	if connConfig.keepAliveEnabled {
@@ -334,7 +336,7 @@ func (c *Connection) handle3WayHandshake() {
 		case <-c.connSignalFailed:
 			// Connection establishment signalling failed
 			// send signal to parent service to remove newConn from tempClientConnections
-			c.isClosed = true
+			c.isClosed = true // no need to use mutex since connection is not ready yet
 
 			if c.connSignalTimer != nil {
 				c.stopConnSignalTimer()
@@ -643,7 +645,10 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 func (c *Connection) resendLostPackets() {
 	var fp int
 
-	if c.isClosed {
+	c.isClosedMu.Lock()
+	isClosed := c.isClosed
+	c.isClosedMu.Unlock()
+	if isClosed {
 		return
 	}
 	now := time.Now()
@@ -1055,13 +1060,19 @@ func (c *Connection) Close() error {
 	for {
 		select {
 		case <-timeout:
-			if !c.isClosed {
+			c.isClosedMu.Lock()
+			isClosed := c.isClosed
+			c.isClosedMu.Unlock()
+			if !isClosed {
 				log.Printf("Pcp connection %s:%d timed out waiting for peer closing response. Close the connection forcifully...\n", c.params.remoteAddr.(*net.IPAddr).IP, c.params.remotePort)
 				c.clearConnResource()
 			}
 			return nil
 		case <-ticker.C:
-			if c.isClosed {
+			c.isClosedMu.Lock()
+			isClosed := c.isClosed
+			c.isClosedMu.Unlock()
+			if isClosed {
 				return nil
 			}
 		}
@@ -1084,12 +1095,17 @@ func (c *Connection) initTermination() error {
 
 // clear connection resources and send close signal to paranet
 func (c *Connection) clearConnResource() {
-	if c.isClosed {
+	c.isClosedMu.Lock()
+	isClosed := c.isClosed
+	c.isClosedMu.Unlock()
+	if isClosed {
 		return
 	}
 
 	log.Println("Pcp Connection: Start clearing connection resource")
+	c.isClosedMu.Lock()
 	c.isClosed = true
+	c.isClosedMu.Unlock()
 
 	// Lock to ensure exclusive access to the timer
 	c.keepaliveTimerMutex.Lock()
@@ -1124,41 +1140,53 @@ func (c *Connection) clearConnResource() {
 	close(c.closeSignal) // Close the channel to signal termination
 	log.Println("Pcp Connection: close signal sent to go routine")
 
+	// Drainer Goroutine - drain readChannel so that handleIncomingPackets won't get stuck
+	stopChan := make(chan struct{})
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case packet := <-c.readChannel:
+				log.Println("PcpConnection.Close: Draining packet from readChannel")
+				if rp.Debug && packet.GetChunkReference() != nil {
+					packet.ReturnChunk()
+				}
+			case <-stopChan:
+				return
+			}
+		}
+	}()
+
 	c.wg.Wait() // wait for go routine to close
 	log.Println("Pcp Connection: go routine stopped successfully")
+
+	// send signal to drain go routine to stop it
+	close(stopChan)
+	wg.Wait()
+	log.Println("Pcp Connection: drain go routine stopped successfully")
 
 	// close channels
 	close(c.inputChannel)
 	close(c.readChannel)
 
-	endOfConnClose := func() {
-		// if SACK option is enabled, release all packets in the sendPackets and RevPacketCache
-		if c.tcpOptions.SackEnabled {
-			log.Println("Pcp Connection: close signal already sent to parent. Now we start to return all chunks")
-			// Return chunks of all packets in c.ResendPackets to pool
-			for _, packet := range c.resendPackets.packets {
-				packet.Data.ReturnChunk()
-			}
-			log.Printf("Pcp Connection: released %d chunks from ResendPackets\n", len(c.resendPackets.packets))
-
-			// Return chunks of all packets in c.RevPacketCache to pool
-			for _, packet := range c.revPacketCache.packets {
-				packet.Packet.ReturnChunk()
-			}
-			log.Printf("Pcp Connection: Released %d chunks from RevPacketCache\n", len(c.revPacketCache.packets))
-		}
-		log.Printf("Pcp Connection %s: resource cleared.\n", c.params.key)
-	}
-
-	// then send close connection signal to parent to clear connection resource
-	defer func() {
-		if r := recover(); r != nil {
-			// Handle the panic caused by sending to a closed channel
-			fmt.Println("Pcp connection: Parent is already closed. No need to notify it anymore", r)
-			endOfConnClose()
-		}
-	}()
 	c.params.connCloseSignalChan <- c
 
-	endOfConnClose()
+	// if SACK option is enabled, release all packets in the sendPackets and RevPacketCache
+	if c.tcpOptions.SackEnabled {
+		log.Println("Pcp Connection: close signal already sent to parent. Now we start to return all chunks")
+		// Return chunks of all packets in c.ResendPackets to pool
+		for _, packet := range c.resendPackets.packets {
+			packet.Data.ReturnChunk()
+		}
+		log.Printf("Pcp Connection: released %d chunks from ResendPackets\n", len(c.resendPackets.packets))
+
+		// Return chunks of all packets in c.RevPacketCache to pool
+		for _, packet := range c.revPacketCache.packets {
+			packet.Packet.ReturnChunk()
+		}
+		log.Printf("Pcp Connection: Released %d chunks from RevPacketCache\n", len(c.revPacketCache.packets))
+	}
+	log.Printf("Pcp Connection %s: resource cleared.\n", c.params.key)
 }

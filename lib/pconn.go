@@ -176,7 +176,7 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *connectionConfi
 		case <-newConn.connSignalFailed:
 			// dial action failed
 			// Connection dialing failed, remove newConn from tempClientConnections
-			newConn.isClosed = true
+			newConn.isClosed = true // no need to use mutex since connection is not ready yet
 			p.mu.Lock()
 			delete(p.tempConnectionMap, connKey)
 			p.mu.Unlock()
@@ -297,7 +297,10 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	p.mu.Lock()
 	conn, ok := p.connectionMap[connKey]
 	p.mu.Unlock()
-	if ok && !conn.isClosed {
+	conn.isClosedMu.Lock()
+	isClosed := conn.isClosed
+	conn.isClosedMu.Unlock()
+	if ok && !isClosed {
 		// open connection. Dispatch the packet to the corresponding connection's input channel
 		if rp.Debug && packet.GetChunkReference() != nil {
 			packet.TickFootPrint(fp)
@@ -312,7 +315,7 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	p.mu.Lock()
 	tempConn, ok := p.tempConnectionMap[connKey]
 	p.mu.Unlock()
-	if ok && !tempConn.isClosed {
+	if ok && !tempConn.isClosed { // no need to use mutex since connection is not ready yet
 		if len(packet.Payload) == 0 && packet.AcknowledgmentNum-tempConn.initialSeq < 2 {
 			// forward to that connection's input channel
 			if rp.Debug && packet.GetChunkReference() != nil {
@@ -331,7 +334,7 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 		}
 	}
 
-	fmt.Printf("PcpProtocolConnection.clientProcessingIncomingPacket: Received data packet for non-existent connection: %s\n", connKey)
+	fmt.Printf("PcpProtocolConnection.clientProcessingIncomingPacket: Received data packet for non-existent or closed connection: %s\n", connKey)
 	// return the packet chunk now that it's destined to an unknown connection
 	if rp.Debug && packet.GetChunkReference() != nil {
 		packet.TickFootPrint(fp)

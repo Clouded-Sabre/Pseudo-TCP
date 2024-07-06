@@ -153,7 +153,10 @@ func (s *Service) handleOtherPacket(packet *PcpPacket) {
 	s.mu.Lock()
 	conn, ok := s.connectionMap[connKey]
 	s.mu.Unlock()
-	if ok && !conn.isClosed {
+	conn.isClosedMu.Lock()
+	isClosed := conn.isClosed
+	conn.isClosedMu.Unlock()
+	if ok && !isClosed {
 		// Dispatch the packet to the corresponding connection's input channel
 		if rp.Debug && packet.GetChunkReference() != nil {
 			packet.TickFootPrint(fp)
@@ -167,7 +170,7 @@ func (s *Service) handleOtherPacket(packet *PcpPacket) {
 	s.mu.Lock()
 	tempConn, ok := s.tempConnMap[connKey]
 	s.mu.Unlock()
-	if ok && !tempConn.isClosed {
+	if ok && !tempConn.isClosed { // no need to use mutex since connection is not ready yet
 		// Dispatch the packet to the corresponding connection's input channel
 		if rp.Debug && packet.GetChunkReference() != nil {
 			packet.TickFootPrint(fp)
