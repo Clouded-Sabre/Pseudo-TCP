@@ -38,7 +38,7 @@ func newService(pcpProtocolConn *PcpProtocolConnection, serviceAddr net.Addr, po
 		pcpProtocolConnection: pcpProtocolConn,
 		serviceAddr:           serviceAddr,
 		port:                  port,
-		inputChannel:          make(chan *PcpPacket),
+		inputChannel:          make(chan *PcpPacket, 200),
 		outputChan:            outputChan,
 		sigOutputChan:         sigOutputChan,
 		connectionMap:         make(map[string]*Connection),

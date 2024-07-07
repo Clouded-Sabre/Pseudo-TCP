@@ -142,8 +142,8 @@ func newConnection(connParams *connectionParams, connConfig *connectionConfig) (
 		initialSeq:         isn,
 		lastAckNumber:      0,
 		windowSize:         math.MaxUint16,
-		inputChannel:       make(chan *PcpPacket),
-		readChannel:        make(chan *PcpPacket),
+		inputChannel:       make(chan *PcpPacket, 200),
+		readChannel:        make(chan *PcpPacket, 200),
 		readDeadline:       time.Time{},
 
 		// all the rest variables keep there init value
