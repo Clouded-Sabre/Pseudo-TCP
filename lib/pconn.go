@@ -120,6 +120,7 @@ func newPcpProtocolConnection(key string, isServer bool, protocolId int, serverA
 }
 
 func (p *PcpProtocolConnection) dial(serverPort int, connConfig *connectionConfig) (*Connection, error) {
+	log.Println("PcpProtocolConnection.dial: connConfig is", connConfig)
 	// Choose a random client port
 	clientPort := p.getAvailableRandomClientPort()
 
