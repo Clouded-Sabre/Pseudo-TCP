@@ -123,6 +123,7 @@ func (p *PcpPacket) Marshal(protocolId uint8, buffer []byte) (int, error) {
 		// MSS option: kind (1 byte), length (1 byte), MSS value (2 bytes)
 		frame[optionOffset] = 2   // Kind: Maximum Segment Size
 		frame[optionOffset+1] = 4 // Length: 4 bytes
+		log.Println("pcpPacket.Marshal: p.TcpOptions.mss:", p.TcpOptions.mss)
 		binary.BigEndian.PutUint16(frame[optionOffset+2:optionOffset+4], p.TcpOptions.mss)
 		optionOffset += 4
 	}
@@ -244,6 +245,7 @@ func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) error {
 				optionLength = optionsBytes[i+1]
 				if optionLength == 4 && i+4 <= optionsLength {
 					p.TcpOptions.mss = binary.BigEndian.Uint16(optionsBytes[i+2 : i+4])
+					log.Println("pcpPacket.Unmarshal: p.TcpOptions.mss:", p.TcpOptions.mss)
 				}
 			case 4: // SACK support
 				optionLength = optionsBytes[i+1]
