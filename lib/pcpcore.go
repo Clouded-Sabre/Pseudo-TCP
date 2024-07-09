@@ -45,7 +45,7 @@ func NewPcpCore(pcpcoreConfig *PcpCoreConfig) (*PcpCore, error) {
 	pcpServerObj.wg.Add(1) // Increase WaitGroup counter by 1 for the handleClosePConnConnection goroutines
 	go pcpServerObj.handleClosePConnConnection()
 
-	fmt.Println("Pcp protocol core started")
+	log.Println("Pcp protocol core started")
 
 	return pcpServerObj, nil
 }

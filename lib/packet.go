@@ -286,7 +286,7 @@ func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) error {
 
 	// Extract payload from the data
 	if TcpHeaderLength+optionsLength > len(data) {
-		return fmt.Errorf("TcpHeaderLength+optionsLength(%d) > len(data)(%d). Malformed PCP packet", TcpHeaderLength+optionsLength, len(data))
+		return fmt.Errorf("TcpHeaderLength+optionsLength(%d) > len(data)(%d). Ill-formatted PCP packet", TcpHeaderLength+optionsLength, len(data))
 	}
 	if len(data[TcpHeaderLength+optionsLength:]) > 0 {
 		err := p.CopyToPayload(data[TcpHeaderLength+optionsLength:])

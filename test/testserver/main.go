@@ -3,25 +3,14 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"math/rand"
 	"net"
 	"os"
-	"os/signal"
 	"strconv"
-	"sync"
-	"syscall"
-	"time"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 	"github.com/Clouded-Sabre/Pseudo-TCP/lib"
-)
-
-const (
-	protocol = PCP
-	PCP      = 1
-	UDP      = 0
 )
 
 var (
@@ -29,7 +18,7 @@ var (
 	svcPort                          int
 	filePath                         string
 	mtu                              int
-	maxGapMs                         int
+	protocol                         string
 	pcpCoreObj                       *lib.PcpCore
 	err                              error
 )
@@ -38,12 +27,96 @@ func init() {
 	// Define CLI flags for server IP and port
 	flag.StringVar(&svcAddrStr, "svcaddr", "127.0.0.1:8080", "SFDP service address(IP:Port)")
 	flag.StringVar(&filePath, "file", "book.txt", "file path to the book txt file")
-	flag.IntVar(&mtu, "MTU", 1300, "payload MTU")
-	flag.IntVar(&maxGapMs, "max-gap-ms", 1300, "Max gap in ms between two consecutive packets")
+	flag.IntVar(&mtu, "mtu", 1300, "payload MTU")
+	flag.StringVar(&protocol, "protocol", "udp", "Transport protocol: udp, tcp and pcp")
 	flag.Parse()
 }
 
 func main() {
+	switch protocol {
+	case "udp":
+		startUDPServer()
+	case "tcp":
+		startTCPServer()
+	case "pcp":
+		startPCPServer()
+	default:
+		fmt.Println("Invalid protocol specified. Use 'udp', 'tcp' and 'pcp'.")
+		os.Exit(1)
+	}
+}
+
+func startUDPServer() {
+	udpAddr, err := net.ResolveUDPAddr("udp", svcAddrStr)
+	if err != nil {
+		fmt.Println("Error resolving UDP address:", err)
+		os.Exit(1)
+	}
+
+	conn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		fmt.Println("Error listening:", err)
+		os.Exit(1)
+	}
+	defer conn.Close()
+
+	fmt.Printf("UDP Server listening on %s\n", svcAddrStr)
+
+	// Map to store connected clients
+	connectedClients := make(map[string]chan []byte)
+
+	for {
+		// Accept incoming connections
+		buffer := make([]byte, 8192)
+		n, addr, err := conn.ReadFromUDP(buffer)
+		if err != nil {
+			log.Println("Error reading UDP packet:", err)
+			continue
+		}
+
+		clientAddr := addr.String()
+		//log.Printf("Received packet from %s. Length: %d\n", clientAddr, n)
+		//handleReceivedMessage(buffer[:n], addr.String())
+
+		// Check if the client is already connected
+		var (
+			channel chan []byte
+			ok      bool
+		)
+		if channel, ok = connectedClients[clientAddr]; !ok {
+			// Spin off a new goroutine to handle the client
+			inputChannel := make(chan []byte)
+			go handleUdpInputFromClient(conn, addr, filePath, mtu, inputChannel)
+			connectedClients[clientAddr] = inputChannel
+			channel = inputChannel
+		}
+
+		channel <- buffer[:n]
+	}
+}
+
+func startTCPServer() {
+	listener, err := net.Listen("tcp", svcAddrStr)
+	if err != nil {
+		fmt.Println("Error starting TCP server:", err)
+		os.Exit(1)
+	}
+	defer listener.Close()
+
+	fmt.Printf("TCP Server listening on %s\n", svcAddrStr)
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			log.Println("Error accepting connection:", err)
+			continue
+		}
+		//go handleOutputToClient(nil, conn, nil, filePath, mtu, maxGapMs)
+		go handleTcpInputFromClient(conn, mtu)
+	}
+}
+
+func startPCPServer() {
 	svcIPstr, svcPortStr, err = net.SplitHostPort(svcAddrStr)
 	if err != nil {
 		log.Fatal(err)
@@ -72,144 +145,136 @@ func main() {
 	}
 	log.Println("PCP core started.")
 
-	// Listen for interrupt signal (Ctrl+C)
-	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
-
-	closeChan := make(chan struct{})
-
-	// Start the PCP server
-	srv, err := pcpCoreObj.ListenPcp(svcIPstr, svcPort, config.AppConfig)
+	listener, err := pcpCoreObj.ListenPcp(svcIPstr, svcPort, config.AppConfig)
 	if err != nil {
-		log.Printf("PCP server error listening at %s: %s", svcAddrStr, err)
-		return
+		fmt.Println("Error starting PCP server:", err)
+		os.Exit(1)
 	}
+	defer listener.Close()
 
-	log.Printf("PCP service started at %s", svcAddrStr)
-
-	var wg sync.WaitGroup
-	// Handle Ctrl+C signal for graceful shutdown
-	watcher := func(wg *sync.WaitGroup) {
-		defer wg.Done()
-		<-signalChan
-		fmt.Println("\nReceived SIGINT (Ctrl+C). Shutting down...")
-		close(closeChan)
-		fmt.Println("Closing service.")
-		srv.Close() // Close the server gracefully
-	}
-
-	wg.Add(1)
-	go watcher(&wg)
+	fmt.Printf("PCP Server listening on %s\n", svcAddrStr)
 
 	for {
-		// Accept incoming connections
-		conn, err := srv.Accept()
+		conn, err := listener.Accept()
 		if err != nil {
-			log.Println("Service stopped accepting new connection.")
-			break
-		} else {
-			wg.Add(1)
-			go handleClientOutput(conn, closeChan, &wg)
-			wg.Add(1)
-			go handleClientInput(conn, closeChan, &wg)
+			log.Println("Error accepting connection:", err)
+			continue
 		}
+		//go handleOutputToClient(nil, conn, nil, filePath, mtu, maxGapMs)
+		go handlePcpInputFromClient(conn, mtu)
 	}
-
-	wg.Wait()
-	log.Println("Server exiting...")
-	pcpCoreObj.Close()
-	os.Exit(0)
 }
 
-func handleClientOutput(conn *lib.Connection, closeChan chan struct{}, wg *sync.WaitGroup) {
-	defer wg.Done()
-
+func handleTcpInputFromClient(tcpConn net.Conn, mtu int) {
 	buffer := make([]byte, mtu)
-
 	file, err := os.Open(filePath)
 	if err != nil {
 		log.Println("Error opening file:", err)
 		return
 	}
+	defer file.Close()
 
 	for {
-		select {
-		case <-closeChan:
-			log.Println("handleClientOutput got interuption. Stop and exit.")
+		n, err := tcpConn.Read(buffer)
+
+		if err != nil {
+			log.Println("handleClientInputUDP:", err)
 			return
-		default:
-			// Generate a random chunk size between 1 and mtu
-			//chunkSize := 1 + rand.Intn(mtu-1)
-			chunkSize := rand.Intn(mtu) //start from zero
-
-			// Read data from the file
-			n, err := file.Read(buffer[:chunkSize])
-			if err != nil {
-				log.Println("Error reading from file:", err)
-				file.Close()
-				break
-			}
-
-			// Send the packet to the client
-			if n > 0 {
-				_, err = conn.Write(buffer[:n])
-			} else {
-				_, err = conn.Write(nil)
-			}
-
-			if err != nil {
-				log.Println("Error sending packet:", err)
-				break
-			}
-
-			log.Printf("Sent packet with length %d to %s:%d\n", n, conn.RemoteAddr().IP, conn.RemotePort())
-
-			// Sleep for a random duration between 0 and maxGapMs milliseconds
-			sleepDuration := time.Duration(rand.Intn(maxGapMs)) * time.Millisecond
-			time.Sleep(sleepDuration)
-
-			// Check if we have reached the end of the file
-			if n < chunkSize {
-				// Reset the read pointer to the beginning of the file
-				_, err = file.Seek(0, 0)
-				if err != nil {
-					log.Println("Error seeking to the beginning of the file:", err)
-					return
-				}
-				//break
-			}
 		}
+		//log.Printf("Got message from client(%s):%s\n", tcpConn.RemoteAddr().(*net.TCPAddr).String(), string(buffer[:n]))
+		if n < 8 {
+			log.Fatalf("Received message(%d bytes) is too short to contain timestamp(8 bytes)\n", n)
+		}
+
+		sendMessageBack(buffer[:n], nil, &tcpConn, nil, nil, mtu, file)
 	}
 }
 
-func handleClientInput(conn *lib.Connection, closeChan chan struct{}, wg *sync.WaitGroup) {
-	defer wg.Done()
-
+func handlePcpInputFromClient(pcpConn *lib.Connection, mtu int) {
 	buffer := make([]byte, mtu)
-	for {
-		select {
-		case <-closeChan:
-			log.Println("Stop handleClient gracefully")
-			return
-		default:
-			conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // read wait for 500 ms
-			n, err := conn.Read(buffer)
-			if err != nil {
-				// Check if the error is a timeout
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					// Handle timeout error (no data received within the timeout period)
-					continue // Continue waiting for incoming packets or handling closeSignal
-				}
-				if err == io.EOF {
-					log.Println("handleClient got interuption. Stop and exit.")
-					return
-				}
-				fmt.Println("Error reading packet:", err)
-				return
-			}
+	file, err := os.Open(filePath)
+	if err != nil {
+		log.Println("Error opening file:", err)
+		return
+	}
+	defer file.Close()
 
-			message := buffer[:n]
-			log.Println("Got message from client:", message)
+	for {
+		n, err := pcpConn.Read(buffer)
+
+		if err != nil {
+			log.Println("handleClientInputUDP:", err)
+			return
+		}
+		//log.Printf("Got message from client(%s):%s\n", tcpConn.RemoteAddr().(*net.TCPAddr).String(), string(buffer[:n]))
+		if n < 8 {
+			log.Fatalf("Received message(%d bytes) is too short to contain timestamp(8 bytes)\n", n)
+		}
+
+		sendMessageBack(buffer[:n], nil, nil, pcpConn, nil, mtu, file)
+	}
+}
+
+func handleUdpInputFromClient(conn *net.UDPConn, addr *net.UDPAddr, filePath string, mtu int, inputChannel chan []byte) {
+	var message []byte
+	file, err := os.Open(filePath)
+	if err != nil {
+		log.Println("Error opening file:", err)
+		return
+	}
+	defer file.Close()
+
+	for {
+		message = <-inputChannel
+		if len(message) < 8 {
+			log.Fatalf("Received message length(%d) is less than minimum value (8). Quit!\n", len(message))
+		}
+		//log.Printf("Got message from client(%s):%s\n", conn.RemoteAddr().String(), string(buffer[:n]))
+		sendMessageBack(message, conn, nil, nil, addr, mtu, file)
+	}
+}
+
+func sendMessageBack(message []byte, udpConn *net.UDPConn, tcpConn *net.Conn, pcpConn *lib.Connection, sAddr *net.UDPAddr, mtu int, file *os.File) {
+	buffer := make([]byte, mtu)
+
+	chunkSize := rand.Intn(mtu - 8) // Subtract 8 bytes for the timestamp
+
+	// Read data from the file
+	n, err := file.Read(buffer[8 : chunkSize+8])
+	if err != nil {
+		log.Fatalln("Error reading from file:", err)
+	}
+
+	// Prepend the timestamp to the buffer
+	copy(buffer[:8], message[:8]) // including 4-byte sequence number and 8 bytes timestamp
+
+	// Send the packet to the client
+	if udpConn != nil {
+		_, err = udpConn.WriteToUDP(buffer[:n+8], sAddr)
+	} else if tcpConn != nil {
+		_, err = (*tcpConn).Write(buffer[:n+8])
+	} else {
+		_, err = pcpConn.Write(buffer[:n+8])
+	}
+	if err != nil {
+		log.Fatalln("Error sending packet:", err)
+	}
+
+	var sourceAddrStr string
+	if udpConn != nil {
+		sourceAddrStr = sAddr.String()
+	} else if tcpConn != nil {
+		sourceAddrStr = (*tcpConn).RemoteAddr().String()
+	} else {
+		sourceAddrStr = pcpConn.RemoteAddr().String()
+	}
+	log.Printf("Sent packet with length %d to %s\n", n+8, sourceAddrStr)
+
+	if n < chunkSize {
+		_, err = file.Seek(0, 0)
+		if err != nil {
+			log.Println("Error seeking to the beginning of the file:", err)
+			return
 		}
 	}
 }
