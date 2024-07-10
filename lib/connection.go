@@ -1193,3 +1193,7 @@ func (c *Connection) clearConnResource() {
 	}
 	log.Printf("Pcp Connection %s: resource cleared.\n", c.params.key)
 }
+
+func (c *Connection) GetMSS() int {
+	return int(c.tcpOptions.mss)
+}
