@@ -194,6 +194,18 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *connectionConfi
 			if packet.Flags == SYNFlag|ACKFlag { // Verify if it's a SYN-ACK from the server
 				newConn.stopConnSignalTimer() // stops the connection signal resend timer
 				newConn.initClientState = SynAckReceived
+
+				// MSS support negotiation
+				if packet.TcpOptions.mss > 0 {
+					log.Printf("PcpService.handleSynPacket: Received MSS is %d while newConn.tcpOptions.mss is %d", packet.TcpOptions.mss, newConn.tcpOptions.mss)
+					if packet.TcpOptions.mss < newConn.tcpOptions.mss {
+						newConn.tcpOptions.mss = packet.TcpOptions.mss // default value is config.PreferredMSS
+					}
+					log.Printf("Negotiated mss is %s%d%s", Red, newConn.tcpOptions.mss, Reset)
+				} else {
+					newConn.tcpOptions.mss = 0 // disble MSS
+				}
+
 				//newConn.InitialPeerSeq = packet.SequenceNumber //record the initial SEQ from the peer
 				// Prepare ACK packet
 				newConn.lastAckNumber = SeqIncrement(packet.SequenceNumber)

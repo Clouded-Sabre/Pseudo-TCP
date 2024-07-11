@@ -252,6 +252,7 @@ func (s *Service) handleSynPacket(packet *PcpPacket) {
 		if packet.TcpOptions.mss < newConn.tcpOptions.mss {
 			newConn.tcpOptions.mss = packet.TcpOptions.mss // default value is config.PreferredMSS
 		}
+		log.Printf("Negotiated mss is %s%d%s", Red, newConn.tcpOptions.mss, Reset)
 	} else {
 		newConn.tcpOptions.mss = 0 // disble MSS
 	}
