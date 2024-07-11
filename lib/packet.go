@@ -245,7 +245,7 @@ func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) error {
 				optionLength = optionsBytes[i+1]
 				if optionLength == 4 && i+4 <= optionsLength {
 					p.TcpOptions.mss = binary.BigEndian.Uint16(optionsBytes[i+2 : i+4])
-					log.Println("pcpPacket.Unmarshal: p.TcpOptions.mss:", p.TcpOptions.mss)
+					//log.Println("pcpPacket.Unmarshal: p.TcpOptions.mss:", p.TcpOptions.mss)
 				}
 			case 4: // SACK support
 				optionLength = optionsBytes[i+1]
