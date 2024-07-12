@@ -297,35 +297,36 @@ func (s *Service) handleCloseConnections() {
 			// Close the handleServicePackets goroutine to gracefully shutdown
 			return
 		case conn = <-s.connSignalFailed:
-			// clear it from p.ConnectionMap
-			s.mu.Lock()
-			_, ok := s.connectionMap[conn.params.key] // just make sure it really in ConnectionMap for debug purpose
-			s.mu.Unlock()
-			if !ok {
-				// connection does not exist in ConnectionMap
-				log.Printf("Pcp connection does not exist in %s:%d->%s:%d", conn.params.localAddr.(*net.IPAddr).IP.String(), conn.params.localPort, conn.params.remoteAddr.(*net.IPAddr).IP.String(), conn.params.remotePort)
-				continue
+			err := s.removeConnectionMapEntry(s.connectionMap, conn, "ConnectionMap")
+			if err != nil {
+				s.removeConnectionMapEntry(s.tempConnMap, conn, "tempConnectionMap")
 			}
-			log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.params.localAddr.(*net.IPAddr).IP.String(), conn.params.localPort, conn.params.remoteAddr.(*net.IPAddr).IP.String(), conn.params.remotePort)
+
 			return
 		case conn = <-s.connCloseSignal:
 			// clear it from p.ConnectionMap
-			s.mu.Lock()
-			_, ok := s.connectionMap[conn.params.key] // just make sure it really in ConnectionMap for debug purpose
-			s.mu.Unlock()
-			if !ok {
-				// connection does not exist in ConnectionMap
-				log.Printf("Pcp connection does not exist in %s:%d->%s:%d", conn.params.localAddr.(*net.IPAddr).IP.String(), conn.params.localPort, conn.params.remoteAddr.(*net.IPAddr).IP.String(), conn.params.remotePort)
-				continue
-			}
-
-			// delete the clientConn from ConnectionMap
-			s.mu.Lock()
-			delete(s.connectionMap, conn.params.key)
-			s.mu.Unlock()
-			log.Printf("Pcp connection %s:%d->%s:%d terminated and removed.", conn.params.localAddr.(*net.IPAddr).IP.String(), conn.params.localPort, conn.params.remoteAddr.(*net.IPAddr).IP.String(), conn.params.remotePort)
+			s.removeConnectionMapEntry(s.connectionMap, conn, "ConnectionMap")
 		}
 
+	}
+}
+
+func (s *Service) removeConnectionMapEntry(connMap map[string]*Connection, conn *Connection, name string) error {
+	// clear it from p.ConnectionMap
+	s.mu.Lock()
+	_, ok := connMap[conn.params.key] // just make sure it really in ConnectionMap for debug purpose
+	s.mu.Unlock()
+	if !ok {
+		// connection does not exist in ConnectionMap
+		log.Printf("PcpService.handleCloseConnection: Pcp connection(%s:%d->%s:%d) does not exist in %s", conn.LocalAddr().IP.String(), conn.LocalPort(), conn.RemoteAddr().IP.String(), conn.RemotePort(), name)
+		return fmt.Errorf("connection does not exist in %s", name)
+	} else {
+		// delete the conn from ConnectionMap
+		s.mu.Lock()
+		delete(connMap, conn.params.key)
+		s.mu.Unlock()
+		log.Printf("Pcp connection %s:%d->%s:%d terminated and removed from %s.", conn.LocalAddr().IP.String(), conn.LocalPort(), conn.RemoteAddr().IP.String(), conn.RemotePort(), name)
+		return nil
 	}
 }
 
@@ -366,7 +367,10 @@ func (s *Service) Close() error {
 	s.mu.Unlock()
 	for _, tempConn := range tempConns {
 		if tempConn != nil {
-			close(tempConn.connSignalFailed)
+			if !tempConn.isConnSignalFailedAlreadyClosed {
+				tempConn.isConnSignalFailedAlreadyClosed = true
+				close(tempConn.connSignalFailed)
+			}
 		}
 	}
 	s.mu.Lock()

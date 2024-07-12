@@ -22,39 +22,40 @@ type Connection struct {
 	initialSeq     uint32            // connection's initial SEQ, static once connection establishes
 	initialPeerSeq uint32            // the initial SEQ from Peer, static once connection establishes
 	//variables
-	nextSequenceNumber             uint32          // the SEQ sequence number of the next outgoing packet
-	lastAckNumber                  uint32          // the last acknowleged incoming packet
-	termStartSeq, termStartPeerSeq uint32          // Seq and Peer Seq when 4-way termination starts
-	inputChannel                   chan *PcpPacket // per connection packet input channel
-	readChannel                    chan *PcpPacket // for connection read function
-	readDeadline                   time.Time       // ReadDeadline for non-blocking read
-	terminationCallerState         uint            // 4-way termination caller states
-	terminationRespState           uint            // 4-way termination responder states
-	initClientState                uint            // 3-way handshake state of the client
-	initServerState                uint            // 3-way handshake state of the Server
-	connSignalTimer                *time.Timer     // Timer for 3-way handshake and 4-way connection close
-	connSignalRetryCount           int             // retry count for 3-way handshake and 4-way connection close
-	tcpOptions                     *options        // tcp options
-	writeOnHold                    bool            // true if 4-way termination starts
-	isOpenConnection               bool            //false if in 3-way handshake
-	isBidirectional                bool            // already seen normal packets from peer
-	keepaliveTimer                 *time.Timer     // Timer for keepalive mechanism
-	keepaliveTimerMutex            sync.Mutex      // mutex for KeepaliveTimer
-	idleTimeout                    time.Duration   // Idle timeout duration
-	timeoutCount                   int             // Timeout count for keepalive
-	keepaliveInterval              time.Duration   // Interval between keepalive attempts
-	isKeepAliveInProgress          bool            // denote if keepalive probe is in process or not
-	resendPackets                  ResendPackets   // data structure to hold sent packets which are not acknowledged yet
-	resendInterval                 time.Duration   // packet resend interval
-	resendTimer                    *time.Timer     // resend timer to trigger resending packet every ResendInterval
-	resendTimerMutex               sync.Mutex      // mutex for resendTimer
-	revPacketCache                 PacketGapMap    // Cache for received packets who has gap before it due to packet loss or out-of-order
-	isClosed                       bool            // denote that the conneciton is closed so that no packets should be accepted
-	isClosedMu                     sync.Mutex      // prevent isClosed from concurrent access
-	connCloseBegins                bool            // denote if pcp connection close already began. Used to prevent calling close more than once
-	closeSignal                    chan struct{}   // used to send close signal to HandleIncomingPackets go routine to stop when keepalive failed
-	connSignalFailed               chan struct{}   // used to notify Connection signalling process (3-way handshake and 4-way termination) failed
-	wg                             sync.WaitGroup  // wait group for go routine
+	nextSequenceNumber              uint32          // the SEQ sequence number of the next outgoing packet
+	lastAckNumber                   uint32          // the last acknowleged incoming packet
+	termStartSeq, termStartPeerSeq  uint32          // Seq and Peer Seq when 4-way termination starts
+	inputChannel                    chan *PcpPacket // per connection packet input channel
+	readChannel                     chan *PcpPacket // for connection read function
+	readDeadline                    time.Time       // ReadDeadline for non-blocking read
+	terminationCallerState          uint            // 4-way termination caller states
+	terminationRespState            uint            // 4-way termination responder states
+	initClientState                 uint            // 3-way handshake state of the client
+	initServerState                 uint            // 3-way handshake state of the Server
+	connSignalTimer                 *time.Timer     // Timer for 3-way handshake and 4-way connection close
+	connSignalRetryCount            int             // retry count for 3-way handshake and 4-way connection close
+	tcpOptions                      *options        // tcp options
+	writeOnHold                     bool            // true if 4-way termination starts
+	isOpenConnection                bool            //false if in 3-way handshake
+	isBidirectional                 bool            // already seen normal packets from peer
+	keepaliveTimer                  *time.Timer     // Timer for keepalive mechanism
+	keepaliveTimerMutex             sync.Mutex      // mutex for KeepaliveTimer
+	idleTimeout                     time.Duration   // Idle timeout duration
+	timeoutCount                    int             // Timeout count for keepalive
+	keepaliveInterval               time.Duration   // Interval between keepalive attempts
+	isKeepAliveInProgress           bool            // denote if keepalive probe is in process or not
+	resendPackets                   ResendPackets   // data structure to hold sent packets which are not acknowledged yet
+	resendInterval                  time.Duration   // packet resend interval
+	resendTimer                     *time.Timer     // resend timer to trigger resending packet every ResendInterval
+	resendTimerMutex                sync.Mutex      // mutex for resendTimer
+	revPacketCache                  PacketGapMap    // Cache for received packets who has gap before it due to packet loss or out-of-order
+	isClosed                        bool            // denote that the conneciton is closed so that no packets should be accepted
+	isClosedMu                      sync.Mutex      // prevent isClosed from concurrent access
+	connCloseBegins                 bool            // denote if pcp connection close already began. Used to prevent calling close more than once
+	closeSignal                     chan struct{}   // used to send close signal to HandleIncomingPackets go routine to stop when keepalive failed
+	connSignalFailed                chan struct{}   // used to notify Connection signalling process (3-way handshake and 4-way termination) failed
+	isConnSignalFailedAlreadyClosed bool            // denote if connSignalFailed is already closed to prevent closing it again and cause panic
+	wg                              sync.WaitGroup  // wait group for go routine
 	// statistics
 	rxCount, txCount int64 // count of number of packets received, sent since birth
 	rxOooCount       int64 // count of number of received Out-Of-Order packet
@@ -1018,7 +1019,8 @@ func (c *Connection) startConnSignalTimer() {
 			// Signal 3-way handshake or 4-way termination failure
 			c.connSignalTimer.Stop()
 			c.connSignalRetryCount = 0 // reset it to 0
-			close(c.connSignalFailed)  // send failure signal to other function
+			c.isConnSignalFailedAlreadyClosed = true
+			close(c.connSignalFailed) // send failure signal to other function
 			return
 		}
 
