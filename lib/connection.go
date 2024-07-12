@@ -55,6 +55,9 @@ type Connection struct {
 	closeSignal                    chan struct{}   // used to send close signal to HandleIncomingPackets go routine to stop when keepalive failed
 	connSignalFailed               chan struct{}   // used to notify Connection signalling process (3-way handshake and 4-way termination) failed
 	wg                             sync.WaitGroup  // wait group for go routine
+	// statistics
+	rxCount, txCount int64 // count of number of packets received, sent since birth
+	rxOooCount       int64 // count of number of received Out-Of-Order packet
 }
 
 type options struct {
@@ -164,6 +167,9 @@ func newConnection(connParams *connectionParams, connConfig *connectionConfig) (
 		newConn.keepaliveTimer = time.NewTimer(time.Duration(connConfig.keepaliveInterval))
 		newConn.startKeepaliveTimer()
 	}
+
+	newConn.wg.Add(1)
+	go newConn.StartStatsPrinter()
 
 	return newConn, nil
 }
@@ -402,8 +408,10 @@ func (c *Connection) acknowledge() {
 
 // Handle data packet function for Pcp connection
 func (c *Connection) handleDataPacket(packet *PcpPacket) {
+	c.rxCount++
 	// if the packet was already acknowledged by us, ignore it
 	if packet.SequenceNumber < c.lastAckNumber {
+		c.rxOooCount++
 		// received packet which we already received and put into readchannel. Ignore it.
 		if rp.Debug && packet.GetChunkReference() != nil {
 			fp := packet.AddFootPrint("Connection.handleDataPacket")
@@ -610,6 +618,9 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 	if len(buffer) > int(c.tcpOptions.mss) {
 		return 0, fmt.Errorf("pcpConnection.Write: buffer length (%d) is too short to hold the payload (length %d) to be written out", int(c.tcpOptions.mss), len(buffer))
 	}
+
+	c.txCount++
+
 	// Iterate over the buffer and split it into segments if necessary
 	for len(buffer) > 0 {
 		// Determine the length of the current segment
@@ -1196,4 +1207,19 @@ func (c *Connection) clearConnResource() {
 
 func (c *Connection) GetMSS() int {
 	return int(c.tcpOptions.mss)
+}
+
+func (c *Connection) StartStatsPrinter() {
+	defer c.wg.Done()
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			log.Printf("PCP connecction (%s:%d - %s:%d) rxCount: %s%d%s, txCount: %s%d%s, rxOooCount: %s%d%s\n", c.RemoteAddr().IP.String(), c.RemotePort(), c.LocalAddr().IP.String(), c.LocalPort(), ColorGreen, c.rxCount, ColorReset, ColorGreen, c.txCount, ColorReset, ColorMagenta, c.rxOooCount, ColorReset)
+		case <-c.closeSignal:
+			return
+		}
+	}
 }
