@@ -38,6 +38,8 @@ type Config struct {
 	IptableRuleDaley        int    `yaml:"iptable_rule_daley"`
 	ChecksumVerification    bool   `yaml:"checksum_verification"`
 	Debug                   bool   `yaml:"debug"`
+	PoolDebug               bool   `yaml:"pool_debug"`
+	ProcessingTimeThreshold int    `yaml:"processing_time_threshold"`
 }
 
 var AppConfig *Config

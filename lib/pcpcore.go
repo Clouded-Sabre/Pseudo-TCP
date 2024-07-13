@@ -6,6 +6,7 @@ import (
 	"net"
 	"os/exec"
 	"strconv"
+	"time"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 	rp "github.com/Clouded-Sabre/ringpool/lib"
@@ -14,10 +15,12 @@ import (
 )
 
 type PcpCoreConfig struct {
-	ProtocolID      uint8 // protocol id which should be 6
-	PayloadPoolSize int   // how many number of packet payload chunks in the pool
-	PreferredMSS    int   // preferred MSS
-	Debug           bool
+	ProtocolID           uint8 // protocol id which should be 6
+	PayloadPoolSize      int   // how many number of packet payload chunks in the pool
+	PreferredMSS         int   // preferred MSS
+	Debug                bool  // global debug setting
+	PoolDebug            bool  // Ring Pool debug setting
+	ProcessTimeThreshold int   // packet processing time threshold
 }
 
 type PcpCore struct {
@@ -38,8 +41,10 @@ func NewPcpCore(pcpcoreConfig *PcpCoreConfig) (*PcpCore, error) {
 		closeSignal:        make(chan struct{}),
 	}
 
-	rp.Debug = pcpcoreConfig.Debug
+	//rp.Debug = pcpcoreConfig.Debug
 	Pool = rp.NewRingPool("PCP: ", pcpcoreConfig.PayloadPoolSize, NewPayload, pcpcoreConfig.PreferredMSS)
+	Pool.Debug = pcpcoreConfig.PoolDebug
+	Pool.ProcessTimeThreshold = time.Duration(pcpcoreConfig.ProcessTimeThreshold) * time.Millisecond
 
 	// Start goroutines
 	pcpServerObj.wg.Add(1) // Increase WaitGroup counter by 1 for the handleClosePConnConnection goroutines

@@ -633,7 +633,7 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 		// Construct a packet with the current segment
 		packet := NewPcpPacket(c.nextSequenceNumber, c.lastAckNumber, ACKFlag, buffer[:segmentLength], c)
 		if packet == nil {
-			return 0, fmt.Errorf("pcp connection write: failed to create new packet with payoad length %d", segmentLength)
+			return 0, fmt.Errorf("pcp connection write: failed to create new packet with payload length %d", segmentLength)
 		}
 		if rp.Debug && packet.GetChunkReference() != nil {
 			fp = packet.chunk.AddFootPrint("Connection.Write")
