@@ -41,7 +41,7 @@ func NewPcpCore(pcpcoreConfig *PcpCoreConfig) (*PcpCore, error) {
 		closeSignal:        make(chan struct{}),
 	}
 
-	//rp.Debug = pcpcoreConfig.Debug
+	rp.Debug = pcpcoreConfig.PoolDebug
 	Pool = rp.NewRingPool("PCP: ", pcpcoreConfig.PayloadPoolSize, NewPayload, pcpcoreConfig.PreferredMSS)
 	Pool.Debug = pcpcoreConfig.PoolDebug
 	Pool.ProcessTimeThreshold = time.Duration(pcpcoreConfig.ProcessTimeThreshold) * time.Millisecond
