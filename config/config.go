@@ -41,6 +41,7 @@ type Config struct {
 	PoolDebug               bool   `yaml:"pool_debug"`
 	ProcessingTimeThreshold int    `yaml:"processing_time_threshold"`
 	ConnectionInputQueue    int    `yaml:"connection_input_queue"`
+	PconnOutputQueue        int    `yaml:"pconn_output_queue"`
 }
 
 var AppConfig *Config

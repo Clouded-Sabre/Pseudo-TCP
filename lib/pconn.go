@@ -48,6 +48,7 @@ type pcpProtocolConnConfig struct {
 	clientPortUpper, clientPortLower int
 	connConfig                       *connectionConfig
 	verifyChecksum                   bool
+	pconnOutputQueue                 int
 }
 
 func newPcpProtocolConnConfig(pcpConfig *config.Config) *pcpProtocolConnConfig {
@@ -60,6 +61,7 @@ func newPcpProtocolConnConfig(pcpConfig *config.Config) *pcpProtocolConnConfig {
 		clientPortLower:      pcpConfig.ClientPortLower,
 		connConfig:           newConnectionConfig(pcpConfig),
 		verifyChecksum:       pcpConfig.ChecksumVerification,
+		pconnOutputQueue:     pcpConfig.PconnOutputQueue,
 	}
 }
 
@@ -94,7 +96,7 @@ func newPcpProtocolConnection(key string, isServer bool, protocolId int, serverA
 		serverAddr:         serverAddr,
 		clientConn:         clientConn,
 		serverConn:         serverConn,
-		outputChan:         make(chan *PcpPacket, 200),
+		outputChan:         make(chan *PcpPacket, config.pconnOutputQueue),
 		sigOutputChan:      make(chan *PcpPacket, 10),
 		connectionMap:      make(map[string]*Connection),
 		tempConnectionMap:  make(map[string]*Connection),
