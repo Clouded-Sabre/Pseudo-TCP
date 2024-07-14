@@ -25,3 +25,4 @@ checksum_verification: false
 debug: false
 pool_debug: true
 processing_time_threshold: 10 # in milliseconds
+connection_input_queue: 1000

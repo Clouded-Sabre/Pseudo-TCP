@@ -110,6 +110,7 @@ type connectionConfig struct {
 	windowSizeWithScale     int
 	connSignalRetryInterval int
 	connSignalRetry         int
+	connectionInputQueue    int
 }
 
 func newConnectionConfig(pcpConfig *config.Config) *connectionConfig {
@@ -127,6 +128,7 @@ func newConnectionConfig(pcpConfig *config.Config) *connectionConfig {
 		windowSizeWithScale:     pcpConfig.WindowSizeWithScale,
 		connSignalRetryInterval: pcpConfig.ConnSignalRetryInterval,
 		connSignalRetry:         pcpConfig.ConnSignalRetry,
+		connectionInputQueue:    pcpConfig.ConnectionInputQueue,
 	}
 }
 
@@ -146,7 +148,7 @@ func newConnection(connParams *connectionParams, connConfig *connectionConfig) (
 		initialSeq:         isn,
 		lastAckNumber:      0,
 		windowSize:         math.MaxUint16,
-		inputChannel:       make(chan *PcpPacket, 200),
+		inputChannel:       make(chan *PcpPacket, connConfig.connectionInputQueue),
 		readChannel:        make(chan *PcpPacket, 200),
 		readDeadline:       time.Time{},
 
