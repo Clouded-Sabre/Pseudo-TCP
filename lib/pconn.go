@@ -595,11 +595,14 @@ func (p *PcpProtocolConnection) handleCloseConnection() {
 			delete(p.connectionMap, conn.params.key)
 			p.mu.Unlock()
 			// return local port number to port pool
-			err := p.localPortPool.returnPort(conn.params.localPort)
-			if err != nil {
-				// should never happen
-				log.Fatalf("PcpProtocolConnection.handleCloseConnection: %s\n", err)
+			if !conn.params.isServer { // only happens on client side
+				err := p.localPortPool.returnPort(conn.params.localPort)
+				if err != nil {
+					// should never happen
+					log.Fatalf("PcpProtocolConnection.handleCloseConnection: %s\n", err)
+				}
 			}
+
 			log.Printf("PcpProtocolConnection.handleCloseConnection: Pcp connection %s:%d->%s:%d terminated and removed.", conn.params.localAddr.(*net.IPAddr).IP.String(), conn.params.localPort, conn.params.remoteAddr.(*net.IPAddr).IP.String(), conn.params.remotePort)
 
 			// if pcpProtocolConnection does not have any connection for 10 seconds, close it
