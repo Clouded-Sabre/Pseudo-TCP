@@ -38,6 +38,7 @@ type PcpProtocolConnection struct {
 	iptableRules              []int                       // slice of port number on server address which has iptables rules. used for client side only
 	isClosed                  bool                        // to prevent calling close multiple time
 	mu                        sync.Mutex                  // to protect maps access
+	localPortPool             *PortPool                   // a pool of avaibable local port numbers for local port number allocation
 }
 
 type pcpProtocolConnConfig struct {
@@ -110,6 +111,7 @@ func newPcpProtocolConnection(key string, isServer bool, protocolId int, serverA
 		iptableRules:     make([]int, 0),
 		config:           config,
 		mu:               sync.Mutex{},
+		localPortPool:    newPortPool(minPort, maxPort),
 	}
 
 	// Start goroutines
@@ -124,7 +126,11 @@ func newPcpProtocolConnection(key string, isServer bool, protocolId int, serverA
 func (p *PcpProtocolConnection) dial(serverPort int, connConfig *connectionConfig) (*Connection, error) {
 	log.Println("PcpProtocolConnection.dial: connConfig is", connConfig)
 	// Choose a random client port
-	clientPort := p.getAvailableRandomClientPort()
+	//clientPort := p.getAvailableRandomClientPort()
+	clientPort, err := p.localPortPool.allocatePort()
+	if err != nil {
+		log.Fatalln("PcpProtocolConnection.dial:", err)
+	}
 
 	// Create connection key
 	connKey := fmt.Sprintf("%d:%d", clientPort, serverPort)
@@ -588,6 +594,12 @@ func (p *PcpProtocolConnection) handleCloseConnection() {
 			p.mu.Lock()
 			delete(p.connectionMap, conn.params.key)
 			p.mu.Unlock()
+			// return local port number to port pool
+			err := p.localPortPool.returnPort(conn.params.localPort)
+			if err != nil {
+				// should never happen
+				log.Fatalf("PcpProtocolConnection.handleCloseConnection: %s\n", err)
+			}
 			log.Printf("PcpProtocolConnection.handleCloseConnection: Pcp connection %s:%d->%s:%d terminated and removed.", conn.params.localAddr.(*net.IPAddr).IP.String(), conn.params.localPort, conn.params.remoteAddr.(*net.IPAddr).IP.String(), conn.params.remotePort)
 
 			// if pcpProtocolConnection does not have any connection for 10 seconds, close it
@@ -617,17 +629,17 @@ func (p *PcpProtocolConnection) handleCloseConnection() {
 				})
 			}
 		case srv := <-p.serviceCloseSignal:
-			// clear it from p.ConnectionMap
+			// clear it from p.serviceMap
 			p.mu.Lock()
-			_, ok := p.serviceMap[srv.port] // just make sure it really in ConnectionMap for debug purpose
+			_, ok := p.serviceMap[srv.port] // just make sure it really in serviceMap for debug purpose
 			p.mu.Unlock()
 			if !ok {
-				// Service does not exist in ConnectionMap
+				// Service does not exist in serviceMap
 				log.Printf("PcpProtocolConnection.handleCloseConnection: Pcp Service %s:%d does not exist in service map.\n", srv.serviceAddr.(*net.IPAddr).IP.String(), srv.port)
 				continue
 			}
 
-			// delete the clientConn from ConnectionMap
+			// delete the service from serviceMap
 			p.mu.Lock()
 			delete(p.serviceMap, srv.port)
 			p.mu.Unlock()
@@ -717,7 +729,7 @@ func (p *PcpProtocolConnection) Close() {
 	log.Println("PcpProtocolConnection closed gracefully.")
 }
 
-func (p *PcpProtocolConnection) getAvailableRandomClientPort() int {
+/*func (p *PcpProtocolConnection) getAvailableRandomClientPort() int {
 	// Create a map to store all existing client ports
 	existingPorts := make(map[int]bool)
 
@@ -742,7 +754,7 @@ func (p *PcpProtocolConnection) getAvailableRandomClientPort() int {
 	}
 
 	return randomPort
-}
+}*/
 
 // addIptablesRule adds an iptables rule to drop RST packets originating from the given IP and port.
 func addIptablesRule(ip string, port int) error {

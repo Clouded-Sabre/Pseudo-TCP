@@ -45,3 +45,8 @@ const (
 	TcpPseudoHeaderLength = 12
 	IpHeaderMaxLength     = 60
 )
+
+const ( //linux convention
+	minPort = 32768
+	maxPort = 60999
+)
