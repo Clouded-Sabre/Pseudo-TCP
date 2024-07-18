@@ -47,7 +47,7 @@ var AppConfig *Config
 
 func ReadConfig(confFilePath string) (*Config, error) {
 	// Initialize default config values
-	defaultConfig := Config{
+	config := Config{
 		ClientPortLower:         32768, // Linux system convention for client local port range
 		ClientPortUpper:         60999, // Linux system convention for client local port range
 		ProtocolID:              6,     // tcp prtocol id
@@ -83,8 +83,8 @@ func ReadConfig(confFilePath string) (*Config, error) {
 	}
 
 	// Unmarshal YAML data into Config struct
-	var config Config
-	if err := yaml.Unmarshal(data, &defaultConfig); err != nil {
+	//var config Config
+	if err := yaml.Unmarshal(data, &config); err != nil {
 		log.Fatalf("error unmarshalling YAML data: %v", err)
 	}
 
@@ -94,7 +94,7 @@ func ReadConfig(confFilePath string) (*Config, error) {
 		if err != nil {
 			return nil, err
 		}
-		log.Printf("Configuration: %s\n", string(confJSON))
+		log.Printf("PCP Configuration: %s\n", string(confJSON))
 	}
 
 	return &config, nil
