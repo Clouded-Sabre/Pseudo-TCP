@@ -41,6 +41,7 @@ type Config struct {
 	ProcessingTimeThreshold int  `yaml:"processing_time_threshold"`
 	ConnectionInputQueue    int  `yaml:"connection_input_queue"`
 	PconnOutputQueue        int  `yaml:"pconn_output_queue"`
+	ShowStatistics          bool `yaml:"ShowStatistics"`
 }
 
 var AppConfig *Config
@@ -74,6 +75,7 @@ func ReadConfig(confFilePath string) (*Config, error) {
 		ProcessingTimeThreshold: 50,   // used in packet ring pool to check if a function or channel holds a packet for too long time
 		ConnectionInputQueue:    1000, // PCP connection's InputQueue depth
 		PconnOutputQueue:        1000, // PCP Protocol connection's OutputQueue depth
+		ShowStatistics:          false,
 	}
 
 	// Read the YAML file

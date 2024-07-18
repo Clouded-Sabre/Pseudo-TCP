@@ -111,6 +111,7 @@ type connectionConfig struct {
 	connSignalRetryInterval int
 	connSignalRetry         int
 	connectionInputQueue    int
+	showStatistics          bool
 }
 
 func newConnectionConfig(pcpConfig *config.Config) *connectionConfig {
@@ -129,6 +130,7 @@ func newConnectionConfig(pcpConfig *config.Config) *connectionConfig {
 		connSignalRetryInterval: pcpConfig.ConnSignalRetryInterval,
 		connSignalRetry:         pcpConfig.ConnSignalRetry,
 		connectionInputQueue:    pcpConfig.ConnectionInputQueue,
+		showStatistics:          pcpConfig.ShowStatistics,
 	}
 }
 
@@ -171,8 +173,10 @@ func newConnection(connParams *connectionParams, connConfig *connectionConfig) (
 		newConn.startKeepaliveTimer()
 	}
 
-	newConn.wg.Add(1)
-	go newConn.StartStatsPrinter()
+	if connConfig.showStatistics {
+		newConn.wg.Add(1)
+		go newConn.StartStatsPrinter()
+	}
 
 	return newConn, nil
 }
