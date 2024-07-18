@@ -1,7 +1,7 @@
 package config
 
 import (
-	"fmt"
+	"encoding/json"
 	"log"
 	"os"
 
@@ -11,6 +11,8 @@ import (
 )
 
 var Mu sync.Mutex
+
+var configDebug = true
 
 type Config struct {
 	ClientPortLower         int  `yaml:"client_port_lower"`
@@ -87,7 +89,13 @@ func ReadConfig(confFilePath string) (*Config, error) {
 	}
 
 	// Print the configuration
-	fmt.Printf("%+v\n", config)
+	if configDebug {
+		confJSON, err := json.MarshalIndent(config, "", "  ")
+		if err != nil {
+			return nil, err
+		}
+		log.Printf("Configuration: %s\n", string(confJSON))
+	}
 
 	return &config, nil
 }
