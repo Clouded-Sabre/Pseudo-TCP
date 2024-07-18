@@ -41,7 +41,7 @@ type Config struct {
 	ProcessingTimeThreshold int  `yaml:"processing_time_threshold"`
 	ConnectionInputQueue    int  `yaml:"connection_input_queue"`
 	PconnOutputQueue        int  `yaml:"pconn_output_queue"`
-	ShowStatistics          bool `yaml:"ShowStatistics"`
+	ShowStatistics          bool `yaml:"show_statistics"`
 }
 
 var AppConfig *Config
