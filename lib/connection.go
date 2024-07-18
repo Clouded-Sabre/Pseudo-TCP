@@ -135,11 +135,11 @@ func newConnectionConfig(pcpConfig *config.Config) *connectionConfig {
 	}
 
 	// Print the configuration
-	confJSON, err := json.MarshalIndent(connConfig, "", "  ")
+	confJSON, err := json.MarshalIndent(*connConfig, "", "  ")
 	if err != nil {
 		return nil
 	}
-	log.Printf("PCP connection Configuration: %s\n", string(confJSON))
+	log.Printf("PCP connection Configuration: %s\n %v\n", string(confJSON), *connConfig)
 
 	return connConfig
 }
