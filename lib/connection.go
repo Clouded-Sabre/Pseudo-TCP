@@ -1,6 +1,7 @@
 package lib
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -115,7 +116,7 @@ type connectionConfig struct {
 }
 
 func newConnectionConfig(pcpConfig *config.Config) *connectionConfig {
-	return &connectionConfig{
+	connConfig := &connectionConfig{
 		windowScale:             pcpConfig.WindowScale,
 		preferredMSS:            pcpConfig.PreferredMSS,
 		sackPermitSupport:       pcpConfig.SackPermitSupport,
@@ -132,6 +133,15 @@ func newConnectionConfig(pcpConfig *config.Config) *connectionConfig {
 		connectionInputQueue:    pcpConfig.ConnectionInputQueue,
 		showStatistics:          pcpConfig.ShowStatistics,
 	}
+
+	// Print the configuration
+	confJSON, err := json.MarshalIndent(connConfig, "", "  ")
+	if err != nil {
+		return nil
+	}
+	log.Printf("PCP connection Configuration: %s\n", string(confJSON))
+
+	return connConfig
 }
 
 func newConnection(connParams *connectionParams, connConfig *connectionConfig) (*Connection, error) {
