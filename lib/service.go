@@ -352,12 +352,13 @@ func (s *Service) Close() error {
 			go conn.CloseAsGoRoutine(&wg)
 		}
 	}
+	wg.Wait() // wait for connections to close
+
 	s.mu.Lock()
 	s.connectionMap = nil
 	s.mu.Unlock()
 	log.Println("PCP service: all open connections closed")
 
-	wg.Wait() // wait for connections to close
 	var tempConns []*Connection
 	// Close all temp connections associated with this service
 	s.mu.Lock()

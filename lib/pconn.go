@@ -1,6 +1,7 @@
 package lib
 
 import (
+	"encoding/binary"
 	"fmt"
 	"log"
 	"math/rand"
@@ -18,12 +19,12 @@ import (
 type PcpProtocolConnection struct {
 	//static
 	config                *pcpProtocolConnConfig
-	key                   string         // PCP protocol connection's key
-	protocolId            int            // protocol id
-	isServer              bool           // Role of the object
-	serverAddr, localAddr *net.IPAddr    // server and local ip address
-	clientConn            *net.IPConn    // used for client side only
-	serverConn            net.PacketConn // used for server side only
+	key                   string      // PCP protocol connection's key
+	protocolId            int         // protocol id
+	isServer              bool        // Role of the object
+	serverAddr, localAddr *net.IPAddr // server and local ip address
+	ipConn                *net.IPConn // net.IPConn connection
+
 	// variables
 	outputChan, sigOutputChan chan *PcpPacket             // output channel for normal packets and signalling packets respectively
 	connectionMap             map[string]*Connection      // used for client side only
@@ -68,21 +69,20 @@ func newPcpProtocolConnConfig(pcpConfig *config.Config) *pcpProtocolConnConfig {
 
 func newPcpProtocolConnection(key string, isServer bool, protocolId int, serverAddr, localAddr *net.IPAddr, pConnCloseSignal chan *PcpProtocolConnection, config *pcpProtocolConnConfig) (*PcpProtocolConnection, error) {
 	var (
-		serverConn net.PacketConn
-		clientConn *net.IPConn
-		err        error
+		ipConn *net.IPConn
+		err    error
 	)
 
 	if isServer {
 		// Listen on the PCP protocol (20) at the server IP
-		serverConn, err = net.ListenPacket("ip:"+strconv.Itoa(protocolId), serverAddr.String())
+		ipConn, err = net.ListenIP("ip:"+strconv.Itoa(protocolId), serverAddr)
 		if err != nil {
 			fmt.Println("Error listening:", err)
 			return nil, err
 		}
 	} else { // client
 		// dial in PCP protocol (20) to the server IP
-		clientConn, err = net.DialIP("ip:"+strconv.Itoa(protocolId), localAddr, serverAddr)
+		ipConn, err = net.DialIP("ip:"+strconv.Itoa(protocolId), localAddr, serverAddr)
 		if err != nil {
 			fmt.Println("Error listening:", err)
 			return nil, err
@@ -95,8 +95,7 @@ func newPcpProtocolConnection(key string, isServer bool, protocolId int, serverA
 		protocolId:         protocolId,
 		localAddr:          localAddr,
 		serverAddr:         serverAddr,
-		clientConn:         clientConn,
-		serverConn:         serverConn,
+		ipConn:             ipConn,
 		outputChan:         make(chan *PcpPacket, config.pconnOutputQueue),
 		sigOutputChan:      make(chan *PcpPacket, 10),
 		connectionMap:      make(map[string]*Connection),
@@ -126,7 +125,6 @@ func newPcpProtocolConnection(key string, isServer bool, protocolId int, serverA
 func (p *PcpProtocolConnection) dial(serverPort int, connConfig *connectionConfig) (*Connection, error) {
 	log.Println("PcpProtocolConnection.dial: connConfig is", connConfig)
 	// Choose a random client port
-	//clientPort := p.getAvailableRandomClientPort()
 	clientPort, err := p.localPortPool.allocatePort()
 	if err != nil {
 		log.Fatalln("PcpProtocolConnection.dial:", err)
@@ -150,7 +148,6 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *connectionConfi
 	}
 
 	// Create a new temporary connection object for the 3-way handshake
-	//newConn, err := NewConnection(connKey, false, p.ServerAddr, int(serverPort), p.LocalAddr, clientPort, p.OutputChan, p.sigOutputChan, p.ConnCloseSignal, nil, nil)
 	newConn, err := newConnection(connParam, connConfig)
 	if err != nil {
 		fmt.Printf("PcpProtocolConnection.dial: Error creating new connection to %s:%d because of error: %s\n", p.serverAddr.IP.To4().String(), serverPort, err)
@@ -214,7 +211,6 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *connectionConfi
 					newConn.tcpOptions.mss = 0 // disble MSS
 				}
 
-				//newConn.InitialPeerSeq = packet.SequenceNumber //record the initial SEQ from the peer
 				// Prepare ACK packet
 				newConn.lastAckNumber = SeqIncrement(packet.SequenceNumber)
 				newConn.initialPeerSeq = packet.SequenceNumber
@@ -258,10 +254,11 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 		err   error
 		n, fp int
 	)
-	// Set a read deadline to ensure non-blocking behavior
-	p.clientConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // Example timeout of 100 milliseconds
 
-	n, err = p.clientConn.Read(buffer)
+	// Set a read deadline to ensure non-blocking behavior
+	p.ipConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // Example timeout of 100 milliseconds
+
+	n, err = p.ipConn.Read(buffer)
 	if err != nil {
 		// Check if the error is a timeout
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -274,13 +271,15 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 		return
 	}
 
+	//log.Println("The received PCP segment's total length is", n)
 	// extract Pcp frame from the received IP frame
 	index, err := ExtractIpPayload(buffer[:n])
 	if err != nil {
 		log.Println("PcpProtocolConnection.clientProcessingIncomingPacket: Received IP frame is il-formated. Ignore it!", err)
 		return
 	}
-	//log.Println("extracted PCP frame length is", len(pcpFrame), pcpFrame)
+
+	//log.Println("extracted PCP frame length is", index)
 	// check PCP packet checksum
 	// please note the first TcpPseudoHeaderLength bytes are reseved for Tcp pseudo header
 	if p.config.verifyChecksum {
@@ -292,23 +291,15 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 
 	// Extract destination port
 	pcpFrame := buffer[index:n]
-	packet := &PcpPacket{}
-	err = packet.Unmarshal(pcpFrame, p.serverAddr, p.localAddr)
-	if err != nil {
-		log.Println("PcpProtocolConnection.clientProcessingIncomingPacket: Received TCP frame is il-formated. Ignore it!", err)
-		// because chunk won't be allocated unless the marshalling is success, there is no need to return the chunk
+
+	// Extract source and destination ports from the PCP segment
+	if n-index < 4 {
+		log.Println("PcpProtocolConnection.clientProcessingIncomingPacket: TCP/PCP segment too short")
 		return
 	}
-	//fmt.Println("Received packet Length:", n)
-	//fmt.Printf("Got packet:\n %+v\n", packet)
 
-	if rp.Debug && packet.GetChunkReference() != nil {
-		fp = packet.AddFootPrint("pcpProtocolConn.handleIncomingPackets")
-	}
-
-	// Extract destination IP and port from the packet
-	sourcePort := packet.SourcePort
-	destPort := packet.DestinationPort
+	sourcePort := binary.BigEndian.Uint16(pcpFrame[:2])
+	destPort := binary.BigEndian.Uint16(pcpFrame[2:4])
 
 	// Create connection key. Since it's incoming packet
 	// source and destination port needs to be reversed when calculating connection key
@@ -323,6 +314,17 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 		conn.isClosedMu.Lock()
 		isClosed := conn.isClosed
 		if !isClosed {
+			packet := &PcpPacket{}
+			err = packet.Unmarshal(pcpFrame, p.serverAddr, p.localAddr)
+			if err != nil {
+				log.Println("PcpProtocolConnection.clientProcessingIncomingPacket: Received TCP frame is il-formated. Ignore it!", err)
+				// because chunk won't be allocated unless the marshalling is success, there is no need to return the chunk
+				return
+			}
+
+			if rp.Debug && packet.GetChunkReference() != nil {
+				fp = packet.AddFootPrint("pcpProtocolConn.handleIncomingPackets")
+			}
 			// open connection. Dispatch the packet to the corresponding connection's input channel
 			if rp.Debug && packet.GetChunkReference() != nil {
 				packet.TickFootPrint(fp)
@@ -341,6 +343,17 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	tempConn, ok := p.tempConnectionMap[connKey]
 	p.mu.Unlock()
 	if ok && !tempConn.isClosed { // no need to use mutex since connection is not ready yet
+		packet := &PcpPacket{}
+		err = packet.Unmarshal(pcpFrame, p.serverAddr, p.localAddr)
+		if err != nil {
+			log.Println("PcpProtocolConnection.clientProcessingIncomingPacket: Received TCP frame is il-formated. Ignore it!", err)
+			// because chunk won't be allocated unless the marshalling is success, there is no need to return the chunk
+			return
+		}
+
+		if rp.Debug && packet.GetChunkReference() != nil {
+			fp = packet.AddFootPrint("pcpProtocolConn.handleIncomingPackets")
+		}
 		if len(packet.Payload) == 0 && packet.AcknowledgmentNum-tempConn.initialSeq < 2 {
 			// forward to that connection's input channel
 			if rp.Debug && packet.GetChunkReference() != nil {
@@ -360,11 +373,6 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	}
 
 	fmt.Printf("PcpProtocolConnection.clientProcessingIncomingPacket: Received data packet for non-existent or closed connection: %s\n", connKey)
-	// return the packet chunk now that it's destined to an unknown connection
-	if rp.Debug && packet.GetChunkReference() != nil {
-		packet.TickFootPrint(fp)
-	}
-	packet.ReturnChunk()
 }
 
 func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
@@ -372,9 +380,9 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 
 	pcpFrame := buffer[TcpPseudoHeaderLength:] // the first lib.TcpPseudoHeaderLength bytes are reserved for Tcp pseudo header
 	// Set a read deadline to ensure non-blocking behavior
-	p.serverConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // Example timeout of 100 milliseconds
+	p.ipConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // Example timeout of 100 milliseconds
 
-	n, addr, err := p.serverConn.ReadFrom(pcpFrame)
+	n, addr, err := p.ipConn.ReadFrom(pcpFrame)
 	if err != nil {
 		// Check if the error is a timeout
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -386,9 +394,8 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 		return
 	}
 
-	// check PCP packet checksum
 	if p.config.verifyChecksum {
-		if !VerifyChecksum(buffer[:TcpPseudoHeaderLength+n], addr, p.serverAddr, uint8(p.protocolId)) {
+		if !VerifyChecksum(pcpFrame[:TcpPseudoHeaderLength+n], addr, p.serverAddr, uint8(p.protocolId)) {
 			log.Println("PcpProtocolConnection.serverProcessingIncomingPacket: Packet checksum verification failed. Skip this packet.")
 			return
 		}
@@ -396,6 +403,7 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 
 	// Extract destination port
 	packet := &PcpPacket{}
+	//err = packet.Unmarshal(pcpFrame[:n], addr, p.serverAddr)
 	err = packet.Unmarshal(pcpFrame[:n], addr, p.serverAddr)
 	if err != nil {
 		log.Println("PcpProtocolConnection.serverProcessingIncomingPacket: PCP packet unmarshal error. Ignore it!", err)
@@ -404,7 +412,7 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 	}
 
 	if rp.Debug && packet.GetChunkReference() != nil {
-		fp = packet.AddFootPrint("pcpProtocolConn.handleIncomingPackets")
+		fp = packet.AddFootPrint("pcpProtocolConn.serverProcessingIncomingPacket")
 	}
 
 	destPort := packet.DestinationPort
@@ -425,7 +433,7 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 		return
 	}
 
-	if service.isClosed { // OK but sevice is closed
+	if service.isClosed && packet.GetChunkReference() != nil { // OK but sevice is closed. Only signaling packets get passed
 		log.Println("PcpProtocolConnection.serverProcessingIncomingPacket: Packet is destined to a closed service. Ignore it.")
 		if rp.Debug && packet.GetChunkReference() != nil {
 			packet.TickFootPrint(fp)
@@ -528,9 +536,9 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 			// Write the packet to the interface
 			frame := frameBytes[TcpPseudoHeaderLength:] // first part of framesBytes is actually Tcp Pseudo Header
 			if p.isServer {
-				_, err = p.serverConn.WriteTo(frame[:n], packet.DestAddr)
+				_, err = p.ipConn.WriteTo(frame[:n], packet.DestAddr)
 			} else {
-				_, err = p.clientConn.Write(frame[:n])
+				_, err = p.ipConn.Write(frame[:n])
 			}
 			if err != nil {
 				log.Println("PCPProtocolConnection.handleOutgoingPackets: Error writing packet:", err, "Skip this packet.")
@@ -701,25 +709,24 @@ func (p *PcpProtocolConnection) Close() {
 	log.Println("PcpProtocolConnection: Go routines closed")
 
 	// Clear resources
-	if !p.isServer {
-		p.clientConn.Close() //close protocol connection
 
-		if p.emptyMapTimer != nil {
-			p.emptyMapTimer.Stop()
-			p.emptyMapTimer = nil
-		}
+	p.ipConn.Close() //close protocol connection
 
-		// Remove iptables rules
-		for _, port := range p.iptableRules {
-			err := removeIptablesRule(p.serverAddr.IP.To4().String(), port)
-			if err != nil {
-				log.Printf("PcpProtocolConnection: Error removing iptables rule for port %d: %v\n", port, err)
-			} else {
-				log.Printf("PcpProtocolConnection: Removed iptables rule for port %d\n", port)
-			}
+	if p.emptyMapTimer != nil {
+		p.emptyMapTimer.Stop()
+		p.emptyMapTimer = nil
+	}
+
+	// Remove iptables rules
+	for _, port := range p.iptableRules {
+		err := removeIptablesRule(p.serverAddr.IP.To4().String(), port)
+		if err != nil {
+			log.Printf("PcpProtocolConnection: Error removing iptables rule for port %d: %v\n", port, err)
+		} else {
+			log.Printf("PcpProtocolConnection: Removed iptables rule for port %d\n", port)
 		}
-		p.iptableRules = nil // Clear the slice
-	} // since net.PacketConn is a primitive interface and does not have close method, serverConn does not need to be closed
+	}
+	p.iptableRules = nil // Clear the slice
 
 	close(p.sigOutputChan)
 	close(p.outputChan)
@@ -731,33 +738,6 @@ func (p *PcpProtocolConnection) Close() {
 
 	log.Println("PcpProtocolConnection closed gracefully.")
 }
-
-/*func (p *PcpProtocolConnection) getAvailableRandomClientPort() int {
-	// Create a map to store all existing client ports
-	existingPorts := make(map[int]bool)
-
-	p.mu.Lock()
-	// Populate the map with existing client ports
-	for _, conn := range p.connectionMap {
-		existingPorts[conn.params.localPort] = true
-	}
-
-	for _, conn := range p.tempConnectionMap {
-		existingPorts[conn.params.localPort] = true
-	}
-	p.mu.Unlock()
-
-	// Generate a random port number until it's not in the existingPorts map
-	var randomPort int
-	for {
-		randomPort = rand.Intn(p.config.clientPortUpper-p.config.clientPortLower) + p.config.clientPortLower
-		if !existingPorts[randomPort] {
-			break
-		}
-	}
-
-	return randomPort
-}*/
 
 // addIptablesRule adds an iptables rule to drop RST packets originating from the given IP and port.
 func addIptablesRule(ip string, port int) error {
