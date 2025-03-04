@@ -5,26 +5,30 @@ import (
 	"log"
 	"net"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"time"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
+	rs "github.com/Clouded-Sabre/rawsocket/lib"
 	rp "github.com/Clouded-Sabre/ringpool/lib"
 
 	"sync"
 )
 
 type PcpCoreConfig struct {
-	ProtocolID           uint8 // protocol id which should be 6
-	PayloadPoolSize      int   // how many number of packet payload chunks in the pool
-	PreferredMSS         int   // preferred MSS
-	Debug                bool  // global debug setting
-	PoolDebug            bool  // Ring Pool debug setting
-	ProcessTimeThreshold int   // packet processing time threshold
+	ProtocolID                         uint8 // protocol id which should be 6
+	PayloadPoolSize                    int   // how many number of packet payload chunks in the pool
+	PreferredMSS                       int   // preferred MSS
+	Debug                              bool  // global debug setting
+	PoolDebug                          bool  // Ring Pool debug setting
+	ProcessTimeThreshold               int   // packet processing time threshold
+	ARPCacheTimeout, ARPRequestTimeout int   // only used for rawsocket on Windows and macos, in seconds
 }
 
 type PcpCore struct {
 	config             *PcpCoreConfig                    // config
+	rscore             *rs.RawSocketCore                 // used for macos and windows only
 	protoConnectionMap map[string]*PcpProtocolConnection // keep track of all protocolConn created by dialIP
 	pConnCloseSignal   chan *PcpProtocolConnection
 	closeSignal        chan struct{}  // used to send close signal to go routines to stop when timeout arrives
@@ -46,6 +50,10 @@ func NewPcpCore(pcpcoreConfig *PcpCoreConfig) (*PcpCore, error) {
 	Pool.Debug = pcpcoreConfig.PoolDebug
 	Pool.ProcessTimeThreshold = time.Duration(pcpcoreConfig.ProcessTimeThreshold) * time.Millisecond
 
+	// Use build tags or runtime.GOOS to decide which implementation to use.
+	if runtime.GOOS != "linux" {
+		pcpServerObj.rscore = rs.NewRawSocketCore(pcpcoreConfig.ARPCacheTimeout, pcpcoreConfig.ARPRequestTimeout, pcpcoreConfig.Debug)
+	}
 	// Start goroutines
 	pcpServerObj.wg.Add(1) // Increase WaitGroup counter by 1 for the handleClosePConnConnection goroutines
 	go pcpServerObj.handleClosePConnConnection()
