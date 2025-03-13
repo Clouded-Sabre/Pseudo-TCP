@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
+	rs "github.com/Clouded-Sabre/rawsocket/lib"
 	rp "github.com/Clouded-Sabre/ringpool/lib"
 )
 
@@ -22,7 +23,8 @@ type PcpProtocolConnection struct {
 	protocolId            int         // protocol id
 	isServer              bool        // Role of the object
 	serverAddr, localAddr *net.IPAddr // server and local ip address
-	ipConn                *net.IPConn // net.IPConn connection
+	//ipConn                *net.IPConn // net.IPConn connection
+	rsConn rs.RawConnection // RawSocketConn connection
 
 	// variables
 	outputChan, sigOutputChan chan *PcpPacket             // output channel for normal packets and signalling packets respectively
@@ -66,35 +68,39 @@ func newPcpProtocolConnConfig(pcpConfig *config.Config) *pcpProtocolConnConfig {
 	}
 }
 
-func newPcpProtocolConnection(key string, isServer bool, protocolId int, serverAddr, localAddr *net.IPAddr, pConnCloseSignal chan *PcpProtocolConnection, config *pcpProtocolConnConfig) (*PcpProtocolConnection, error) {
+func newPcpProtocolConnection(pcpCore *PcpCore, key string, isServer bool, protocolId int, serverAddr, localAddr *net.IPAddr, pConnCloseSignal chan *PcpProtocolConnection, config *pcpProtocolConnConfig) (*PcpProtocolConnection, error) {
 	var (
-		ipConn *net.IPConn
+		//ipConn *net.IPConn
+		rsConn rs.RawConnection
 		err    error
 	)
 
 	if isServer {
 		// Listen on the PCP protocol (20) at the server IP
-		ipConn, err = net.ListenIP("ip:"+strconv.Itoa(protocolId), serverAddr)
+		//ipConn, err = net.ListenIP("ip:"+strconv.Itoa(protocolId), serverAddr)
+		rsConn, err = pcpCore.rscore.ListenIP("ip:"+strconv.Itoa(protocolId), serverAddr)
 		if err != nil {
 			fmt.Println("Error listening:", err)
 			return nil, err
 		}
 	} else { // client
 		// dial in PCP protocol (20) to the server IP
-		ipConn, err = net.DialIP("ip:"+strconv.Itoa(protocolId), localAddr, serverAddr)
+		//ipConn, err = net.DialIP("ip:"+strconv.Itoa(protocolId), localAddr, serverAddr)
+		rsConn, err = pcpCore.rscore.DialIP("ip:"+strconv.Itoa(protocolId), localAddr, serverAddr)
 		if err != nil {
-			fmt.Println("Error listening:", err)
+			fmt.Println("Error dialing:", err)
 			return nil, err
 		}
 	}
 
 	pConnection := &PcpProtocolConnection{
-		key:                key,
-		isServer:           isServer,
-		protocolId:         protocolId,
-		localAddr:          localAddr,
-		serverAddr:         serverAddr,
-		ipConn:             ipConn,
+		key:        key,
+		isServer:   isServer,
+		protocolId: protocolId,
+		localAddr:  localAddr,
+		serverAddr: serverAddr,
+		//ipConn:             ipConn,
+		rsConn:             rsConn,
 		outputChan:         make(chan *PcpPacket, config.pconnOutputQueue),
 		sigOutputChan:      make(chan *PcpPacket, 10),
 		connectionMap:      make(map[string]*Connection),
@@ -255,9 +261,11 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	)
 
 	// Set a read deadline to ensure non-blocking behavior
-	p.ipConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // Example timeout of 100 milliseconds
+	//p.ipConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // Example timeout of 100 milliseconds
+	p.rsConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // Example timeout of 100 milliseconds
 
-	n, err = p.ipConn.Read(buffer)
+	//n, err = p.ipConn.Read(buffer)
+	n, err = p.rsConn.Read(buffer)
 	if err != nil {
 		// Check if the error is a timeout
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -379,9 +387,11 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 
 	pcpFrame := buffer[TcpPseudoHeaderLength:] // the first lib.TcpPseudoHeaderLength bytes are reserved for Tcp pseudo header
 	// Set a read deadline to ensure non-blocking behavior
-	p.ipConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // Example timeout of 100 milliseconds
+	//p.ipConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // Example timeout of 100 milliseconds
+	p.rsConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // Example timeout of 100 milliseconds
 
-	n, addr, err := p.ipConn.ReadFrom(pcpFrame)
+	//n, addr, err := p.ipConn.ReadFrom(pcpFrame)
+	n, addr, err := p.rsConn.ReadFrom(pcpFrame)
 	if err != nil {
 		// Check if the error is a timeout
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -535,9 +545,11 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 			// Write the packet to the interface
 			frame := frameBytes[TcpPseudoHeaderLength:] // first part of framesBytes is actually Tcp Pseudo Header
 			if p.isServer {
-				_, err = p.ipConn.WriteTo(frame[:n], packet.DestAddr)
+				//_, err = p.ipConn.WriteTo(frame[:n], packet.DestAddr)
+				_, err = p.rsConn.WriteTo(frame[:n], packet.DestAddr)
 			} else {
-				_, err = p.ipConn.Write(frame[:n])
+				//_, err = p.ipConn.Write(frame[:n])
+				_, err = p.rsConn.Write(frame[:n])
 			}
 			if err != nil {
 				log.Println("PCPProtocolConnection.handleOutgoingPackets: Error writing packet:", err, "Skip this packet.")
@@ -709,7 +721,8 @@ func (p *PcpProtocolConnection) Close() {
 
 	// Clear resources
 
-	p.ipConn.Close() //close protocol connection
+	//p.ipConn.Close() //close protocol connection
+	p.rsConn.Close() //close protocol connection
 
 	if p.emptyMapTimer != nil {
 		p.emptyMapTimer.Stop()

@@ -32,9 +32,11 @@ func main() {
 	}
 
 	pcpCoreConfig := &lib.PcpCoreConfig{
-		ProtocolID:      uint8(config.AppConfig.ProtocolID),
-		PreferredMSS:    config.AppConfig.PreferredMSS,
-		PayloadPoolSize: config.AppConfig.PayloadPoolSize,
+		ProtocolID:        uint8(config.AppConfig.ProtocolID),
+		PreferredMSS:      config.AppConfig.PreferredMSS,
+		PayloadPoolSize:   config.AppConfig.PayloadPoolSize,
+		ARPCacheTimeout:   30, // only used on non-linux systems
+		ARPRequestTimeout: 60, // only used on non-linux systems
 	}
 	pcpCoreObj, err := lib.NewPcpCore(pcpCoreConfig)
 	if err != nil {

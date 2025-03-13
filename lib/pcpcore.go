@@ -86,7 +86,7 @@ func (p *PcpCore) DialPcp(localIP string, serverIP string, serverPort uint16, pc
 	pConn, ok := p.protoConnectionMap[pConnKey]
 	if !ok {
 		// need to create new protocol connection
-		pConn, err = newPcpProtocolConnection(pConnKey, false, int(p.config.ProtocolID), serverAddr, localAddr, p.pConnCloseSignal, pcpConnConfig)
+		pConn, err = newPcpProtocolConnection(p, pConnKey, false, int(p.config.ProtocolID), serverAddr, localAddr, p.pConnCloseSignal, pcpConnConfig)
 		if err != nil {
 			fmt.Println("Error creating Pcp Client Protocol Connection:", err)
 			return nil, err
@@ -121,7 +121,7 @@ func (p *PcpCore) ListenPcp(serviceIP string, port int, pcpConfig *config.Config
 	pConn, ok := p.protoConnectionMap[pConnKey]
 	if !ok {
 		// need to create new protocol connection
-		pConn, err = newPcpProtocolConnection(pConnKey, true, int(p.config.ProtocolID), serviceAddr, nil, p.pConnCloseSignal, pcpConnConfig)
+		pConn, err = newPcpProtocolConnection(p, pConnKey, true, int(p.config.ProtocolID), serviceAddr, nil, p.pConnCloseSignal, pcpConnConfig)
 		if err != nil {
 			log.Println("Error creating Pcp Client Protocol Connection:", err)
 			return nil, err
@@ -201,6 +201,14 @@ func (p *PcpCore) Close() error {
 	close(p.pConnCloseSignal)
 
 	finishFiltering() // finish filtering RST packet by removing any remaining filtering rules
+
+	if p.rscore != nil {
+		err := p.rscore.Close()
+		if err != nil {
+			log.Println("Error closing RSCore:", err)
+			return err
+		}
+	}
 
 	log.Println("Pcp core closed gracefully.")
 

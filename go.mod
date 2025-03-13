@@ -12,7 +12,7 @@ require (
 require github.com/imgk/divert-go v0.0.0-20220205193416-faaa83c2c10a
 
 require (
-	github.com/Clouded-Sabre/rawsocket v0.0.0-20250312151328-f49d70430f1d
+	github.com/Clouded-Sabre/rawsocket v0.0.0-20250313133402-15dfae55f615
 	github.com/google/gopacket v1.1.19
 	github.com/moriyoshi/routewrapper v0.0.0-20180228100351-e52d8d14cf39 // indirect
 	golang.org/x/net v0.27.0 // indirect
