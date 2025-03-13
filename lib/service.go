@@ -18,6 +18,7 @@ type Service struct {
 	serviceAddr           net.Addr
 	port                  int
 	// variables
+	dumbListener              *net.TCPListener       // dumb listener to prevent RST packets created by system TCP/IP network stack
 	inputChannel              chan *PcpPacket        // channel for incoming packets of the whole services (including packets for all connections)
 	outputChan, sigOutputChan chan *PcpPacket        // output channels for ordinary outgoing packets and priority signalling packets
 	connectionMap             map[string]*Connection // open connections
@@ -393,17 +394,15 @@ func (s *Service) Close() error {
 	close(s.connCloseSignal)
 	close(s.connSignalFailed)
 
+	// close dumb TCP listener
+	if s.dumbListener != nil {
+		s.dumbListener.Close()
+	}
+
 	log.Println("PCP Service: resource cleared.")
 	// send signal to parent pcpProtocolConnection to clear service resource
 	s.serviceCloseSignal <- s
 	log.Println("PCP Service: signal sent to parent PCP service to remove service entry.")
-
-	// remove the iptable rules for the service
-	err := removeIptablesRule(s.serviceAddr.(*net.IPAddr).IP.String(), s.port)
-	if err != nil {
-		log.Printf("PCP Service: Error removing iptable rules for service %s:%d: %s", s.serviceAddr.(*net.IPAddr).IP.String(), s.port, err)
-		return err
-	}
 
 	log.Printf("PCP Service %s:%d shut down successfully.\n", s.serviceAddr.(*net.IPAddr).IP.String(), s.port)
 

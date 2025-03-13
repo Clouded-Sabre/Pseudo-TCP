@@ -4,9 +4,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os/exec"
-	"runtime"
-	"strconv"
 	"time"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
@@ -28,7 +25,7 @@ type PcpCoreConfig struct {
 
 type PcpCore struct {
 	config             *PcpCoreConfig                    // config
-	rscore             *rs.RawSocketCore                 // used for macos and windows only
+	rscore             rs.RSCore                         // used for macos and windows only
 	protoConnectionMap map[string]*PcpProtocolConnection // keep track of all protocolConn created by dialIP
 	pConnCloseSignal   chan *PcpProtocolConnection
 	closeSignal        chan struct{}  // used to send close signal to go routines to stop when timeout arrives
@@ -50,9 +47,16 @@ func NewPcpCore(pcpcoreConfig *PcpCoreConfig) (*PcpCore, error) {
 	Pool.Debug = pcpcoreConfig.PoolDebug
 	Pool.ProcessTimeThreshold = time.Duration(pcpcoreConfig.ProcessTimeThreshold) * time.Millisecond
 
-	// Use build tags or runtime.GOOS to decide which implementation to use.
-	if runtime.GOOS != "linux" {
-		pcpServerObj.rscore = rs.NewRawSocketCore(pcpcoreConfig.ARPCacheTimeout, pcpcoreConfig.ARPRequestTimeout, pcpcoreConfig.Debug)
+	// create RSCore object for rawsocket
+	rsconfig := &rs.RsConfig{
+		Debug:             pcpcoreConfig.Debug,
+		ArpCacheTimeout:   pcpcoreConfig.ARPCacheTimeout,
+		ArpRequestTimeout: pcpcoreConfig.ARPRequestTimeout,
+	}
+	var err error
+	pcpServerObj.rscore, err = rs.NewRSCore(rsconfig)
+	if err != nil {
+		log.Fatal("Error creating RSCore object:", err)
 	}
 	// Start goroutines
 	pcpServerObj.wg.Add(1) // Increase WaitGroup counter by 1 for the handleClosePConnConnection goroutines
@@ -139,13 +143,11 @@ func (p *PcpCore) ListenPcp(serviceIP string, port int, pcpConfig *config.Config
 			return nil, err
 		}
 
-		// Add iptables rule to drop RST packets created by system TCP/IP network stack
-		if err := addServerIptablesRule(serviceIP, port); err != nil {
-			log.Println("Error adding iptables rule:", err)
+		// Add a dumb TCP server to prevent RST packets created by system TCP/IP network stack
+		if srv.dumbListener, err = setupDumbTcpServer(serviceIP, port); err != nil {
+			log.Println("Error adding dumb TCP server:", err)
 			return nil, err
 		}
-
-		SleepForMs(500) // sleep for 500ms to make sure iptables rule takes effect
 
 		// add it to ServiceMap
 		pConn.mu.Lock()
@@ -187,16 +189,6 @@ func (p *PcpCore) Close() error {
 	// Close all pcpProtocolConnection instances
 	for _, pConn := range p.protoConnectionMap {
 		pConn.Close()
-		if pConn.isServer {
-			// remove iptable rules for server protocol connection
-			for port := range pConn.iptableRules {
-				err := removeServerIptablesRule(pConn.serverAddr.IP.String(), port)
-				if err != nil {
-					log.Println(err)
-					return err
-				}
-			}
-		}
 	}
 	p.protoConnectionMap = nil // Clear the map after closing all connections
 
@@ -208,30 +200,31 @@ func (p *PcpCore) Close() error {
 
 	close(p.pConnCloseSignal)
 
+	finishFiltering() // finish filtering RST packet by removing any remaining filtering rules
+
 	log.Println("Pcp core closed gracefully.")
 
 	return nil
 }
 
-// addIptablesRule adds an iptables rule to drop RST packets originating from the given IP and port.
-func addServerIptablesRule(ip string, port int) error {
-	cmd := exec.Command("iptables", "-A", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-s", ip, "--sport", strconv.Itoa(port), "-j", "DROP")
-	if err := cmd.Run(); err != nil {
-		return err
-	}
-	return nil
-}
-
-// removeIptablesRule removes the iptables rule that was added for dropping RST packets.
-func removeServerIptablesRule(ip string, port int) error {
-	// Construct the command to delete the iptables rule
-	cmd := exec.Command("iptables", "-D", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-s", ip, "--sport", strconv.Itoa(port), "-j", "DROP")
-
-	// Execute the command to delete the iptables rule
-	if err := cmd.Run(); err != nil {
-		// If there is an error executing the command, return the error
-		return err
+// setupDumbTcpServer adds an dumb tcp server at a specified ip:port to prevent RST packets originating from the given IP and port.
+func setupDumbTcpServer(ip string, port int) (*net.TCPListener, error) {
+	// Create a TCP socket and bind it to the desired IP address and port
+	address := fmt.Sprintf("%s:%d", ip, port)
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create listener on %s: %v", address, err)
 	}
 
-	return nil
+	// Don't accept any connections, just call Listen()
+	tcpListener, ok := listener.(*net.TCPListener)
+	if !ok {
+		return nil, fmt.Errorf("failed to cast listener to TCPListener")
+	}
+
+	// This makes the kernel aware of the port and prevents RST from being sent
+	tcpListener.SetDeadline(time.Now().Add(1 * time.Second)) // optional, just to make it a valid listener
+
+	// Return the listener
+	return tcpListener, nil
 }

@@ -1216,6 +1216,17 @@ func (c *Connection) clearConnResource() {
 		}
 		log.Printf("Pcp Connection: Released %d chunks from RevPacketCache\n", len(c.revPacketCache.packets))
 	}
+
+	// remove the filtering rule of the client side connection which is used to prevent outgoing RST packet
+	if !c.params.isServer { // client side connection
+		err := removeAFilteringRule(c.LocalAddr().IP.String(), c.RemoteAddr().IP.String(), c.LocalPort(), c.RemotePort())
+		if err != nil {
+			log.Println("Pcp Connection: failed to remove filtering rule from client side connection")
+		} else {
+			log.Println("Pcp Connection: filtering rule removed from client side connection")
+		}
+	}
+
 	log.Printf("Pcp Connection %s: resource cleared.\n", c.params.key)
 }
 

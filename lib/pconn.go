@@ -6,7 +6,6 @@ import (
 	"log"
 	"math/rand"
 	"net"
-	"os/exec"
 	"strconv"
 	"sync"
 	"time"
@@ -36,10 +35,10 @@ type PcpProtocolConnection struct {
 	closeSignal               chan struct{}               // used to send close signal to HandleIncomingPackets, handleOutgoingPackets, handleCloseConnection go routines to stop when timeout arrives
 	emptyMapTimer             *time.Timer                 // if this pcpProtocolConnection has no connection for 10 seconds, close it. used for client side only
 	wg                        sync.WaitGroup              // WaitGroup to synchronize goroutines
-	iptableRules              []int                       // slice of port number on server address which has iptables rules. used for client side only
-	isClosed                  bool                        // to prevent calling close multiple time
-	mu                        sync.Mutex                  // to protect maps access
-	localPortPool             *PortPool                   // a pool of avaibable local port numbers for local port number allocation
+	//iptableRules              []int                       // slice of port number on server address which has iptables rules. used for client side only
+	isClosed      bool       // to prevent calling close multiple time
+	mu            sync.Mutex // to protect maps access
+	localPortPool *PortPool  // a pool of avaibable local port numbers for local port number allocation
 }
 
 type pcpProtocolConnConfig struct {
@@ -107,10 +106,10 @@ func newPcpProtocolConnection(key string, isServer bool, protocolId int, serverA
 		pConnCloseSignal: pConnCloseSignal,
 		closeSignal:      make(chan struct{}),
 		wg:               sync.WaitGroup{},
-		iptableRules:     make([]int, 0),
-		config:           config,
-		mu:               sync.Mutex{},
-		localPortPool:    newPortPool(minPort, maxPort),
+		//iptableRules:     make([]int, 0),
+		config:        config,
+		mu:            sync.Mutex{},
+		localPortPool: newPortPool(minPort, maxPort),
 	}
 
 	// Start goroutines
@@ -159,14 +158,14 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *connectionConfi
 	p.tempConnectionMap[connKey] = newConn
 	p.mu.Unlock()
 
-	// Add iptables rule to drop RST packets
-	if err := addIptablesRule(p.serverAddr.IP.To4().String(), serverPort); err != nil {
-		log.Println("PcpProtocolConnection.dial: Error adding iptables rule:", err)
+	// Add filtering rule to drop RST packets
+	if err := addAFilteringRule(connParam.localAddr.(*net.IPAddr).IP.String(), connParam.remoteAddr.(*net.IPAddr).IP.String(), connParam.localPort, serverPort); err != nil {
+		log.Println("PcpProtocolConnection.dial: Error adding filtering rule:", err)
 		return nil, err
 	}
-	p.iptableRules = append(p.iptableRules, serverPort) // record it for later deletion of the rules when connection closes
+	//p.iptableRules = append(p.iptableRules, serverPort) // record it for later deletion of the rules when connection closes
 
-	// sleep for 200ms to make sure iptable rule takes effect
+	// sleep for 200ms to make sure filtering rule takes effect
 	SleepForMs(p.config.iptableRuleDaley)
 
 	// Send SYN to server
@@ -717,17 +716,6 @@ func (p *PcpProtocolConnection) Close() {
 		p.emptyMapTimer = nil
 	}
 
-	// Remove iptables rules
-	for _, port := range p.iptableRules {
-		err := removeIptablesRule(p.serverAddr.IP.To4().String(), port)
-		if err != nil {
-			log.Printf("PcpProtocolConnection: Error removing iptables rule for port %d: %v\n", port, err)
-		} else {
-			log.Printf("PcpProtocolConnection: Removed iptables rule for port %d\n", port)
-		}
-	}
-	p.iptableRules = nil // Clear the slice
-
 	close(p.sigOutputChan)
 	close(p.outputChan)
 	close(p.connCloseSignal)
@@ -737,27 +725,4 @@ func (p *PcpProtocolConnection) Close() {
 	p.pConnCloseSignal <- p
 
 	log.Println("PcpProtocolConnection closed gracefully.")
-}
-
-// addIptablesRule adds an iptables rule to drop RST packets originating from the given IP and port.
-func addIptablesRule(ip string, port int) error {
-	cmd := exec.Command("iptables", "-A", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-d", ip, "--dport", strconv.Itoa(port), "-j", "DROP")
-	if err := cmd.Run(); err != nil {
-		return err
-	}
-	return nil
-}
-
-// removeIptablesRule removes the iptables rule that was added for dropping RST packets.
-func removeIptablesRule(ip string, port int) error {
-	// Construct the command to delete the iptables rule
-	cmd := exec.Command("iptables", "-D", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-d", ip, "--dport", strconv.Itoa(port), "-j", "DROP")
-
-	// Execute the command to delete the iptables rule
-	if err := cmd.Run(); err != nil {
-		// If there is an error executing the command, return the error
-		return err
-	}
-
-	return nil
 }

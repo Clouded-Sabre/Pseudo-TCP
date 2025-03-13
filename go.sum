@@ -1,9 +1,11 @@
-github.com/Clouded-Sabre/rawsocket v0.0.0-20250303111427-2dd0766f339d h1:kKNNB/+Ee7eFYS1dlSyycOCs5CjlF16xTU8m+q1lFGU=
-github.com/Clouded-Sabre/rawsocket v0.0.0-20250303111427-2dd0766f339d/go.mod h1:0cAz7wGZi4q4ZGJK5vUhzB6jI+IAiimj+qMxWGZObac=
+github.com/Clouded-Sabre/rawsocket v0.0.0-20250312151328-f49d70430f1d h1:6vPiYvJYKKxc4Rxy8iDBc+JKXLQSdCaflN6EX2vdzbA=
+github.com/Clouded-Sabre/rawsocket v0.0.0-20250312151328-f49d70430f1d/go.mod h1:0cAz7wGZi4q4ZGJK5vUhzB6jI+IAiimj+qMxWGZObac=
 github.com/Clouded-Sabre/ringpool v0.0.0-20240714075617-d50807410f3f h1:sHzGoaqIi19h8MIzDr9lMgiFcmk3XIXxo8YBKBedW+A=
 github.com/Clouded-Sabre/ringpool v0.0.0-20240714075617-d50807410f3f/go.mod h1:/78UKfbnsF0Mzdt6uygwmdvDMiiTgouyD91plgQxuFc=
 github.com/google/gopacket v1.1.19 h1:ves8RnFZPGiFnTS0uPQStjwru6uO6h+nlr9j6fL7kF8=
 github.com/google/gopacket v1.1.19/go.mod h1:iJ8V8n6KS+z2U1A8pUwu8bW5SyEMkXJB8Yo/Vo+TKTo=
+github.com/imgk/divert-go v0.0.0-20220205193416-faaa83c2c10a h1:wkU8llyuZtm80Ak6f7/QAmCq/LSwF8IOzMCRRGhb3Fk=
+github.com/imgk/divert-go v0.0.0-20220205193416-faaa83c2c10a/go.mod h1:8j670dnMAWuHP3AHj7Zd8b4HhGw4mdTo8aYhCWNsAeU=
 github.com/moriyoshi/routewrapper v0.0.0-20180228100351-e52d8d14cf39 h1:diqTAr+wSpYUQHsyj80KOYO+TUf9RqjnKsARAsDDxaE=
 github.com/moriyoshi/routewrapper v0.0.0-20180228100351-e52d8d14cf39/go.mod h1:58NWw+g5pMuFB1BxO0ZVEQRDC09iqiiI5JHBGtl5Jyk=
 golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
