@@ -31,13 +31,11 @@ func main() {
 		log.Fatalln("Configurtion file error:", err)
 	}
 
-	pcpCoreConfig := &lib.PcpCoreConfig{
-		ProtocolID:        uint8(config.AppConfig.ProtocolID),
-		PreferredMSS:      config.AppConfig.PreferredMSS,
-		PayloadPoolSize:   config.AppConfig.PayloadPoolSize,
-		ARPCacheTimeout:   30, // only used on non-linux systems
-		ARPRequestTimeout: 60, // only used on non-linux systems
-	}
+	pcpCoreConfig := lib.NewDefaultPcpCoreConfig()
+	pcpCoreConfig.ProtocolID = uint8(config.AppConfig.ProtocolID)
+	pcpCoreConfig.PreferredMSS = config.AppConfig.PreferredMSS
+	pcpCoreConfig.PayloadPoolSize = config.AppConfig.PayloadPoolSize
+
 	pcpCoreObj, err := lib.NewPcpCore(pcpCoreConfig)
 	if err != nil {
 		log.Println(err)

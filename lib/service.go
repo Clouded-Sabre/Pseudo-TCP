@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	rp "github.com/Clouded-Sabre/ringpool/lib"
-	//"github.com/Clouded-Sabre/Pseudo-TCP/config"
 )
 
 // Service represents a service listening on a specific port.

@@ -139,6 +139,26 @@ func newConnectionConfig(pcpConfig *config.Config) *connectionConfig {
 	return connConfig
 }
 
+func NewDefaultConnectionConfig() *connectionConfig {
+	return &connectionConfig{
+		windowScale:             14,
+		preferredMSS:            1440,
+		sackPermitSupport:       true,
+		sackOptionSupport:       true,
+		idleTimeout:             25, //seconds
+		keepAliveEnabled:        true,
+		keepaliveInterval:       5, //seconds
+		maxKeepaliveAttempts:    3,
+		resendInterval:          200, //milliseconds
+		maxResendCount:          5,
+		windowSizeWithScale:     12800,
+		connSignalRetryInterval: 2, //seconds
+		connSignalRetry:         5,
+		connectionInputQueue:    1000,
+		showStatistics:          true,
+	}
+}
+
 func newConnection(connParams *connectionParams, connConfig *connectionConfig) (*Connection, error) {
 	isn, _ := GenerateISN()
 	options := &options{

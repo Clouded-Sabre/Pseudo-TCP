@@ -14,13 +14,25 @@ import (
 )
 
 type PcpCoreConfig struct {
-	ProtocolID                         uint8 // protocol id which should be 6
-	PayloadPoolSize                    int   // how many number of packet payload chunks in the pool
-	PreferredMSS                       int   // preferred MSS
-	Debug                              bool  // global debug setting
-	PoolDebug                          bool  // Ring Pool debug setting
-	ProcessTimeThreshold               int   // packet processing time threshold
-	ARPCacheTimeout, ARPRequestTimeout int   // only used for rawsocket on Windows and macos, in seconds
+	ProtocolID           uint8        // protocol id which should be 6
+	PayloadPoolSize      int          // how many number of packet payload chunks in the pool
+	PreferredMSS         int          // preferred MSS
+	Debug                bool         // global debug setting
+	PoolDebug            bool         // Ring Pool debug setting
+	ProcessTimeThreshold int          // packet processing time threshold
+	RsConfig             *rs.RsConfig // rawsocket configuration
+}
+
+func NewDefaultPcpCoreConfig() *PcpCoreConfig {
+	return &PcpCoreConfig{
+		ProtocolID:           6,
+		PayloadPoolSize:      2000,
+		PreferredMSS:         1440,
+		Debug:                false,
+		PoolDebug:            false,
+		ProcessTimeThreshold: 10,
+		RsConfig:             rs.NewDefaultRsConfig(),
+	}
 }
 
 type PcpCore struct {
@@ -48,13 +60,8 @@ func NewPcpCore(pcpcoreConfig *PcpCoreConfig) (*PcpCore, error) {
 	Pool.ProcessTimeThreshold = time.Duration(pcpcoreConfig.ProcessTimeThreshold) * time.Millisecond
 
 	// create RSCore object for rawsocket
-	rsconfig := &rs.RsConfig{
-		Debug:             pcpcoreConfig.Debug,
-		ArpCacheTimeout:   pcpcoreConfig.ARPCacheTimeout,
-		ArpRequestTimeout: pcpcoreConfig.ARPRequestTimeout,
-	}
 	var err error
-	pcpServerObj.rscore, err = rs.NewRSCore(rsconfig)
+	pcpServerObj.rscore, err = rs.NewRSCore(pcpcoreConfig.RsConfig)
 	if err != nil {
 		log.Fatal("Error creating RSCore object:", err)
 	}

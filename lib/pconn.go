@@ -68,6 +68,20 @@ func newPcpProtocolConnConfig(pcpConfig *config.Config) *pcpProtocolConnConfig {
 	}
 }
 
+func NewDefaultPcpProtocolConnConfig() *pcpProtocolConnConfig {
+	return &pcpProtocolConnConfig{
+		iptableRuleDaley:     200,
+		preferredMSS:         1440, // Maximum Segment Size
+		packetLostSimulation: false,
+		pConnTimeout:         10, // 10 seconds
+		clientPortUpper:      65535,
+		clientPortLower:      49152,
+		connConfig:           NewDefaultConnectionConfig(),
+		verifyChecksum:       true, // Checksum verification is enabled by default
+		pconnOutputQueue:     100,
+	}
+}
+
 func newPcpProtocolConnection(pcpCore *PcpCore, key string, isServer bool, protocolId int, serverAddr, localAddr *net.IPAddr, pConnCloseSignal chan *PcpProtocolConnection, config *pcpProtocolConnConfig) (*PcpProtocolConnection, error) {
 	var (
 		//ipConn *net.IPConn
