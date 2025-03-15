@@ -10,8 +10,9 @@ import (
 	"sync"
 	"time"
 
-	//"github.com/Clouded-Sabre/Pseudo-TCP/config"
 	rp "github.com/Clouded-Sabre/ringpool/lib"
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
 )
 
 // PcpPacket represents a packet in your custom protocol
@@ -39,155 +40,80 @@ func (p *PcpPacket) Marshal(protocolId uint8, buffer []byte) (int, error) {
 	if rp.Debug && p.GetChunkReference() != nil {
 		fp = p.AddFootPrint("p.Marshal")
 	}
-	// Calculate the length of the options field (including padding)
-	optionsLength := 0
-	optionsPresent := false
-	if !p.IsOpenConnection && p.TcpOptions.windowScaleShiftCount > 0 { // Window Scaling is enabled
-		// Window scaling option: kind (1 byte), length (1 byte), shift count (1 byte)
-		optionsLength += 3
-		optionsPresent = true
+
+	// Create a TCP layer
+	tcp := &layers.TCP{
+		SrcPort: layers.TCPPort(p.SourcePort),
+		DstPort: layers.TCPPort(p.DestinationPort),
+		Seq:     p.SequenceNumber,
+		Ack:     p.AcknowledgmentNum,
+		Window:  p.WindowSize,
+		SYN:     p.Flags&0x02 != 0,
+		ACK:     p.Flags&0x10 != 0,
+		FIN:     p.Flags&0x01 != 0,
+		RST:     p.Flags&0x04 != 0,
+		PSH:     p.Flags&0x08 != 0,
+		URG:     p.Flags&0x20 != 0,
+		ECE:     p.Flags&0x40 != 0,
+		CWR:     p.Flags&0x80 != 0,
+		Urgent:  p.UrgentPointer,
+		Options: []layers.TCPOption{},
 	}
-	if !p.IsOpenConnection && p.TcpOptions.mss > 0 { // MSS is enabled
-		// MSS option: kind (1 byte), length (1 byte), MSS value (2 bytes)
-		optionsLength += 4
-		optionsPresent = true
+
+	// Add TCP options
+	if !p.IsOpenConnection && p.TcpOptions.windowScaleShiftCount > 0 {
+		tcp.Options = append(tcp.Options, layers.TCPOption{
+			OptionType:   layers.TCPOptionKindWindowScale,
+			OptionLength: 3,
+			OptionData:   []byte{p.TcpOptions.windowScaleShiftCount},
+		})
+	}
+	if !p.IsOpenConnection && p.TcpOptions.mss > 0 {
+		tcp.Options = append(tcp.Options, layers.TCPOption{
+			OptionType:   layers.TCPOptionKindMSS,
+			OptionLength: 4,
+			OptionData:   []byte{byte(p.TcpOptions.mss >> 8), byte(p.TcpOptions.mss & 0xff)},
+		})
 	}
 	if !p.IsOpenConnection && p.TcpOptions.permitSack {
-		// MSS option: kind (1 byte), length (1 byte)
-		optionsLength += 2
-		optionsPresent = true
+		tcp.Options = append(tcp.Options, layers.TCPOption{
+			OptionType:   layers.TCPOptionKindSACKPermitted,
+			OptionLength: 2,
+		})
 	}
 	if p.IsOpenConnection && p.TcpOptions.SackEnabled {
-		if len(p.TcpOptions.outSACKOption.blocks) > 0 {
-			// SACK option kind 5: kind (1 byte), length (1 byte), SACK blocks
-			optionsLength += 2 + len(p.TcpOptions.outSACKOption.blocks)*8 // 8 bytes per SACK block
-			optionsPresent = true
+		for _, block := range p.TcpOptions.outSACKOption.blocks {
+			tcp.Options = append(tcp.Options, layers.TCPOption{
+				OptionType:   layers.TCPOptionKindSACK,
+				OptionLength: 8,
+				OptionData:   append([]byte{byte(block.leftEdge >> 24), byte(block.leftEdge >> 16), byte(block.leftEdge >> 8), byte(block.leftEdge)}, []byte{byte(block.rightEdge >> 24), byte(block.rightEdge >> 16), byte(block.rightEdge >> 8), byte(block.rightEdge)}...),
+			})
 		}
 	}
 	if p.TcpOptions.timestampEnabled {
-		// Timestamp option: kind (1 byte), length (1 byte), timestamp value (4 bytes), echo reply value (4 bytes)
-		optionsLength += 10
-		optionsPresent = true
+		timestamp := time.Now().UnixMicro()
+		tcp.Options = append(tcp.Options, layers.TCPOption{
+			OptionType:   layers.TCPOptionKindTimestamps,
+			OptionLength: 10,
+			OptionData:   append([]byte{byte(timestamp >> 24), byte(timestamp >> 16), byte(timestamp >> 8), byte(timestamp)}, []byte{byte(p.TcpOptions.tsEchoReplyValue >> 24), byte(p.TcpOptions.tsEchoReplyValue >> 16), byte(p.TcpOptions.tsEchoReplyValue >> 8), byte(p.TcpOptions.tsEchoReplyValue)}...),
+		})
 	}
 
-	if optionsPresent && optionsLength > TcpOptionsMaxLength {
-		optionsLength = TcpOptionsMaxLength // TCP option's max length is 40
-	}
-
-	padding := 0
-	if optionsPresent && optionsLength%4 != 0 {
-		padding = 4 - (optionsLength % 4)
-	}
-	totalHeaderLength := TcpHeaderLength + optionsLength + padding
-
-	pcpFrameLength := totalHeaderLength + len(p.Payload)
-	if pcpFrameLength+TcpPseudoHeaderLength > len(buffer) {
-		err := fmt.Errorf("buffer size (%d) is too small to hold the frame (%d) + TcpPseudoHeader", len(buffer), pcpFrameLength)
+	// Serialize the TCP layer
+	serializeBuffer := gopacket.NewSerializeBuffer()
+	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
+	err := tcp.SerializeTo(serializeBuffer, opts)
+	if err != nil {
 		return 0, err
 	}
 
-	// Allocate space for the frame
-	//frame := make([]byte, totalHeaderLength)
-	frame := buffer[TcpPseudoHeaderLength:]
-
-	// Write header fields
-	binary.BigEndian.PutUint16(frame[0:2], p.SourcePort)
-	binary.BigEndian.PutUint16(frame[2:4], p.DestinationPort)
-	binary.BigEndian.PutUint32(frame[4:8], p.SequenceNumber)
-	binary.BigEndian.PutUint32(frame[8:12], p.AcknowledgmentNum)
-
-	// Calculate Data Offset and Reserved field (DO and RSV)
-	doAndRsv := uint8(totalHeaderLength/4) << 4
-
-	// Write DO and RSV into the 12th byte
-	frame[12] = doAndRsv
-
-	// Write Flags into the 13th byte
-	frame[13] = p.Flags
-
-	binary.BigEndian.PutUint16(frame[14:16], p.WindowSize)
-	// leave frame[16:18] (checksum) as all zero for now
-	binary.BigEndian.PutUint16(frame[16:18], 0)
-	binary.BigEndian.PutUint16(frame[18:20], p.UrgentPointer)
-
-	// Construct options
-	optionOffset := TcpHeaderLength
-	if !p.IsOpenConnection && p.TcpOptions.windowScaleShiftCount > 0 {
-		// Window scaling option: kind (1 byte), length (1 byte), shift count (1 byte)
-		frame[optionOffset] = 3   // Kind: Window Scale
-		frame[optionOffset+1] = 3 // Length: 3 bytes
-		frame[optionOffset+2] = p.TcpOptions.windowScaleShiftCount
-		optionOffset += 3
-	}
-	if !p.IsOpenConnection && p.TcpOptions.mss > 0 {
-		// MSS option: kind (1 byte), length (1 byte), MSS value (2 bytes)
-		frame[optionOffset] = 2   // Kind: Maximum Segment Size
-		frame[optionOffset+1] = 4 // Length: 4 bytes
-		log.Println("pcpPacket.Marshal: p.TcpOptions.mss:", p.TcpOptions.mss)
-		binary.BigEndian.PutUint16(frame[optionOffset+2:optionOffset+4], p.TcpOptions.mss)
-		optionOffset += 4
-	}
-	if !p.IsOpenConnection && p.TcpOptions.permitSack {
-		// SACK permit option: kind (1 byte), length (1 byte)
-		frame[optionOffset] = 4   // Kind: SACK permitted
-		frame[optionOffset+1] = 2 // Length: 2 bytes
-		optionOffset += 2
-	}
-	if p.IsOpenConnection && p.TcpOptions.SackEnabled {
-		if len(p.TcpOptions.outSACKOption.blocks) > 0 {
-			// SACK option kind 5: kind (1 byte), length (1 byte), SACK blocks
-			frame[optionOffset] = 5                                                    // Kind: SACK
-			frame[optionOffset+1] = byte(2 + len(p.TcpOptions.outSACKOption.blocks)*8) // Length: variable
-			optionOffset += 2
-			// Write SACK blocks
-			for _, block := range p.TcpOptions.outSACKOption.blocks {
-				if optionOffset+8 >= TcpHeaderLength+TcpOptionsMaxLength {
-					break
-				}
-				binary.BigEndian.PutUint32(frame[optionOffset:optionOffset+4], block.leftEdge)
-				binary.BigEndian.PutUint32(frame[optionOffset+4:optionOffset+8], block.rightEdge)
-				optionOffset += 8
-			}
-		}
-	}
-	if p.TcpOptions.timestampEnabled {
-		if optionOffset+10 < TcpHeaderLength+TcpOptionsMaxLength {
-			// Timestamp option: kind (1 byte), length (1 byte), timestamp value (4 bytes), echo reply value (4 bytes)
-			frame[optionOffset] = 8    // Kind: Timestamp
-			frame[optionOffset+1] = 10 // Length: 10 bytes (timestamp value + echo reply value)
-			// Write timestamp value (current time) and echo reply value
-			timestamp := time.Now().UnixMicro()
-			echoReplyValue := p.TcpOptions.tsEchoReplyValue
-			binary.BigEndian.PutUint32(frame[optionOffset+2:optionOffset+6], uint32(timestamp))
-			binary.BigEndian.PutUint32(frame[optionOffset+6:optionOffset+10], uint32(echoReplyValue))
-			optionOffset += 10
-		}
-	}
-
-	// Append padding if necessary
-	if optionsPresent {
-		for i := 0; i < padding; i++ {
-			frame[optionOffset+i] = 1 // NOP option
-		}
-	}
-
-	// Calculate checksum over the pseudo-header, TCP header, and payload
-	err := assemblePseudoHeader(buffer[:TcpPseudoHeaderLength], p.SrcAddr, p.DestAddr, protocolId, uint16(pcpFrameLength))
-	if err != nil {
-		log.Fatal(err)
-	}
-	// Append payload to the frame
-	if len(p.Payload) > 0 {
-		copy(frame[totalHeaderLength:], p.Payload)
-	}
-
-	checksum := CalculateChecksum(buffer[:TcpPseudoHeaderLength+pcpFrameLength])
-	binary.BigEndian.PutUint16(frame[16:18], checksum)
+	// Copy the serialized data to the provided buffer
+	copy(buffer, serializeBuffer.Bytes())
 
 	if rp.Debug && p.chunk != nil {
 		p.chunk.TickFootPrint(fp)
 	}
-	return pcpFrameLength, nil
+	return len(serializeBuffer.Bytes()), nil
 }
 
 // Unmarshal converts a byte slice to a PcpPacket
@@ -196,112 +122,81 @@ func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) error {
 	if rp.Debug && p.GetChunkReference() != nil {
 		fp = p.AddFootPrint("p.Unmarshal")
 	}
-	if len(data) < TcpHeaderLength {
-		return fmt.Errorf("the length(%d) of data is too short to be unmarshalled", len(data))
+
+	packet := gopacket.NewPacket(data, layers.LayerTypeTCP, gopacket.Default)
+	tcpLayer := packet.Layer(layers.LayerTypeTCP)
+	if tcpLayer == nil {
+		return fmt.Errorf("failed to decode TCP layer")
 	}
+	tcp, _ := tcpLayer.(*layers.TCP)
+
 	p.SrcAddr = srcAddr
 	p.DestAddr = destAddr
-	p.SourcePort = binary.BigEndian.Uint16(data[0:2])
-	p.DestinationPort = binary.BigEndian.Uint16(data[2:4])
-	p.SequenceNumber = binary.BigEndian.Uint32(data[4:8])
-	p.AcknowledgmentNum = binary.BigEndian.Uint32(data[8:12])
-	p.Flags = data[13] // Updated to byte 13 for Flags
-	p.WindowSize = binary.BigEndian.Uint16(data[14:16])
-	p.UrgentPointer = binary.BigEndian.Uint16(data[18:20])
-
-	// Calculate the Data Offset (DO) to determine the options length
-	do := (data[12] >> 4) * 4
-	optionsLength := int(do) - TcpHeaderLength
-	if optionsLength < 0 {
-		return fmt.Errorf("packet unmarshall: The length(%d) of option is less than 0", optionsLength)
+	p.SourcePort = uint16(tcp.SrcPort)
+	p.DestinationPort = uint16(tcp.DstPort)
+	p.SequenceNumber = tcp.Seq
+	p.AcknowledgmentNum = tcp.Ack
+	p.Flags = 0
+	if tcp.SYN {
+		p.Flags |= 0x02
 	}
+	if tcp.ACK {
+		p.Flags |= 0x10
+	}
+	if tcp.FIN {
+		p.Flags |= 0x01
+	}
+	if tcp.RST {
+		p.Flags |= 0x04
+	}
+	if tcp.PSH {
+		p.Flags |= 0x08
+	}
+	if tcp.URG {
+		p.Flags |= 0x20
+	}
+	if tcp.ECE {
+		p.Flags |= 0x40
+	}
+	if tcp.CWR {
+		p.Flags |= 0x80
+	}
+	p.WindowSize = tcp.Window
+	p.UrgentPointer = tcp.Urgent
 
-	// Extract options from the data
-	optionsBytes := data[TcpHeaderLength : TcpHeaderLength+optionsLength]
-
+	// Parse TCP options
 	if p.TcpOptions == nil {
-		p.TcpOptions = &options{} // all attributes set to zero for which means disabled
+		p.TcpOptions = &options{}
 	}
-	// Parse options to extract Window Scale and MSS values
-	var (
-		optionLength, optionKind byte
-	)
-	for i := 0; i < optionsLength-1; {
-		optionKind = optionsBytes[i]
-		//fmt.Println("Scan to option kind", optionKind)
-
-		if optionKind == 0 {
-			break // padding reached
-		} else {
-			switch optionKind {
-			case 1: // no op
-				optionLength = 1
-			case 3: // Window Scale
-				optionLength = optionsBytes[i+1]
-				if optionLength == 3 && i+3 <= optionsLength {
-					p.TcpOptions.windowScaleShiftCount = optionsBytes[i+2]
-				}
-			case 2: // Maximum Segment Size (MSS)
-				optionLength = optionsBytes[i+1]
-				if optionLength == 4 && i+4 <= optionsLength {
-					p.TcpOptions.mss = binary.BigEndian.Uint16(optionsBytes[i+2 : i+4])
-					//log.Println("pcpPacket.Unmarshal: p.TcpOptions.mss:", p.TcpOptions.mss)
-				}
-			case 4: // SACK support
-				optionLength = optionsBytes[i+1]
-				if optionLength == 2 {
-					p.TcpOptions.permitSack = true
-				}
-			case 5: // SACK option
-				optionLength = optionsBytes[i+1]
-				if optionLength > 2 && i+int(optionLength) <= optionsLength {
-					// Parse SACK blocks
-					sackBlocks := make([]sackblock, 0)
-					for j := i + 2; j < i+int(optionLength); j += 8 {
-						leftEdge := binary.BigEndian.Uint32(optionsBytes[j : j+4])
-						rightEdge := binary.BigEndian.Uint32(optionsBytes[j+4 : j+8])
-						sackBlocks = append(sackBlocks, sackblock{leftEdge: leftEdge, rightEdge: rightEdge})
-					}
-					if p.TcpOptions.inSACKOption.blocks == nil {
-						p.TcpOptions.inSACKOption.blocks = make([]sackblock, 0)
-					}
-					p.TcpOptions.inSACKOption.blocks = append(p.TcpOptions.inSACKOption.blocks, sackBlocks...)
-				}
-			case 8: // Timestamp option
-				optionLength = optionsBytes[i+1]
-				if optionLength == 10 && i+10 <= optionsLength {
-					// Extract timestamp value and echo reply value
-					timestamp := binary.BigEndian.Uint32(optionsBytes[i+2 : i+6])
-					echoReplyValue := binary.BigEndian.Uint32(optionsBytes[i+6 : i+10])
-					p.TcpOptions.timestampEnabled = true
-					p.TcpOptions.timestamp = timestamp
-					p.TcpOptions.tsEchoReplyValue = echoReplyValue
-					//log.Printf("Got TSval:%d and TsErv:%d", timestamp, echoReplyValue)
-				}
-			default:
-				optionLength = optionsBytes[i+1]
+	for _, option := range tcp.Options {
+		switch option.OptionType {
+		case layers.TCPOptionKindWindowScale:
+			if len(option.OptionData) == 1 {
+				p.TcpOptions.windowScaleShiftCount = option.OptionData[0]
 			}
-			// Move to the next option
-			i += int(optionLength)
+		case layers.TCPOptionKindMSS:
+			if len(option.OptionData) == 2 {
+				p.TcpOptions.mss = binary.BigEndian.Uint16(option.OptionData)
+			}
+		case layers.TCPOptionKindSACKPermitted:
+			p.TcpOptions.permitSack = true
+		case layers.TCPOptionKindSACK:
+			for i := 0; i < len(option.OptionData); i += 8 {
+				leftEdge := binary.BigEndian.Uint32(option.OptionData[i : i+4])
+				rightEdge := binary.BigEndian.Uint32(option.OptionData[i+4 : i+8])
+				p.TcpOptions.inSACKOption.blocks = append(p.TcpOptions.inSACKOption.blocks, sackblock{leftEdge: leftEdge, rightEdge: rightEdge})
+			}
+		case layers.TCPOptionKindTimestamps:
+			if len(option.OptionData) == 8 {
+				p.TcpOptions.timestampEnabled = true
+				p.TcpOptions.timestamp = binary.BigEndian.Uint32(option.OptionData[:4])
+				p.TcpOptions.tsEchoReplyValue = binary.BigEndian.Uint32(option.OptionData[4:])
+			}
 		}
 	}
 
-	// Extract payload from the data
-	if TcpHeaderLength+optionsLength > len(data) {
-		return fmt.Errorf("TcpHeaderLength+optionsLength(%d) > len(data)(%d). Ill-formatted PCP packet", TcpHeaderLength+optionsLength, len(data))
-	}
-	if len(data[TcpHeaderLength+optionsLength:]) > 0 {
-		err := p.CopyToPayload(data[TcpHeaderLength+optionsLength:])
-		if err != nil {
-			return fmt.Errorf("packet unmarshal: error copying packet payload - %s", err)
-		}
-	} else {
-		p.Payload = nil
-	}
-	//p.Payload = data[HeaderSize+optionsLength:]
-
-	// Retrieve the checksum from the packet
-	p.Checksum = binary.BigEndian.Uint16(data[16:18]) // Assuming checksum field is at byte 16 and 17
+	// Extract payload
+	p.Payload = tcp.Payload
 
 	if rp.Debug && p.GetChunkReference() != nil {
 		p.TickFootPrint(fp)
@@ -411,97 +306,6 @@ func (p *PcpPacket) TickChannel() error {
 
 func (p *PcpPacket) GetPayloadLength() int {
 	return len(p.chunk.Data.(*Payload).GetSlice())
-}
-
-func CalculateChecksum(buffer []byte) uint16 {
-	var cksum uint32 = 0
-
-	// Process 16-bit words (2 bytes each)
-	for i := 0; i < len(buffer)-1; i += 2 {
-		word := binary.BigEndian.Uint16(buffer[i : i+2])
-		cksum += uint32(word)
-	}
-
-	// Handle remaining odd byte, if any
-	if len(buffer)%2 != 0 {
-		cksum += uint32(buffer[len(buffer)-1]) << 8 // Shift last byte to 16 bits
-	}
-
-	// Fold 32-bit sum to 16 bits
-	cksum = (cksum >> 16) + (cksum & 0xffff)
-	cksum += (cksum >> 16)
-
-	// Return one's complement of the final sum
-	return ^uint16(cksum)
-}
-
-func VerifyChecksum(data []byte, srcAddr, dstAddr net.Addr, protocolId uint8) bool {
-	// Please note that the first TcpPseudoHeaderLength bytes of data is reserved for TCP Pseudo header
-	if len(data) < TcpHeaderLength+TcpPseudoHeaderLength {
-		log.Printf("The received packet's total length is too short(%d)\n", len(data))
-		return false
-	}
-	frame := data[TcpPseudoHeaderLength:]
-	// Retrieve the checksum from the packet
-	receivedChecksum := binary.BigEndian.Uint16(frame[16:18]) // Assuming checksum field is at byte 16 and 17
-
-	// Zero out the checksum field in data for calculation
-	binary.BigEndian.PutUint16(frame[16:18], 0)
-
-	// Calculate checksum over the pseudo-header, TCP header, and payload
-	pcpFrameLength := uint16(len(frame))
-	err := assemblePseudoHeader(data[:TcpPseudoHeaderLength], srcAddr, dstAddr, protocolId, pcpFrameLength)
-	if err != nil {
-		log.Println("error in assembling pseudo tcp header:", err)
-		return false
-	}
-	//checksumData := append(pseudoHeader, data...)
-	// Calculate the checksum
-	calculatedChecksum := CalculateChecksum(data)
-
-	// Restore the original checksum field in data
-	binary.BigEndian.PutUint16(frame[16:18], receivedChecksum)
-	//log.Printf(Red+"Calculated Checksum: %x, Extracted Checksum: %x"+Reset, calculatedChecksum, receivedChecksum)
-
-	// Compare the received checksum with the calculated checksum
-	return receivedChecksum == calculatedChecksum
-}
-
-// assemblePseudoHeader assembles the pseudo-header for checksum calculation
-func assemblePseudoHeader(buffer []byte, srcAddr, dstAddr net.Addr, protocolId uint8, pcpFrameLength uint16) error {
-	if len(buffer) != TcpPseudoHeaderLength {
-		return fmt.Errorf("tcp pseudo header Buffer length(%d) is not TcpPseudoHeaderLength", len(buffer))
-	}
-	srcIP := srcAddr.(*net.IPAddr).IP.To4() // Type assertion to get the IPv4 address
-	dstIP := dstAddr.(*net.IPAddr).IP.To4() // Type assertion to get the IPv4 address
-	binary.BigEndian.PutUint32(buffer[0:4], binary.BigEndian.Uint32(srcIP))
-	binary.BigEndian.PutUint32(buffer[4:8], binary.BigEndian.Uint32(dstIP))
-	// leave byte 8 (Fixed 8 bits) as all zero as byte 8
-	buffer[8] = 0
-	buffer[9] = protocolId
-	binary.BigEndian.PutUint16(buffer[10:12], pcpFrameLength)
-	return nil
-}
-
-// Function to extract payload from an IP packet
-func ExtractIpPayload(ipFrame []byte) (int, error) {
-	// Check if the minimum size of the IP header is present
-	if len(ipFrame) < 20 {
-		return 0, fmt.Errorf("invalid IP packet: insufficient header length")
-	}
-
-	// Determine the length of the IP header (in 32-bit words)
-	headerLen := int(ipFrame[0]&0x0F) * 4
-
-	// Check if the packet length is valid
-	if len(ipFrame) < headerLen {
-		return 0, fmt.Errorf("invalid IP packet: insufficient packet length")
-	}
-
-	// Extract the payload by skipping past the IP header
-	//payload := ipFrame[headerLen:]
-
-	return headerLen, nil
 }
 
 func GenerateISN() (uint32, error) {

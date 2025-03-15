@@ -300,16 +300,6 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 		return
 	}
 
-	//log.Println("extracted PCP frame length is", index)
-	// check PCP packet checksum
-	// please note the first TcpPseudoHeaderLength bytes are reseved for Tcp pseudo header
-	if p.config.verifyChecksum {
-		if !VerifyChecksum(buffer[index-TcpPseudoHeaderLength:n], p.serverAddr, p.localAddr, uint8(p.protocolId)) {
-			log.Println("PcpProtocolConnection.clientProcessingIncomingPacket: Packet checksum verification failed. Skip this packet.")
-			return
-		}
-	}
-
 	// Extract destination port
 	pcpFrame := buffer[index:n]
 
@@ -415,13 +405,6 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 
 		log.Println("PcpProtocolConnection.handlingIncomingPackets:Error reading:", err)
 		return
-	}
-
-	if p.config.verifyChecksum {
-		if !VerifyChecksum(pcpFrame[:TcpPseudoHeaderLength+n], addr, p.serverAddr, uint8(p.protocolId)) {
-			log.Println("PcpProtocolConnection.serverProcessingIncomingPacket: Packet checksum verification failed. Skip this packet.")
-			return
-		}
 	}
 
 	// Extract destination port
