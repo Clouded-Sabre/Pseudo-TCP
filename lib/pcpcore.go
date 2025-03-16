@@ -6,7 +6,6 @@ import (
 	"net"
 	"time"
 
-	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 	rs "github.com/Clouded-Sabre/rawsocket/lib"
 	rp "github.com/Clouded-Sabre/ringpool/lib"
 
@@ -75,7 +74,7 @@ func NewPcpCore(pcpcoreConfig *PcpCoreConfig) (*PcpCore, error) {
 }
 
 // dialPcp simulates the TCP dial function interface for PCP.
-func (p *PcpCore) DialPcp(localIP string, serverIP string, serverPort uint16, pcpConfig *config.Config) (*Connection, error) {
+func (p *PcpCore) DialPcp(localIP string, serverIP string, serverPort uint16, pcpConnConfig *pcpProtocolConnConfig) (*Connection, error) {
 	// first normalize IP address string before making key
 	serverAddr, err := net.ResolveIPAddr("ip", serverIP)
 	if err != nil {
@@ -87,7 +86,7 @@ func (p *PcpCore) DialPcp(localIP string, serverIP string, serverPort uint16, pc
 		return nil, err
 	}
 
-	pcpConnConfig := newPcpProtocolConnConfig(pcpConfig)
+	//pcpConnConfig := newPcpProtocolConnConfig(pcpConfig)
 	pConnKey := fmt.Sprintf("%s-%s", serverAddr.IP.To4().String(), localAddr.IP.To4().String())
 	// Check if the connection exists in the connection map
 	pConn, ok := p.protoConnectionMap[pConnKey]
@@ -112,7 +111,7 @@ func (p *PcpCore) DialPcp(localIP string, serverIP string, serverPort uint16, pc
 }
 
 // ListenPcp starts listening for incoming packets on the service's port.
-func (p *PcpCore) ListenPcp(serviceIP string, port int, pcpConfig *config.Config) (*Service, error) {
+func (p *PcpCore) ListenPcp(serviceIP string, port int, pcpConnConfig *pcpProtocolConnConfig) (*Service, error) {
 	// first check if corresponding PcpServerProtocolConnection obj exists or not
 	// Normalize IP address string before making key from it
 	serviceAddr, err := net.ResolveIPAddr("ip", serviceIP)
@@ -122,7 +121,7 @@ func (p *PcpCore) ListenPcp(serviceIP string, port int, pcpConfig *config.Config
 	}
 	normServiceIpString := serviceAddr.IP.To4().String()
 
-	pcpConnConfig := newPcpProtocolConnConfig(pcpConfig)
+	//pcpConnConfig := newPcpProtocolConnConfig(pcpConfig)
 	pConnKey := normServiceIpString
 	// Check if the connection exists in the connection map
 	pConn, ok := p.protoConnectionMap[pConnKey]

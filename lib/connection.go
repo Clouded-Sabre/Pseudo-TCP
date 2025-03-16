@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 	rp "github.com/Clouded-Sabre/ringpool/lib"
 )
 
@@ -114,7 +113,7 @@ type connectionConfig struct {
 	showStatistics          bool
 }
 
-func newConnectionConfig(pcpConfig *config.Config) *connectionConfig {
+/*func newConnectionConfig(pcpConfig *config.Config) *connectionConfig {
 	connConfig := &connectionConfig{
 		windowScale:             pcpConfig.WindowScale,
 		preferredMSS:            pcpConfig.PreferredMSS,
@@ -137,7 +136,7 @@ func newConnectionConfig(pcpConfig *config.Config) *connectionConfig {
 	log.Printf("PCP connection Configuration: %+v\n", *connConfig)
 
 	return connConfig
-}
+}*/
 
 func NewDefaultConnectionConfig() *connectionConfig {
 	return &connectionConfig{

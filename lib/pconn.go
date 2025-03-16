@@ -10,9 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 	rs "github.com/Clouded-Sabre/rawsocket/lib"
 	rp "github.com/Clouded-Sabre/ringpool/lib"
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
 )
 
 // pcp protocol connection struct
@@ -54,7 +55,7 @@ type pcpProtocolConnConfig struct {
 	pconnOutputQueue                 int
 }
 
-func newPcpProtocolConnConfig(pcpConfig *config.Config) *pcpProtocolConnConfig {
+/*func newPcpProtocolConnConfig(pcpConfig *config.Config) *pcpProtocolConnConfig {
 	return &pcpProtocolConnConfig{
 		iptableRuleDaley:     pcpConfig.IptableRuleDaley,
 		preferredMSS:         pcpConfig.PreferredMSS,
@@ -66,7 +67,7 @@ func newPcpProtocolConnConfig(pcpConfig *config.Config) *pcpProtocolConnConfig {
 		verifyChecksum:       pcpConfig.ChecksumVerification,
 		pconnOutputQueue:     pcpConfig.PconnOutputQueue,
 	}
-}
+}*/
 
 func NewDefaultPcpProtocolConnConfig() *pcpProtocolConnConfig {
 	return &pcpProtocolConnConfig{
@@ -275,10 +276,8 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	)
 
 	// Set a read deadline to ensure non-blocking behavior
-	//p.ipConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // Example timeout of 100 milliseconds
 	p.rsConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // Example timeout of 100 milliseconds
 
-	//n, err = p.ipConn.Read(buffer)
 	n, err = p.rsConn.Read(buffer)
 	if err != nil {
 		// Check if the error is a timeout
@@ -292,29 +291,25 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 		return
 	}
 
-	//log.Println("The received PCP segment's total length is", n)
-	// extract Pcp frame from the received IP frame
-	index, err := ExtractIpPayload(buffer[:n])
-	if err != nil {
-		log.Println("PcpProtocolConnection.clientProcessingIncomingPacket: Received IP frame is il-formated. Ignore it!", err)
+	// Use gopacket to decode the IP layer and extract the payload
+	packet := gopacket.NewPacket(buffer[:n], layers.LayerTypeIPv4, gopacket.Default)
+	ipLayer := packet.Layer(layers.LayerTypeIPv4)
+	if ipLayer == nil {
+		log.Println("PcpProtocolConnection.clientProcessingIncomingPacket: Failed to decode IP layer")
 		return
 	}
+	//ip, _ := ipLayer.(*layers.IPv4)
 
-	// Extract destination port
-	pcpFrame := buffer[index:n]
-
-	// Extract source and destination ports from the PCP segment
-	if n-index < 4 {
-		log.Println("PcpProtocolConnection.clientProcessingIncomingPacket: TCP/PCP segment too short")
+	// Extract the TCP layer
+	tcpLayer := packet.Layer(layers.LayerTypeTCP)
+	if tcpLayer == nil {
+		log.Println("PcpProtocolConnection.clientProcessingIncomingPacket: Failed to decode TCP layer")
 		return
 	}
+	tcp, _ := tcpLayer.(*layers.TCP)
 
-	sourcePort := binary.BigEndian.Uint16(pcpFrame[:2])
-	destPort := binary.BigEndian.Uint16(pcpFrame[2:4])
-
-	// Create connection key. Since it's incoming packet
-	// source and destination port needs to be reversed when calculating connection key
-	connKey := fmt.Sprintf("%d:%d", destPort, sourcePort)
+	// Create connection key
+	connKey := fmt.Sprintf("%d:%d", tcp.DstPort, tcp.SrcPort)
 
 	// First check if the connection exists in the connection map
 	p.mu.Lock()
@@ -326,10 +321,9 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 		isClosed := conn.isClosed
 		if !isClosed {
 			packet := &PcpPacket{}
-			err = packet.Unmarshal(pcpFrame, p.serverAddr, p.localAddr)
+			err = packet.Unmarshal(tcp.Payload, p.serverAddr, p.localAddr)
 			if err != nil {
 				log.Println("PcpProtocolConnection.clientProcessingIncomingPacket: Received TCP frame is il-formated. Ignore it!", err)
-				// because chunk won't be allocated unless the marshalling is success, there is no need to return the chunk
 				return
 			}
 
@@ -355,10 +349,9 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	p.mu.Unlock()
 	if ok && !tempConn.isClosed { // no need to use mutex since connection is not ready yet
 		packet := &PcpPacket{}
-		err = packet.Unmarshal(pcpFrame, p.serverAddr, p.localAddr)
+		err = packet.Unmarshal(tcp.Payload, p.serverAddr, p.localAddr)
 		if err != nil {
 			log.Println("PcpProtocolConnection.clientProcessingIncomingPacket: Received TCP frame is il-formated. Ignore it!", err)
-			// because chunk won't be allocated unless the marshalling is success, there is no need to return the chunk
 			return
 		}
 
@@ -391,10 +384,8 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 
 	pcpFrame := buffer[TcpPseudoHeaderLength:] // the first lib.TcpPseudoHeaderLength bytes are reserved for Tcp pseudo header
 	// Set a read deadline to ensure non-blocking behavior
-	//p.ipConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // Example timeout of 100 milliseconds
 	p.rsConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // Example timeout of 100 milliseconds
 
-	//n, addr, err := p.ipConn.ReadFrom(pcpFrame)
 	n, addr, err := p.rsConn.ReadFrom(pcpFrame)
 	if err != nil {
 		// Check if the error is a timeout
@@ -407,22 +398,97 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 		return
 	}
 
-	// Extract destination port
-	packet := &PcpPacket{}
-	//err = packet.Unmarshal(pcpFrame[:n], addr, p.serverAddr)
-	err = packet.Unmarshal(pcpFrame[:n], addr, p.serverAddr)
-	if err != nil {
-		log.Println("PcpProtocolConnection.serverProcessingIncomingPacket: PCP packet unmarshal error. Ignore it!", err)
-		// don't need to return chunk because it is done in copyToPayload
+	// Use gopacket to decode the IP layer and extract the payload
+	packet := gopacket.NewPacket(pcpFrame[:n], layers.LayerTypeIPv4, gopacket.Default)
+	ipLayer := packet.Layer(layers.LayerTypeIPv4)
+	if ipLayer == nil {
+		log.Println("PcpProtocolConnection.serverProcessingIncomingPacket: Failed to decode IP layer")
 		return
 	}
+	//ip, _ := ipLayer.(*layers.IPv4)
 
-	if rp.Debug && packet.GetChunkReference() != nil {
-		fp = packet.AddFootPrint("pcpProtocolConn.serverProcessingIncomingPacket")
+	// Extract the TCP layer
+	tcpLayer := packet.Layer(layers.LayerTypeTCP)
+	if tcpLayer == nil {
+		log.Println("PcpProtocolConnection.serverProcessingIncomingPacket: Failed to decode TCP layer")
+		return
+	}
+	tcp, _ := tcpLayer.(*layers.TCP)
+
+	// Create a new PcpPacket from the TCP layer
+	pcpPacket := &PcpPacket{
+		SrcAddr:           addr,
+		DestAddr:          p.serverAddr,
+		SourcePort:        uint16(tcp.SrcPort),
+		DestinationPort:   uint16(tcp.DstPort),
+		SequenceNumber:    tcp.Seq,
+		AcknowledgmentNum: tcp.Ack,
+		Flags:             0,
+		WindowSize:        tcp.Window,
+		UrgentPointer:     tcp.Urgent,
+		Payload:           tcp.Payload,
+		TcpOptions:        &options{},
 	}
 
-	destPort := packet.DestinationPort
-	//log.Printf("Got packet with options: %+v\n", packet.TcpOptions)
+	// Set flags
+	if tcp.SYN {
+		pcpPacket.Flags |= 0x02
+	}
+	if tcp.ACK {
+		pcpPacket.Flags |= 0x10
+	}
+	if tcp.FIN {
+		pcpPacket.Flags |= 0x01
+	}
+	if tcp.RST {
+		pcpPacket.Flags |= 0x04
+	}
+	if tcp.PSH {
+		pcpPacket.Flags |= 0x08
+	}
+	if tcp.URG {
+		pcpPacket.Flags |= 0x20
+	}
+	if tcp.ECE {
+		pcpPacket.Flags |= 0x40
+	}
+	if tcp.CWR {
+		pcpPacket.Flags |= 0x80
+	}
+
+	// Parse TCP options
+	for _, option := range tcp.Options {
+		switch option.OptionType {
+		case layers.TCPOptionKindWindowScale:
+			if len(option.OptionData) == 1 {
+				pcpPacket.TcpOptions.windowScaleShiftCount = option.OptionData[0]
+			}
+		case layers.TCPOptionKindMSS:
+			if len(option.OptionData) == 2 {
+				pcpPacket.TcpOptions.mss = binary.BigEndian.Uint16(option.OptionData)
+			}
+		case layers.TCPOptionKindSACKPermitted:
+			pcpPacket.TcpOptions.permitSack = true
+		case layers.TCPOptionKindSACK:
+			for i := 0; i < len(option.OptionData); i += 8 {
+				leftEdge := binary.BigEndian.Uint32(option.OptionData[i : i+4])
+				rightEdge := binary.BigEndian.Uint32(option.OptionData[i+4 : i+8])
+				pcpPacket.TcpOptions.inSACKOption.blocks = append(pcpPacket.TcpOptions.inSACKOption.blocks, sackblock{leftEdge: leftEdge, rightEdge: rightEdge})
+			}
+		case layers.TCPOptionKindTimestamps:
+			if len(option.OptionData) == 8 {
+				pcpPacket.TcpOptions.timestampEnabled = true
+				pcpPacket.TcpOptions.timestamp = binary.BigEndian.Uint32(option.OptionData[:4])
+				pcpPacket.TcpOptions.tsEchoReplyValue = binary.BigEndian.Uint32(option.OptionData[4:])
+			}
+		}
+	}
+
+	if rp.Debug && pcpPacket.GetChunkReference() != nil {
+		fp = pcpPacket.AddFootPrint("pcpProtocolConn.serverProcessingIncomingPacket")
+	}
+
+	destPort := pcpPacket.DestinationPort
 
 	// Check if a connection is registered for the packet
 	p.mu.Lock()
@@ -430,30 +496,28 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 	p.mu.Unlock()
 
 	if !ok {
-		//fmt.Println("No service registered for port:", destPort)
-		// return the packet's chunk
-		if rp.Debug && packet.GetChunkReference() != nil {
-			packet.TickFootPrint(fp)
+		if rp.Debug && pcpPacket.GetChunkReference() != nil {
+			pcpPacket.TickFootPrint(fp)
 		}
-		packet.ReturnChunk()
+		pcpPacket.ReturnChunk()
 		return
 	}
 
-	if service.isClosed && packet.GetChunkReference() != nil { // OK but sevice is closed. Only signaling packets get passed
+	if service.isClosed && pcpPacket.GetChunkReference() != nil {
 		log.Println("PcpProtocolConnection.serverProcessingIncomingPacket: Packet is destined to a closed service. Ignore it.")
-		if rp.Debug && packet.GetChunkReference() != nil {
-			packet.TickFootPrint(fp)
+		if rp.Debug && pcpPacket.GetChunkReference() != nil {
+			pcpPacket.TickFootPrint(fp)
 		}
-		packet.ReturnChunk()
+		pcpPacket.ReturnChunk()
 		return
 	}
 
 	// Dispatch the packet to the corresponding service's input channel
-	if rp.Debug && packet.GetChunkReference() != nil {
-		packet.TickFootPrint(fp)
-		packet.AddChannel("Service.InputChannel")
+	if rp.Debug && pcpPacket.GetChunkReference() != nil {
+		pcpPacket.TickFootPrint(fp)
+		pcpPacket.AddChannel("Service.InputChannel")
 	}
-	service.inputChannel <- packet
+	service.inputChannel <- pcpPacket
 }
 
 // handleServicePacket is the main service packet dispatches loop.

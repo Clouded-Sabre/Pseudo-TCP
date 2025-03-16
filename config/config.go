@@ -35,7 +35,7 @@ type Config struct {
 	ConnSignalRetryInterval int  `yaml:"conn_signal_retry_interval"`
 	PConnTimeout            int  `yaml:"pconn_time_out"`
 	IptableRuleDaley        int  `yaml:"iptable_rule_daley"`
-	ChecksumVerification    bool `yaml:"checksum_verification"`
+	//ChecksumVerification    bool `yaml:"checksum_verification"`
 	Debug                   bool `yaml:"debug"`
 	PoolDebug               bool `yaml:"pool_debug"`
 	ProcessingTimeThreshold int  `yaml:"processing_time_threshold"`
@@ -64,12 +64,12 @@ func ReadConfig(confFilePath string) (*Config, error) {
 		ResendInterval:          1000, // interval between resend of lost packets
 		SackPermitSupport:       true,
 		SackOptionSupport:       false,
-		PayloadPoolSize:         2000,  // number of packets in pre-allocated payload pool
-		ConnSignalRetry:         5,     // 3-way handshake and 4-way termination max number of retry
-		ConnSignalRetryInterval: 2,     // in seconds
-		PConnTimeout:            10,    // in seconds
-		IptableRuleDaley:        200,   // in milliseconds
-		ChecksumVerification:    false, // default is false due to hardware assisted checksum verification is typically used
+		PayloadPoolSize:         2000, // number of packets in pre-allocated payload pool
+		ConnSignalRetry:         5,    // 3-way handshake and 4-way termination max number of retry
+		ConnSignalRetryInterval: 2,    // in seconds
+		PConnTimeout:            10,   // in seconds
+		IptableRuleDaley:        200,  // in milliseconds
+		//ChecksumVerification:    false, // default is false due to hardware assisted checksum verification is typically used
 		Debug:                   false,
 		PoolDebug:               false,
 		ProcessingTimeThreshold: 50,   // used in packet ring pool to check if a function or channel holds a packet for too long time
