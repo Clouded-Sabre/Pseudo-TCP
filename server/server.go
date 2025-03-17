@@ -37,15 +37,9 @@ func init() {
 }
 
 func main() {
-	config.AppConfig, err = config.ReadConfig("config.yaml")
+	pcpCoreConfig, connConfig, err := config.LoadConfig("config.yaml")
 	if err != nil {
 		log.Fatalln("Configurtion file error:", err)
-	}
-
-	pcpCoreConfig := &lib.PcpCoreConfig{
-		ProtocolID:      uint8(config.AppConfig.ProtocolID),
-		PreferredMSS:    config.AppConfig.PreferredMSS,
-		PayloadPoolSize: config.AppConfig.PayloadPoolSize,
 	}
 
 	// Create PCP server
@@ -63,7 +57,7 @@ func main() {
 	closeChan := make(chan struct{})
 
 	// Start the PCP server
-	srv, err := pcpCoreObj.ListenPcp(serverIP, serverPort, config.AppConfig)
+	srv, err := pcpCoreObj.ListenPcp(serverIP, serverPort, connConfig)
 	if err != nil {
 		log.Printf("PCP server error listening at %s:%d: %s", serverIP, serverPort, err)
 		return
@@ -93,7 +87,7 @@ func main() {
 			break
 		} else {
 			wg.Add(1)
-			go handleConnection(conn, closeChan, &wg)
+			go handleConnection(conn, closeChan, &wg, pcpCoreConfig)
 		}
 	}
 
@@ -103,9 +97,9 @@ func main() {
 	os.Exit(0)
 }
 
-func handleConnection(conn *lib.Connection, closeChan chan struct{}, wg *sync.WaitGroup) {
+func handleConnection(conn *lib.Connection, closeChan chan struct{}, wg *sync.WaitGroup, coreConfig *lib.PcpCoreConfig) {
 	defer wg.Done()
-	buffer := make([]byte, config.AppConfig.PreferredMSS)
+	buffer := make([]byte, coreConfig.PreferredMSS)
 S:
 	for {
 		select {

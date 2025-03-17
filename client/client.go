@@ -25,16 +25,11 @@ func main() {
 		iterationInterval = 15 // in seconds
 	)
 
-	var err error
-	config.AppConfig, err = config.ReadConfig("config.yaml")
+	//var err error
+	pcpCoreConfig, connConfig, err := config.LoadConfig("config.yaml")
 	if err != nil {
 		log.Fatalln("Configurtion file error:", err)
 	}
-
-	pcpCoreConfig := lib.NewDefaultPcpCoreConfig()
-	pcpCoreConfig.ProtocolID = uint8(config.AppConfig.ProtocolID)
-	pcpCoreConfig.PreferredMSS = config.AppConfig.PreferredMSS
-	pcpCoreConfig.PayloadPoolSize = config.AppConfig.PayloadPoolSize
 
 	pcpCoreObj, err := lib.NewPcpCore(pcpCoreConfig)
 	if err != nil {
@@ -43,10 +38,11 @@ func main() {
 	}
 	defer pcpCoreObj.Close()
 
-	buffer := make([]byte, config.AppConfig.PreferredMSS)
+	buffer := make([]byte, pcpCoreConfig.PreferredMSS)
 	for j := 0; j < iteration; j++ {
 		// Dial to the server
-		conn, err := pcpCoreObj.DialPcp(*sourceIP, *serverIP, uint16(*serverPort), config.AppConfig)
+		pcpCoreConfig.PcpProtocolConnConfig.ConnConfig = connConfig
+		conn, err := pcpCoreObj.DialPcp(*sourceIP, *serverIP, uint16(*serverPort), connConfig)
 		if err != nil {
 			fmt.Println("Error connecting:", err)
 			return

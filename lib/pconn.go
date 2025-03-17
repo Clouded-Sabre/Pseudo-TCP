@@ -19,7 +19,7 @@ import (
 // pcp protocol connection struct
 type PcpProtocolConnection struct {
 	//static
-	config                *pcpProtocolConnConfig
+	config                *PcpProtocolConnConfig
 	key                   string      // PCP protocol connection's key
 	protocolId            int         // protocol id
 	isServer              bool        // Role of the object
@@ -44,15 +44,15 @@ type PcpProtocolConnection struct {
 	localPortPool *PortPool  // a pool of avaibable local port numbers for local port number allocation
 }
 
-type pcpProtocolConnConfig struct {
-	iptableRuleDaley                 int
-	preferredMSS                     int
-	packetLostSimulation             bool
-	pConnTimeout                     int
-	clientPortUpper, clientPortLower int
-	connConfig                       *connectionConfig
-	verifyChecksum                   bool
-	pconnOutputQueue                 int
+type PcpProtocolConnConfig struct {
+	IptableRuleDaley                 int
+	PreferredMSS                     int
+	PacketLostSimulation             bool
+	PConnTimeout                     int
+	ClientPortUpper, ClientPortLower int
+	ConnConfig                       *ConnectionConfig
+	VerifyChecksum                   bool
+	PConnOutputQueue                 int
 }
 
 /*func newPcpProtocolConnConfig(pcpConfig *config.Config) *pcpProtocolConnConfig {
@@ -69,21 +69,21 @@ type pcpProtocolConnConfig struct {
 	}
 }*/
 
-func NewDefaultPcpProtocolConnConfig() *pcpProtocolConnConfig {
-	return &pcpProtocolConnConfig{
-		iptableRuleDaley:     200,
-		preferredMSS:         1440, // Maximum Segment Size
-		packetLostSimulation: false,
-		pConnTimeout:         10, // 10 seconds
-		clientPortUpper:      65535,
-		clientPortLower:      49152,
-		connConfig:           NewDefaultConnectionConfig(),
-		verifyChecksum:       true, // Checksum verification is enabled by default
-		pconnOutputQueue:     100,
+func NewPcpProtocolConnConfig() *PcpProtocolConnConfig {
+	return &PcpProtocolConnConfig{
+		IptableRuleDaley:     200,
+		PreferredMSS:         1440, // Maximum Segment Size
+		PacketLostSimulation: false,
+		PConnTimeout:         10, // 10 seconds
+		ClientPortUpper:      65535,
+		ClientPortLower:      49152,
+		ConnConfig:           NewConnectionConfig(),
+		VerifyChecksum:       true, // Checksum verification is enabled by default
+		PConnOutputQueue:     100,
 	}
 }
 
-func newPcpProtocolConnection(pcpCore *PcpCore, key string, isServer bool, protocolId int, serverAddr, localAddr *net.IPAddr, pConnCloseSignal chan *PcpProtocolConnection, config *pcpProtocolConnConfig) (*PcpProtocolConnection, error) {
+func newPcpProtocolConnection(pcpCore *PcpCore, key string, isServer bool, protocolId int, serverAddr, localAddr *net.IPAddr, pConnCloseSignal chan *PcpProtocolConnection, config *PcpProtocolConnConfig) (*PcpProtocolConnection, error) {
 	var (
 		//ipConn *net.IPConn
 		rsConn rs.RawConnection
@@ -116,7 +116,7 @@ func newPcpProtocolConnection(pcpCore *PcpCore, key string, isServer bool, proto
 		serverAddr: serverAddr,
 		//ipConn:             ipConn,
 		rsConn:             rsConn,
-		outputChan:         make(chan *PcpPacket, config.pconnOutputQueue),
+		outputChan:         make(chan *PcpPacket, config.PConnOutputQueue),
 		sigOutputChan:      make(chan *PcpPacket, 10),
 		connectionMap:      make(map[string]*Connection),
 		tempConnectionMap:  make(map[string]*Connection),
@@ -142,7 +142,7 @@ func newPcpProtocolConnection(pcpCore *PcpCore, key string, isServer bool, proto
 	return pConnection, nil
 }
 
-func (p *PcpProtocolConnection) dial(serverPort int, connConfig *connectionConfig) (*Connection, error) {
+func (p *PcpProtocolConnection) dial(serverPort int, connConfig *ConnectionConfig) (*Connection, error) {
 	log.Println("PcpProtocolConnection.dial: connConfig is", connConfig)
 	// Choose a random client port
 	clientPort, err := p.localPortPool.allocatePort()
@@ -187,7 +187,7 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *connectionConfi
 	//p.iptableRules = append(p.iptableRules, serverPort) // record it for later deletion of the rules when connection closes
 
 	// sleep for 200ms to make sure filtering rule takes effect
-	SleepForMs(p.config.iptableRuleDaley)
+	SleepForMs(p.config.IptableRuleDaley)
 
 	// Send SYN to server
 	newConn.initSendSyn()
@@ -528,9 +528,9 @@ func (p *PcpProtocolConnection) handleIncomingPackets() {
 	// the first lib.TcpPseudoHeaderLength bytes are reserved for Tcp Pseudo Header
 	var buffer []byte
 	if p.isServer {
-		buffer = make([]byte, p.config.preferredMSS+TcpHeaderLength+TcpOptionsMaxLength+TcpPseudoHeaderLength)
+		buffer = make([]byte, p.config.PreferredMSS+TcpHeaderLength+TcpOptionsMaxLength+TcpPseudoHeaderLength)
 	} else {
-		buffer = make([]byte, p.config.preferredMSS+TcpHeaderLength+TcpOptionsMaxLength+IpHeaderMaxLength+TcpPseudoHeaderLength)
+		buffer = make([]byte, p.config.PreferredMSS+TcpHeaderLength+TcpOptionsMaxLength+IpHeaderMaxLength+TcpPseudoHeaderLength)
 	}
 
 	// main loop for incoming packets
@@ -556,7 +556,7 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 	var (
 		count      = 0
 		lostCount  = 0
-		frameBytes = make([]byte, p.config.preferredMSS+TcpHeaderLength+TcpOptionsMaxLength+TcpPseudoHeaderLength)
+		frameBytes = make([]byte, p.config.PreferredMSS+TcpHeaderLength+TcpOptionsMaxLength+TcpPseudoHeaderLength)
 		n          = 0
 		fp         int
 		err        error
@@ -585,7 +585,7 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 			fp = packet.AddFootPrint("pcpProtocolConnection.handleOutgoingPackets")
 		}
 
-		if p.config.packetLostSimulation {
+		if p.config.PacketLostSimulation {
 			if count == 0 {
 				lostCount = rand.Intn(10)
 			}
@@ -627,7 +627,7 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 					}
 					packet.Conn.resendPackets.AddSentPacket(packet)
 				} else {
-					if p.config.connConfig.debug {
+					if p.config.ConnConfig.Debug {
 						fmt.Println("PCPProtocolConnection.handleOutgoingPackets: this is a resent packet. Do not put it into ResendPackets")
 					}
 					if rp.Debug && packet.GetChunkReference() != nil {
@@ -643,7 +643,7 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 			}
 		}
 
-		if p.config.packetLostSimulation {
+		if p.config.PacketLostSimulation {
 			count = (count + 1) % 10
 			packetLost = false
 		}
@@ -697,8 +697,8 @@ func (p *PcpProtocolConnection) handleCloseConnection() {
 				}
 
 				// Start a new timer for 10 seconds
-				log.Println("PcpProtocolConnection.handleCloseConnection: Wait for", p.config.pConnTimeout, "seconds before closing the PCP protocol connection")
-				p.emptyMapTimer = time.AfterFunc(time.Duration(p.config.pConnTimeout)*time.Second, func() {
+				log.Println("PcpProtocolConnection.handleCloseConnection: Wait for", p.config.PConnTimeout, "seconds before closing the PCP protocol connection")
+				p.emptyMapTimer = time.AfterFunc(time.Duration(p.config.PConnTimeout)*time.Second, func() {
 					// Close the connection by sending closeSignal to all goroutines and clear resources
 					if p.emptyMapTimer != nil {
 						p.emptyMapTimer.Stop()

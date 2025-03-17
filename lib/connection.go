@@ -16,7 +16,7 @@ import (
 type Connection struct {
 	// statics
 	params         *connectionParams // connection parameters
-	config         *connectionConfig // connection config
+	config         *ConnectionConfig // connection config
 	windowSize     uint16            // PCP windows size, static once connection establishes
 	initialSeq     uint32            // connection's initial SEQ, static once connection establishes
 	initialPeerSeq uint32            // the initial SEQ from Peer, static once connection establishes
@@ -94,23 +94,23 @@ type connectionParams struct {
 }
 
 // connection config - see config file for detailed explanation
-type connectionConfig struct {
-	windowScale             int
-	preferredMSS            int
-	sackPermitSupport       bool
-	sackOptionSupport       bool
-	idleTimeout             int
-	keepAliveEnabled        bool
-	keepaliveInterval       int
-	maxKeepaliveAttempts    int
-	resendInterval          int
-	maxResendCount          int
-	debug                   bool // whether debug mode is on
-	windowSizeWithScale     int
-	connSignalRetryInterval int
-	connSignalRetry         int
-	connectionInputQueue    int
-	showStatistics          bool
+type ConnectionConfig struct {
+	WindowScale             int
+	PreferredMSS            int
+	SackPermitSupport       bool
+	SackOptionSupport       bool
+	IdleTimeout             int
+	KeepAliveEnabled        bool
+	KeepaliveInterval       int
+	MaxKeepaliveAttempts    int
+	ResendInterval          int
+	MaxResendCount          int
+	Debug                   bool // whether debug mode is on
+	WindowSizeWithScale     int
+	ConnSignalRetryInterval int
+	ConnSignalRetry         int
+	ConnectionInputQueue    int
+	ShowStatistics          bool
 }
 
 /*func newConnectionConfig(pcpConfig *config.Config) *connectionConfig {
@@ -138,33 +138,33 @@ type connectionConfig struct {
 	return connConfig
 }*/
 
-func NewDefaultConnectionConfig() *connectionConfig {
-	return &connectionConfig{
-		windowScale:             14,
-		preferredMSS:            1440,
-		sackPermitSupport:       true,
-		sackOptionSupport:       true,
-		idleTimeout:             25, //seconds
-		keepAliveEnabled:        true,
-		keepaliveInterval:       5, //seconds
-		maxKeepaliveAttempts:    3,
-		resendInterval:          200, //milliseconds
-		maxResendCount:          5,
-		windowSizeWithScale:     12800,
-		connSignalRetryInterval: 2, //seconds
-		connSignalRetry:         5,
-		connectionInputQueue:    1000,
-		showStatistics:          true,
+func NewConnectionConfig() *ConnectionConfig {
+	return &ConnectionConfig{
+		WindowScale:             14,
+		PreferredMSS:            1440,
+		SackPermitSupport:       true,
+		SackOptionSupport:       true,
+		IdleTimeout:             25, //seconds
+		KeepAliveEnabled:        true,
+		KeepaliveInterval:       5, //seconds
+		MaxKeepaliveAttempts:    3,
+		ResendInterval:          200, //milliseconds
+		MaxResendCount:          5,
+		WindowSizeWithScale:     12800,
+		ConnSignalRetryInterval: 2, //seconds
+		ConnSignalRetry:         5,
+		ConnectionInputQueue:    1000,
+		ShowStatistics:          true,
 	}
 }
 
-func newConnection(connParams *connectionParams, connConfig *connectionConfig) (*Connection, error) {
+func newConnection(connParams *connectionParams, connConfig *ConnectionConfig) (*Connection, error) {
 	isn, _ := GenerateISN()
 	options := &options{
-		windowScaleShiftCount: uint8(connConfig.windowScale),
-		mss:                   uint16(connConfig.preferredMSS),
-		permitSack:            connConfig.sackPermitSupport,
-		SackEnabled:           connConfig.sackOptionSupport,
+		windowScaleShiftCount: uint8(connConfig.WindowScale),
+		mss:                   uint16(connConfig.PreferredMSS),
+		permitSack:            connConfig.SackPermitSupport,
+		SackEnabled:           connConfig.SackOptionSupport,
 		timestampEnabled:      true,
 	}
 	newConn := &Connection{
@@ -174,16 +174,16 @@ func newConnection(connParams *connectionParams, connConfig *connectionConfig) (
 		initialSeq:         isn,
 		lastAckNumber:      0,
 		windowSize:         math.MaxUint16,
-		inputChannel:       make(chan *PcpPacket, connConfig.connectionInputQueue),
+		inputChannel:       make(chan *PcpPacket, connConfig.ConnectionInputQueue),
 		readChannel:        make(chan *PcpPacket, 200),
 		readDeadline:       time.Time{},
 
 		// all the rest variables keep there init value
 		tcpOptions:        options,
-		idleTimeout:       time.Second * time.Duration(connConfig.idleTimeout),
-		keepaliveInterval: time.Second * time.Duration(connConfig.keepaliveInterval),
+		idleTimeout:       time.Second * time.Duration(connConfig.IdleTimeout),
+		keepaliveInterval: time.Second * time.Duration(connConfig.KeepaliveInterval),
 		resendPackets:     *NewResendPackets(),
-		resendInterval:    time.Duration(connConfig.resendInterval) * time.Millisecond,
+		resendInterval:    time.Duration(connConfig.ResendInterval) * time.Millisecond,
 		revPacketCache:    *NewPacketGapMap(),
 
 		closeSignal:      make(chan struct{}),
@@ -192,12 +192,12 @@ func newConnection(connParams *connectionParams, connConfig *connectionConfig) (
 		isClosedMu:       sync.Mutex{},
 	}
 
-	if connConfig.keepAliveEnabled {
-		newConn.keepaliveTimer = time.NewTimer(time.Duration(connConfig.keepaliveInterval))
+	if connConfig.KeepAliveEnabled {
+		newConn.keepaliveTimer = time.NewTimer(time.Duration(connConfig.KeepaliveInterval))
 		newConn.startKeepaliveTimer()
 	}
 
-	if connConfig.showStatistics {
+	if connConfig.ShowStatistics {
 		newConn.wg.Add(1)
 		go newConn.StartStatsPrinter()
 	}
@@ -248,7 +248,7 @@ func (c *Connection) handleIncomingPackets() {
 				packet.AddFootPrint("Connection.HandleIncomingPackets")
 			}
 			// reset the keepalive timer
-			if c.config.keepAliveEnabled {
+			if c.config.KeepAliveEnabled {
 				c.keepaliveTimerMutex.Lock()
 				c.keepaliveTimer.Reset(c.idleTimeout)
 				c.keepaliveTimerMutex.Unlock()
@@ -409,7 +409,7 @@ func (c *Connection) handle3WayHandshake() {
 				// handle TCP option negotiation
 				if c.tcpOptions.windowScaleShiftCount > 0 {
 					fmt.Println("Set Window Size with Scaling support!")
-					c.windowSize = uint16(c.config.windowSizeWithScale)
+					c.windowSize = uint16(c.config.WindowSizeWithScale)
 				}
 
 				// handle TCP option timestamp
@@ -472,7 +472,7 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 
 		// Scan through packets in RevPacketCache in descending order of sequence number
 		packetsInOrder := c.revPacketCache.getPacketsInAscendingOrder()
-		resentTimeOut := c.config.maxResendCount * c.config.resendInterval
+		resentTimeOut := c.config.MaxResendCount * c.config.ResendInterval
 		for i := len(packetsInOrder) - 1; i >= 0; i-- {
 			cachedPacket := packetsInOrder[i]
 			// Calculate the age of the packet
@@ -713,7 +713,7 @@ func (c *Connection) resendLostPackets() {
 		if rp.Debug && packetInfo.Data.GetChunkReference() != nil {
 			fp = packetInfo.Data.AddFootPrint("Connection.ResendLostPacket")
 		}
-		if packetInfo.ResendCount < c.config.maxResendCount {
+		if packetInfo.ResendCount < c.config.MaxResendCount {
 			// Check if the packet has been marked as lost based on SACK blocks
 			lost := true
 			for _, sackBlock := range c.tcpOptions.inSACKOption.blocks {
@@ -750,7 +750,7 @@ func (c *Connection) resendLostPackets() {
 			packetsToRemove = append(packetsToRemove, seqNum)
 		}
 
-		if c.config.debug && packetInfo.Data.chunk != nil {
+		if c.config.Debug && packetInfo.Data.chunk != nil {
 			packetInfo.Data.chunk.TickFootPrint(fp)
 		}
 	}
@@ -815,7 +815,7 @@ func (c *Connection) startKeepaliveTimer() {
 
 	// Start the keepalive timer
 	c.keepaliveTimer = time.AfterFunc(timeout, func() {
-		if c.timeoutCount == c.config.maxKeepaliveAttempts {
+		if c.timeoutCount == c.config.MaxKeepaliveAttempts {
 			log.Printf("Connection %s idle timed out. Close it.\n", c.params.key)
 			// connection idle timed out. clear connection resoureces and close connection
 			c.clearConnResource()
@@ -1039,13 +1039,13 @@ func (c *Connection) startConnSignalTimer() {
 
 	log.Println("Pcp connection connSignalTimer started")
 	// Restart the timer
-	c.connSignalTimer = time.AfterFunc(time.Second*time.Duration(c.config.connSignalRetryInterval), func() {
+	c.connSignalTimer = time.AfterFunc(time.Second*time.Duration(c.config.ConnSignalRetryInterval), func() {
 		// Increment ConnSignalRetryCount
 		c.connSignalRetryCount++
 		log.Printf("Pcp connection connSignalTimer fired #%d\n", c.connSignalRetryCount)
 
 		// Check if retries exceed the maximum allowed retries
-		if c.connSignalRetryCount >= c.config.connSignalRetry {
+		if c.connSignalRetryCount >= c.config.ConnSignalRetry {
 			// Signal 3-way handshake or 4-way termination failure
 			c.connSignalTimer.Stop()
 			c.connSignalRetryCount = 0 // reset it to 0

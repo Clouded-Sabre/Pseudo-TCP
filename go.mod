@@ -17,4 +17,5 @@ require (
 	github.com/moriyoshi/routewrapper v0.0.0-20180228100351-e52d8d14cf39 // indirect
 	golang.org/x/net v0.27.0 // indirect
 	golang.org/x/sys v0.30.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1
 )

@@ -94,16 +94,11 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		config.AppConfig, err = config.ReadConfig("config.yaml")
+		pcpCoreConfig, connConfig, err := config.LoadConfig("config.yaml")
 		if err != nil {
 			log.Fatalln("Configurtion file error:", err)
 		}
 
-		pcpCoreConfig := &lib.PcpCoreConfig{
-			ProtocolID:      uint8(config.AppConfig.ProtocolID),
-			PreferredMSS:    config.AppConfig.PreferredMSS,
-			PayloadPoolSize: config.AppConfig.PayloadPoolSize,
-		}
 		pcpCoreObj, err = lib.NewPcpCore(pcpCoreConfig)
 		if err != nil {
 			log.Println(err)
@@ -112,7 +107,7 @@ func main() {
 		defer pcpCoreObj.Close()
 
 		// Dial to the server
-		pcpConn, err = pcpCoreObj.DialPcp(sourceIpStr, serverIpStr, uint16(serverPort), config.AppConfig)
+		pcpConn, err = pcpCoreObj.DialPcp(sourceIpStr, serverIpStr, uint16(serverPort), connConfig)
 		if err != nil {
 			fmt.Println("Error connecting:", err)
 			return

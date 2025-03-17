@@ -12,7 +12,7 @@ import (
 // Service represents a service listening on a specific port.
 type Service struct {
 	// static
-	connConfig            *connectionConfig      // Connection Config
+	connConfig            *ConnectionConfig      // Connection Config
 	pcpProtocolConnection *PcpProtocolConnection // point back to parent pcp server
 	serviceAddr           net.Addr
 	port                  int
@@ -33,7 +33,7 @@ type Service struct {
 }
 
 // NewService creates a new service listening on the specified port.
-func newService(pcpProtocolConn *PcpProtocolConnection, serviceAddr net.Addr, port int, outputChan, sigOutputChan chan *PcpPacket, serviceCloseSignal chan *Service, connConfig *connectionConfig) (*Service, error) {
+func newService(pcpProtocolConn *PcpProtocolConnection, serviceAddr net.Addr, port int, outputChan, sigOutputChan chan *PcpPacket, serviceCloseSignal chan *Service, connConfig *ConnectionConfig) (*Service, error) {
 	newSrv := &Service{
 		pcpProtocolConnection: pcpProtocolConn,
 		serviceAddr:           serviceAddr,

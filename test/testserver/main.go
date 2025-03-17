@@ -126,15 +126,9 @@ func startPCPServer() {
 		log.Fatal(err)
 	}
 
-	config.AppConfig, err = config.ReadConfig("config.yaml")
+	pcpCoreConfig, connConfig, err := config.LoadConfig("config.yaml")
 	if err != nil {
 		log.Fatalln("Configurtion file error:", err)
-	}
-
-	pcpCoreConfig := &lib.PcpCoreConfig{
-		ProtocolID:      uint8(config.AppConfig.ProtocolID),
-		PreferredMSS:    config.AppConfig.PreferredMSS,
-		PayloadPoolSize: config.AppConfig.PayloadPoolSize,
 	}
 
 	// Create PCP server
@@ -145,7 +139,7 @@ func startPCPServer() {
 	}
 	log.Println("PCP core started.")
 
-	listener, err := pcpCoreObj.ListenPcp(svcIPstr, svcPort, config.AppConfig)
+	listener, err := pcpCoreObj.ListenPcp(svcIPstr, svcPort, connConfig)
 	if err != nil {
 		fmt.Println("Error starting PCP server:", err)
 		os.Exit(1)

@@ -52,16 +52,9 @@ func main() {
 	mtu = *mtuFlag
 
 	// Create  address to listen on all available network interfaces and a specific port
-	config.AppConfig, err = config.ReadConfig("config.yaml")
+	pcpCoreConfig, connConfig, err := config.LoadConfig("config.yaml")
 	if err != nil {
 		log.Fatalln("Configurtion file error:", err)
-	}
-
-	pcpCoreConfig := &lib.PcpCoreConfig{
-		ProtocolID:      uint8(config.AppConfig.ProtocolID),
-		PreferredMSS:    config.AppConfig.PreferredMSS,
-		PayloadPoolSize: config.AppConfig.PayloadPoolSize,
-		Debug:           config.AppConfig.Debug,
 	}
 
 	// Create PCP server
@@ -79,7 +72,7 @@ func main() {
 	closeChan := make(chan struct{})
 
 	// Start the PCP server
-	svc, err := pcpCoreObj.ListenPcp(svcIpStr, svcPort, config.AppConfig)
+	svc, err := pcpCoreObj.ListenPcp(svcIpStr, svcPort, connConfig)
 	if err != nil {
 		log.Printf("PCP server error listening at %s: %s", *serverAddrFlag, err)
 		return
