@@ -4,10 +4,7 @@ go 1.22.4
 
 toolchain go1.24.0
 
-require (
-	github.com/Clouded-Sabre/ringpool v0.0.0-20240714075617-d50807410f3f
-	gopkg.in/yaml.v2 v2.4.0
-)
+require github.com/Clouded-Sabre/ringpool v0.0.0-20240714075617-d50807410f3f
 
 require github.com/imgk/divert-go v0.0.0-20220205193416-faaa83c2c10a
 
