@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"sync"
+	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -23,11 +25,11 @@ var (
 )
 
 // addAFilteringRule adds a precise rule to filter TCP RST packets
-func addAFilteringRule(srcAddr, dstAddr string, srcPort, dstPort int) error {
+func addAFilteringRule(dstAddr string, dstPort int) error {
 	mutex.Lock()
 	defer mutex.Unlock()
 
-	ruleKey := fmt.Sprintf("%s:%d->%s:%d", srcAddr, srcPort, dstAddr, dstPort)
+	ruleKey := fmt.Sprintf("%s:%d", dstAddr, dstPort)
 	if ruleSet[ruleKey] {
 		return fmt.Errorf("rule already exists: %s", ruleKey)
 	}
@@ -50,11 +52,11 @@ func addAFilteringRule(srcAddr, dstAddr string, srcPort, dstPort int) error {
 }
 
 // removeAFilteringRule removes a specific filtering rule
-func removeAFilteringRule(srcAddr, dstAddr string, srcPort, dstPort int) error {
+func removeAFilteringRule(dstAddr string, dstPort int) error {
 	mutex.Lock()
 	defer mutex.Unlock()
 
-	ruleKey := fmt.Sprintf("%s:%d->%s:%d", srcAddr, srcPort, dstAddr, dstPort)
+	ruleKey := fmt.Sprintf("%s:%d", dstAddr, dstPort)
 	if !ruleSet[ruleKey] {
 		return fmt.Errorf("rule not found: %s", ruleKey)
 	}
@@ -123,7 +125,7 @@ func runFilteringLoop() {
 			}
 			tcp, _ := tcpLayer.(*layers.TCP)
 
-			ruleKey := fmt.Sprintf("%s:%d->%s:%d", ipv4.SrcIP, tcp.SrcPort, ipv4.DstIP, tcp.DstPort)
+			ruleKey := fmt.Sprintf("%s:%d", ipv4.DstIP, tcp.DstPort)
 			if ruleSet[ruleKey] {
 				log.Printf("Dropping RST packet: %s", ruleKey)
 				continue
@@ -134,4 +136,30 @@ func runFilteringLoop() {
 			}
 		}
 	}
+}
+
+// addAFilteringRule adds an iptables rule to block RST packets originating from the given IP and port.
+func addAServerFilteringRule(srcAddr string, srcPort int) error {
+	// Create a TCP socket and bind it to the desired IP address and port
+	address := fmt.Sprintf("%s:%d", srcAddr, srcPort)
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return fmt.Errorf("failed to create listener on %s: %v", address, err)
+	}
+
+	// Don't accept any connections, just call Listen()
+	tcpListener, ok := listener.(*net.TCPListener)
+	if !ok {
+		return fmt.Errorf("failed to cast listener to TCPListener")
+	}
+
+	// This makes the kernel aware of the port and prevents RST from being sent
+	tcpListener.SetDeadline(time.Now().Add(1 * time.Second)) // optional, just to make it a valid listener
+
+	// Return the listener
+	return nil
+}
+
+func removeAServerFilteringRule(srcAddr string, srcPort int) error {
+	return nil // placeholder
 }

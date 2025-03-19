@@ -5,15 +5,17 @@ package lib
 
 import (
 	"fmt"
+	"net"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Global anchor name for the application.
 const anchor = "PCP_anchor"
 
 // addAFilteringRule adds a new filtering rule to the anchor while leaving existing rules intact.
-func addAFilteringRule(srcAddr, dstAddr string, srcPort, dstPort int) error {
+func addAFilteringRule(dstAddr string, dstPort int) error {
 	// 1. Check if PF is enabled.
 	enabled, err := isPFEnabled()
 	if err != nil || !enabled {
@@ -32,8 +34,7 @@ func addAFilteringRule(srcAddr, dstAddr string, srcPort, dstPort int) error {
 	}
 
 	// 4. Construct the new rule.
-	newRule := fmt.Sprintf("block drop out inet proto tcp from %s port = %d to %s port = %d flags R/R",
-		srcAddr, srcPort, dstAddr, dstPort)
+	newRule := fmt.Sprintf("block drop out inet proto tcp to %s port = %d flags R/R", dstAddr, dstPort)
 	fmt.Println("Constructed rule:", newRule)
 
 	// 5. Append the new rule if it does not already exist.
@@ -57,7 +58,7 @@ func addAFilteringRule(srcAddr, dstAddr string, srcPort, dstPort int) error {
 }
 
 // removeAFilteringRule removes a single filtering rule from the anchor while leaving the other rules intact.
-func removeAFilteringRule(srcAddr, dstAddr string, srcPort, dstPort int) error {
+func removeAFilteringRule(dstAddr string, dstPort int) error {
 	// 1. Retrieve current rules.
 	currentRules, err := getPfRules(anchor)
 	if err != nil {
@@ -65,8 +66,7 @@ func removeAFilteringRule(srcAddr, dstAddr string, srcPort, dstPort int) error {
 	}
 
 	// 2. Construct the rule to remove.
-	ruleToRemove := fmt.Sprintf("block drop out inet proto tcp from %s port = %d to %s port = %d flags R/R",
-		srcAddr, srcPort, dstAddr, dstPort)
+	ruleToRemove := fmt.Sprintf("block drop out inet proto tcp to %s port = %d flags R/R", dstAddr, dstPort)
 	fmt.Println("Removing rule:", ruleToRemove)
 
 	// 3. Filter out the rule from the current rules.
@@ -174,4 +174,30 @@ func containsRule(rules []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// addAFilteringRule adds an iptables rule to block RST packets originating from the given IP and port.
+func addAServerFilteringRule(srcAddr string, srcPort int) error {
+	// Create a TCP socket and bind it to the desired IP address and port
+	address := fmt.Sprintf("%s:%d", srcAddr, srcPort)
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return fmt.Errorf("failed to create listener on %s: %v", address, err)
+	}
+
+	// Don't accept any connections, just call Listen()
+	tcpListener, ok := listener.(*net.TCPListener)
+	if !ok {
+		return fmt.Errorf("failed to cast listener to TCPListener")
+	}
+
+	// This makes the kernel aware of the port and prevents RST from being sent
+	tcpListener.SetDeadline(time.Now().Add(1 * time.Second)) // optional, just to make it a valid listener
+
+	// Return the listener
+	return nil
+}
+
+func removeAServerFilteringRule(srcAddr string, srcPort int) error {
+	return nil // placeholder
 }

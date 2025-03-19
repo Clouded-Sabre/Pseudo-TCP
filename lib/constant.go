@@ -17,13 +17,14 @@ const (
 
 // Flag constants
 const (
-	// PCP flag constants
-	URGFlag uint8 = 1 << 5
-	ACKFlag uint8 = 1 << 4
-	PSHFlag uint8 = 1 << 3
-	RSTFlag uint8 = 1 << 2
-	SYNFlag uint8 = 1 << 1
-	FINFlag uint8 = 1 << 0
+	FINFlag = 0x01
+	SYNFlag = 0x02
+	RSTFlag = 0x04
+	PSHFlag = 0x08
+	ACKFlag = 0x10
+	URGFlag = 0x20
+	ECEFlag = 0x40
+	CWRFlag = 0x80
 )
 
 const (

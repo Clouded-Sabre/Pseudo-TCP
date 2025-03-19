@@ -17,7 +17,7 @@ type Service struct {
 	serviceAddr           net.Addr
 	port                  int
 	// variables
-	dumbListener              *net.TCPListener       // dumb listener to prevent RST packets created by system TCP/IP network stack
+	//dumbListener              *net.TCPListener       // dumb listener to prevent RST packets created by system TCP/IP network stack
 	inputChannel              chan *PcpPacket        // channel for incoming packets of the whole services (including packets for all connections)
 	outputChan, sigOutputChan chan *PcpPacket        // output channels for ordinary outgoing packets and priority signalling packets
 	connectionMap             map[string]*Connection // open connections
@@ -393,9 +393,17 @@ func (s *Service) Close() error {
 	close(s.connCloseSignal)
 	close(s.connSignalFailed)
 
-	// close dumb TCP listener
-	if s.dumbListener != nil {
-		s.dumbListener.Close()
+	/*
+		// close dumb TCP listener
+		if s.dumbListener != nil {
+			s.dumbListener.Close()
+		}
+	*/
+
+	// remove the server side filtering rule
+	err := removeAServerFilteringRule(s.serviceAddr.String(), s.port)
+	if err != nil {
+		log.Println("Error removing server filtering rule:", err)
 	}
 
 	log.Println("PCP Service: resource cleared.")

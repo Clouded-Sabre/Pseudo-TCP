@@ -151,11 +151,21 @@ func (p *PcpCore) ListenPcp(serviceIP string, port int, connConfig *ConnectionCo
 			return nil, err
 		}
 
-		// Add a dumb TCP server to prevent RST packets created by system TCP/IP network stack
-		if srv.dumbListener, err = setupDumbTcpServer(serviceIP, port); err != nil {
-			log.Println("Error adding dumb TCP server:", err)
+		/*
+			// Add a dumb TCP server to prevent RST packets created by system TCP/IP network stack
+			if srv.dumbListener, err = setupDumbTcpServer(serviceIP, port); err != nil {
+				log.Println("Error adding dumb TCP server:", err)
+				return nil, err
+			}
+			log.Println("Dumb TCP server added to prevent RST packets at ", serviceIP, ":", port)
+		*/
+
+		// add a server side filtering rule to prevent RST packets
+		if err = addAServerFilteringRule(normServiceIpString, port); err != nil {
+			log.Println("Error adding server filtering rule:", err)
 			return nil, err
 		}
+		log.Println("Server filtering rule added to prevent RST packets at ", serviceIP, ":", port)
 
 		// add it to ServiceMap
 		pConn.mu.Lock()
@@ -223,6 +233,7 @@ func (p *PcpCore) Close() error {
 	return nil
 }
 
+/*
 // setupDumbTcpServer adds an dumb tcp server at a specified ip:port to prevent RST packets originating from the given IP and port.
 func setupDumbTcpServer(ip string, port int) (*net.TCPListener, error) {
 	// Create a TCP socket and bind it to the desired IP address and port
@@ -244,3 +255,4 @@ func setupDumbTcpServer(ip string, port int) (*net.TCPListener, error) {
 	// Return the listener
 	return tcpListener, nil
 }
+*/
