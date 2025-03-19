@@ -1,3 +1,53 @@
+/*
+This server implements a protocol testing framework designed to work with clientcompare
+for validating and comparing different transport protocols. The server focuses on
+testing data transmission integrity and performance across UDP, TCP, and PCP
+(Pseudo-TCP) protocols.
+
+Key Features:
+1. Multi-Protocol Support:
+   - UDP (User Datagram Protocol)
+   - TCP (Transmission Control Protocol)
+   - PCP (Pseudo-TCP, custom implementation)
+
+2. Data Processing:
+   - Receives 8-byte timestamped messages from clients
+   - Reads random-sized chunks from a source file (book.txt)
+   - Prepends original client timestamp to response data
+   - Supports configurable MTU (Maximum Transmission Unit)
+
+3. Connection Management:
+   - Handles multiple concurrent clients using goroutines
+   - Maintains separate client handlers for each protocol
+   - Implements connection tracking for UDP clients
+   - Supports automatic file content rotation
+
+4. Configuration:
+   - Command-line flags for server settings
+   - YAML configuration for PCP protocol
+   - Configurable service address and port
+   - Adjustable MTU size
+   - Custom file path support
+
+Usage:
+  ./testserver [options]
+  Options:
+    -svcaddr string   Service address (default "127.0.0.1:8080")
+    -file string      Source file path (default "book.txt")
+    -mtu int         MTU size (default 1300)
+    -protocol string Protocol to use (default "udp")
+
+The server operates by:
+1. Receiving client messages containing timestamps
+2. Reading random-sized chunks (within MTU) from the source file
+3. Prepending original timestamps to the chunks
+4. Sending combined data back to clients
+5. Rotating file content when reaching EOF
+
+This server is designed to work with clientcompare for protocol testing and
+verification purposes.
+*/
+
 package main
 
 import (
@@ -13,6 +63,7 @@ import (
 	"github.com/Clouded-Sabre/Pseudo-TCP/lib"
 )
 
+// Global variables for server configuration
 var (
 	svcAddrStr, svcIPstr, svcPortStr string
 	svcPort                          int
@@ -23,6 +74,7 @@ var (
 	err                              error
 )
 
+// init initializes command-line flags for server configuration
 func init() {
 	// Define CLI flags for server IP and port
 	flag.StringVar(&svcAddrStr, "svcaddr", "127.0.0.1:8080", "SFDP service address(IP:Port)")
@@ -32,6 +84,7 @@ func init() {
 	flag.Parse()
 }
 
+// main selects and starts the appropriate server based on the protocol specified
 func main() {
 	switch protocol {
 	case "udp":
@@ -46,6 +99,7 @@ func main() {
 	}
 }
 
+// startUDPServer starts a UDP server
 func startUDPServer() {
 	udpAddr, err := net.ResolveUDPAddr("udp", svcAddrStr)
 	if err != nil {
@@ -91,11 +145,14 @@ func startUDPServer() {
 			channel = inputChannel
 		}
 
+		// Send the received data to the client's input channel
 		channel <- buffer[:n]
 	}
 }
 
+// startTCPServer initializes and runs a TCP server
 func startTCPServer() {
+	// Start listening for TCP connections
 	listener, err := net.Listen("tcp", svcAddrStr)
 	if err != nil {
 		fmt.Println("Error starting TCP server:", err)
@@ -106,17 +163,20 @@ func startTCPServer() {
 	fmt.Printf("TCP Server listening on %s\n", svcAddrStr)
 
 	for {
+		// Accept incoming TCP connections
 		conn, err := listener.Accept()
 		if err != nil {
 			log.Println("Error accepting connection:", err)
 			continue
 		}
-		//go handleOutputToClient(nil, conn, nil, filePath, mtu, maxGapMs)
+		// Start a goroutine to handle the client connection
 		go handleTcpInputFromClient(conn, mtu)
 	}
 }
 
+// startPCPServer initializes and runs a PCP (Pseudo-TCP) server
 func startPCPServer() {
+	// Parse the service address into IP and port
 	svcIPstr, svcPortStr, err = net.SplitHostPort(svcAddrStr)
 	if err != nil {
 		log.Fatal(err)
@@ -126,12 +186,13 @@ func startPCPServer() {
 		log.Fatal(err)
 	}
 
+	// Load PCP configuration from a YAML file
 	pcpCoreConfig, connConfig, err := config.LoadConfig("config.yaml")
 	if err != nil {
 		log.Fatalln("Configurtion file error:", err)
 	}
 
-	// Create PCP server
+	// Create a PCP core object
 	pcpCoreObj, err = lib.NewPcpCore(pcpCoreConfig)
 	if err != nil {
 		log.Println("Error creating PCP core:", err)
@@ -139,6 +200,7 @@ func startPCPServer() {
 	}
 	log.Println("PCP core started.")
 
+	// Start listening for PCP connections
 	listener, err := pcpCoreObj.ListenPcp(svcIPstr, svcPort, connConfig)
 	if err != nil {
 		fmt.Println("Error starting PCP server:", err)
@@ -149,16 +211,18 @@ func startPCPServer() {
 	fmt.Printf("PCP Server listening on %s\n", svcAddrStr)
 
 	for {
+		// Accept incoming PCP connections
 		conn, err := listener.Accept()
 		if err != nil {
 			log.Println("Error accepting connection:", err)
 			continue
 		}
-		//go handleOutputToClient(nil, conn, nil, filePath, mtu, maxGapMs)
+		// Start a goroutine to handle the client connection
 		go handlePcpInputFromClient(conn, mtu)
 	}
 }
 
+// handleTcpInputFromClient processes data from a TCP client
 func handleTcpInputFromClient(tcpConn net.Conn, mtu int) {
 	buffer := make([]byte, mtu)
 	file, err := os.Open(filePath)
@@ -184,6 +248,7 @@ func handleTcpInputFromClient(tcpConn net.Conn, mtu int) {
 	}
 }
 
+// handlePcpInputFromClient processes data from a PCP client
 func handlePcpInputFromClient(pcpConn *lib.Connection, mtu int) {
 	buffer := make([]byte, mtu)
 	file, err := os.Open(filePath)
@@ -209,6 +274,7 @@ func handlePcpInputFromClient(pcpConn *lib.Connection, mtu int) {
 	}
 }
 
+// handleUdpInputFromClient processes data from a UDP client
 func handleUdpInputFromClient(conn *net.UDPConn, addr *net.UDPAddr, filePath string, mtu int, inputChannel chan []byte) {
 	var message []byte
 	file, err := os.Open(filePath)
@@ -228,6 +294,7 @@ func handleUdpInputFromClient(conn *net.UDPConn, addr *net.UDPAddr, filePath str
 	}
 }
 
+// sendMessageBack sends a response to the client with a timestamp and file data
 func sendMessageBack(message []byte, udpConn *net.UDPConn, tcpConn *net.Conn, pcpConn *lib.Connection, sAddr *net.UDPAddr, mtu int, file *os.File) {
 	buffer := make([]byte, mtu)
 

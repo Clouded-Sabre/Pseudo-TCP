@@ -1,3 +1,55 @@
+/*
+This is a test client designed to work with servercompare for protocol testing and
+data integrity verification. The client sends random-sized chunks of a file using
+the PCP (Pseudo-TCP) protocol with configurable timing delays between transmissions.
+
+Key Features:
+1. Data Transmission:
+   - Reads data from a source file in random-sized chunks
+   - Sends chunks to servercompare for verification
+   - Supports configurable MTU (Maximum Transmission Unit)
+   - Automatically rotates through file content when reaching EOF
+
+2. PCP Protocol Support:
+   - Implements custom Pseudo-TCP protocol
+   - Configurable through YAML file
+   - Handles connection establishment and management
+   - Supports custom source IP addressing
+
+3. Traffic Control:
+   - Random delays between packet transmissions
+   - Configurable maximum gap between packets
+   - Variable chunk sizes (1 to MTU)
+   - Continuous operation with file rotation
+
+4. Configuration Options:
+   - Server address (default: 127.0.0.1:8080)
+   - Source IP address (default: 127.0.0.4)
+   - MTU size (default: 1000)
+   - Maximum gap between packets (default: 1300ms)
+   - Source file path (default: book.txt)
+   - PCP protocol settings via config.yaml
+
+Usage:
+  ./testclient [options]
+  Options:
+    -serveraddr string Server address (default "127.0.0.1:8080")
+    -sourceIP string   Source IP address (default "127.0.0.4")
+    -file string      Source file path (default "book.txt")
+    -MTU int         MTU size (default 1000)
+    -max-gap-ms int  Max delay between packets (default 1300)
+
+The client operates by:
+1. Establishing PCP connection with servercompare
+2. Reading random-sized chunks from source file
+3. Sending chunks with random delays between transmissions
+4. Rotating through file content when reaching EOF
+5. Continuing transmission until interrupted
+
+This client is designed to work with servercompare for testing protocol
+reliability and data transmission integrity.
+*/
+
 package main
 
 import (

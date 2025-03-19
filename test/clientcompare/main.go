@@ -1,3 +1,52 @@
+/*
+This is a network protocol testing and verification client that works with the testserver
+to validate data transmission integrity across different transport protocols (UDP, TCP,
+and PCP/Pseudo-TCP).
+
+Key Features:
+1. Protocol Support:
+   - UDP (User Datagram Protocol)
+   - TCP (Transmission Control Protocol)
+   - PCP (Pseudo-TCP, custom protocol implementation)
+
+2. Data Verification:
+   - Sends timestamped requests to server
+   - Receives server responses containing timestamps and data chunks
+   - Compares received data with local reference file
+   - Provides colored output for verification results:
+     * GREEN: Matching data
+     * RED: Mismatched data with difference count
+     * BLUE: Message delimiters
+
+3. Performance Monitoring:
+   - Measures transport time using timestamps
+   - Supports configurable delays between packets
+   - Handles MTU (Maximum Transmission Unit) settings
+
+4. Configuration Options:
+   - Server address and port
+   - Source IP address
+   - Protocol selection
+   - MTU size
+   - Maximum gap between packets
+   - Reference file path
+
+Usage:
+  ./clientcompare [options]
+  Options:
+    -server string    Server address (default "127.0.0.1:3333")
+    -file string      Path to reference file (default "book.txt")
+    -mtu int         MTU size (default 1400)
+    -protocol string Protocol to use (default "udp")
+    -max-gap-ms int  Max delay between packets (default 1300)
+    -sourceIP string Local source IP (default "127.0.0.4")
+
+The client continuously sends requests and verifies responses until either:
+- An error occurs
+- Data mismatch is detected
+- The program is terminated
+*/
+
 package main
 
 import (

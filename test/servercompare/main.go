@@ -1,3 +1,54 @@
+/*
+This is a data verification server that works with testclient to validate data
+transmission integrity using PCP (Pseudo-TCP) protocol. The server performs
+byte-by-byte comparison between received data and a local reference file.
+
+Key Features:
+1. PCP Protocol Support:
+   - Implements custom Pseudo-TCP protocol for testing
+   - Configurable through YAML file
+   - Handles connection management and graceful shutdown
+
+2. Data Verification:
+   - Receives data chunks from testclient
+   - Compares received data with local reference file
+   - Provides colored output for verification results:
+     * GREEN: Matching data
+     * RED: Mismatched data with difference count
+     * BLUE: Message delimiters
+   - Tracks and reports byte-level differences
+
+3. Connection Management:
+   - Supports multiple concurrent client connections
+   - Uses goroutines for parallel client handling
+   - Implements graceful shutdown with signal handling
+   - Handles connection timeouts and errors
+
+4. Configuration Options:
+   - Service address and port (default: 0.0.0.0:8888)
+   - Reference file path (default: book.txt)
+   - MTU size (default: 1400)
+   - PCP protocol settings via config.yaml
+
+Usage:
+  ./servercompare [options]
+  Options:
+    -svcaddr string  Listening address (default "0.0.0.0:8888")
+    -file string     Path to reference file (default "book.txt")
+    -MTU int         MTU size (default 1400)
+
+The server operates by:
+1. Receiving data chunks from testclient
+2. Reading corresponding chunks from local reference file
+3. Performing byte-by-byte comparison
+4. Displaying colored output for matches/mismatches
+5. Counting and reporting differences when mismatches occur
+6. Automatically rotating through reference file when reaching EOF
+
+This server is designed to work with testclient for protocol testing and
+data integrity verification purposes.
+*/
+
 package main
 
 import (

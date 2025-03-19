@@ -1,3 +1,54 @@
+/*
+This is a Pseudo-TCP (PCP) server implementation that handles client connections
+and simulates network data transmission. The server is designed to work with the
+corresponding PCP client for protocol testing and verification.
+
+Key Features:
+1. Connection Management:
+   - Listens for incoming PCP connections
+   - Handles multiple concurrent clients using goroutines
+   - Implements graceful shutdown with signal handling (Ctrl+C)
+   - Uses WaitGroup for coordinated shutdown
+
+2. Data Exchange Protocol:
+   - Receives packets from clients until "Client Done" message
+   - Sends 20 sequential response packets ("Data packet X")
+   - Sends "Server Done" message before closing connection
+   - Implements 500ms read timeout for client messages
+
+3. Error Handling:
+   - Connection timeouts
+   - EOF detection
+   - Network errors
+   - Graceful shutdown on interrupt signals
+   - Resource cleanup on exit
+
+4. Configuration Options:
+   - Server IP address (default: 127.0.0.1)
+   - Port number (default: 8080)
+   - PCP protocol settings via config.yaml
+   - Configurable packet delay (default: 1000ms)
+
+Usage:
+  ./server [options]
+  Options:
+    -ip string    Server IP address (default "127.0.0.1")
+    -port int     Server port number (default 8080)
+
+The server operates by:
+1. Loading configuration from config.yaml
+2. Starting PCP core and listener
+3. Accepting client connections
+4. For each client:
+   - Reading packets until "Client Done"
+   - Sending 20 response packets with 1s delays
+   - Sending "Server Done" and closing connection
+5. Handling graceful shutdown on Ctrl+C
+
+This server implements the PCP protocol for testing network transmission
+reliability and performance characteristics.
+*/
+
 package main
 
 import (

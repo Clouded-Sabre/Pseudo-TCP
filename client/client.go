@@ -1,3 +1,58 @@
+/*
+This is a Pseudo-TCP (PCP) client implementation that performs iterative connection
+testing with a PCP server. The client establishes connections and exchanges test
+packets to validate protocol reliability and performance.
+
+Key Features:
+1. Connection Management:
+   - Establishes PCP connections to server
+   - Performs 1000 test iterations
+   - Implements configurable delays between iterations
+   - Handles connection cleanup and resource management
+
+2. Data Exchange Protocol:
+   - Sends 20 sequential test packets per iteration
+   - Adds 1-second delay between packets
+   - Sends "Client Done" message after packets
+   - Reads server responses until connection closure
+   - Waits 15 seconds between iterations
+
+3. Error Handling:
+   - Connection failures
+   - Read/Write errors
+   - EOF detection
+   - Resource cleanup
+   - Graceful iteration management
+
+4. Configuration Options:
+   - Source IP address (default: 127.0.0.4)
+   - Server IP address (default: 127.0.0.2)
+   - Server port (default: 8901)
+   - PCP protocol settings via config.yaml
+   - Configurable packet delay (default: 1000ms)
+
+Usage:
+  ./client [options]
+  Options:
+    -sourceIP string  Source IP address (default "127.0.0.4")
+    -serverIP string  Server IP address (default "127.0.0.2")
+    -serverPort int   Server port number (default 8901)
+
+The client operates by:
+1. Loading configuration from config.yaml
+2. Creating PCP core instance
+3. Running 1000 iterations of:
+   - Establishing connection to server
+   - Sending 20 test packets with delays
+   - Sending "Client Done" message
+   - Reading server responses
+   - Waiting 15 seconds before next iteration
+4. Cleaning up resources on completion
+
+This client implements the PCP protocol for testing network connection
+reliability and transmission characteristics.
+*/
+
 package main
 
 import (
