@@ -263,6 +263,7 @@ func handleResponse(conn *net.Conn, pcpConn *lib.Connection, filePath string, mt
 		//transportTime := time.Since(time.Unix(timestamp, 0)).Milliseconds()
 
 		if runtime.GOOS == "windows" {
+			// we assume server is always linux
 			// Count the number of "\n" in serverResponse[8:]
 			serverData := string(serverResponse[8:])
 			newlineCount := strings.Count(serverData, "\n")

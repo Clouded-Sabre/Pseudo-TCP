@@ -1,3 +1,6 @@
+//go:build linux
+// +build linux
+
 /*
 This is a data verification server that works with testclient to validate data
 transmission integrity using PCP (Pseudo-TCP) protocol. The server performs
@@ -60,6 +63,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -102,7 +106,7 @@ func main() {
 	filePath = *filePathFlag
 	mtu = *mtuFlag
 
-	// Create  address to listen on all available network interfaces and a specific port
+	// Create address to listen on all available network interfaces and a specific port
 	pcpCoreConfig, connConfig, err := config.LoadConfig("config.yaml")
 	if err != nil {
 		log.Fatalln("Configurtion file error:", err)
@@ -211,14 +215,23 @@ func handleClient(conn *lib.Connection, wg *sync.WaitGroup, closeChan chan struc
 			}
 
 			message := buffer[:n]
-			fileData := make([]byte, n)
 
+			// check if client is windows by checking if "\r\n" is used in received request
+			isWindowsClient := strings.Contains(string(message), "\r\n")
+			if isWindowsClient {
+				// Normalize the message by replacing "\r\n" with "\n"
+				message = []byte(strings.ReplaceAll(string(message), "\r\n", "\n"))
+			}
+
+			// Adjust the file read length based on the normalized message length
+			fileData := make([]byte, len(message))
 			_, err = file.Read(fileData)
 			if err != nil {
 				fmt.Println("Error reading from file:", err)
 				return
 			}
 
+			// Compare the received message with the file data
 			if string(message) == string(fileData) {
 				log.Printf("%sReceived: %s|%s%s%s|\n%s", colorReset, colorBlue, colorGreen, message, colorBlue, colorReset)
 			} else {
