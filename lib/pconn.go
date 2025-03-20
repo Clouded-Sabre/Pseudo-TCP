@@ -291,6 +291,12 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 
 	//log.Println("The received PCP segment's total length is", n)
 	// extract Pcp frame from the received IP frame
+
+	// Extract source and destination IPv4 addresses from the buffer
+	//srcIP := net.IP(buffer[12:16]) // Source IP is at bytes 12-15
+	//dstIP := net.IP(buffer[16:20]) // Destination IP is at bytes 16-19
+	//log.Printf("PcpProtocolConnection.clientProcessingIncomingPacket: Source IP: %s, Destination IP: %s", srcIP, dstIP)
+
 	index, err := ExtractIpPayload(buffer[:n])
 	if err != nil {
 		log.Println("PcpProtocolConnection.clientProcessingIncomingPacket: Received IP frame is il-formated. Ignore it!", err)
@@ -322,6 +328,7 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	// Create connection key. Since it's incoming packet
 	// source and destination port needs to be reversed when calculating connection key
 	connKey := fmt.Sprintf("%d:%d", destPort, sourcePort)
+	//log.Println("PcpProtocolConnection.clientProcessingIncomingPacket: Got packet from", srcIP, "port", sourcePort, "to", dstIP, "port", destPort, "connection key:", connKey)
 
 	// First check if the connection exists in the connection map
 	p.mu.Lock()

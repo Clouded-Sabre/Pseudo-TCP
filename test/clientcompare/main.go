@@ -58,7 +58,9 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
@@ -260,23 +262,50 @@ func handleResponse(conn *net.Conn, pcpConn *lib.Connection, filePath string, mt
 		//timestamp := int64(binary.BigEndian.Uint64(serverResponse[:8]))
 		//transportTime := time.Since(time.Unix(timestamp, 0)).Milliseconds()
 
-		fileData := make([]byte, n-8)
+		if runtime.GOOS == "windows" {
+			// Count the number of "\n" in serverResponse[8:]
+			serverData := string(serverResponse[8:])
+			newlineCount := strings.Count(serverData, "\n")
 
-		_, err = file.Read(fileData)
-		if err != nil {
-			fmt.Println("Error reading from file:", err)
-			return
-		}
+			// Read enough data from the file to match the number of "\n" in serverResponse
+			fileData := make([]byte, len(serverData)+newlineCount) // Account for potential "\r\n"
+			_, err = file.Read(fileData)
+			if err != nil {
+				fmt.Println("Error reading from file:", err)
+				return
+			}
+			fileDataStr := strings.ReplaceAll(string(fileData), "\r\n", "\n")
+			serverData = strings.ReplaceAll(serverData, "\r\n", "\n")
 
-		if string(serverResponse[8:]) == string(fileData) {
-			log.Printf("%sReceived: %s|%s%s%s|%s (Transport time: %d)\n%s", colorReset, colorBlue, colorGreen, serverResponse[8:], colorBlue, colorReset, transportTime, colorReset)
+			// Compare the normalized data
+			if serverData == fileDataStr {
+				log.Printf("%sReceived: %s\n|%s%s%s|%s (Transport time: %d)\n%s", colorReset, colorBlue, colorGreen, serverData, colorBlue, colorReset, transportTime, colorReset)
+			} else {
+				log.Printf("%sReceived: %s\n|%s%s%s| %s(Does not match file: %s\n|%s%s%s|%s) (Transport time: %d)\n", colorReset, colorBlue, colorRed, serverData, colorBlue, colorReset, colorBlue, colorRed, fileDataStr, colorBlue, colorReset, transportTime)
+
+				// Count and print the number of differing bytes
+				countDifferences([]byte(serverData), []byte(fileDataStr))
+
+				return // Exit the client
+			}
 		} else {
-			log.Printf("%sReceived: %s|%s%s%s| %s(Does not match file: %s|%s%s%s|%s) (Transport time: %d)\n", colorReset, colorBlue, colorRed, serverResponse[8:], colorBlue, colorReset, colorBlue, colorRed, fileData, colorBlue, colorReset, transportTime)
+			fileData := make([]byte, n-8)
 
-			// Count and print the number of differing bytes
-			countDifferences(serverResponse[8:], fileData)
+			_, err = file.Read(fileData)
+			if err != nil {
+				fmt.Println("Error reading from file:", err)
+				return
+			}
+			if string(serverResponse[8:]) == string(fileData) {
+				log.Printf("%sReceived: %s\n|%s%s%s|%s (Transport time: %d)\n%s", colorReset, colorBlue, colorGreen, serverResponse[8:], colorBlue, colorReset, transportTime, colorReset)
+			} else {
+				log.Printf("%sReceived: %s\n|%s%s%s| %s(Does not match file: %s\n|%s%s%s|%s) (Transport time: %d)\n", colorReset, colorBlue, colorRed, serverResponse[8:], colorBlue, colorReset, colorBlue, colorRed, fileData, colorBlue, colorReset, transportTime)
 
-			return // Exit the client
+				// Count and print the number of differing bytes
+				countDifferences(serverResponse[8:], fileData)
+
+				return // Exit the client
+			}
 		}
 
 		// Check if the file pointer has reached the end and rewind to the beginning if needed

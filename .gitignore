@@ -12,3 +12,4 @@ test/testclient/testclient
 test/testclient/build/linux_amd64/testclient
 test/testserver/main.go
 client/client.exe
+test/clientcompare/clientcompare.exe
