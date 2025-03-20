@@ -219,6 +219,7 @@ func handleClient(conn *lib.Connection, wg *sync.WaitGroup, closeChan chan struc
 			// check if client is windows by checking if "\r\n" is used in received request
 			isWindowsClient := strings.Contains(string(message), "\r\n")
 			if isWindowsClient {
+				log.Println("Windows client found.")
 				// Normalize the message by replacing "\r\n" with "\n"
 				message = []byte(strings.ReplaceAll(string(message), "\r\n", "\n"))
 			}
