@@ -6,6 +6,7 @@ package lib
 import (
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -22,9 +23,13 @@ func addAFilteringRule(dstAddr string, dstPort int) error {
 		return fmt.Errorf("PF service is not enabled: %v", err)
 	}
 
-	// 2. Ensure the anchor exists.
-	if err := pfManageAnchor(anchor, true); err != nil {
-		return fmt.Errorf("failed to initialize anchor: %v", err)
+	// 2. Ensure the anchor reference exists in /etc/pf.conf.
+	if refExists, err := pfCheckAnchor(anchor); err != nil {
+		return fmt.Errorf("failed to check anchor reference in /etc/pf.conf: %v", err)
+	} else {
+		if !refExists {
+			return fmt.Errorf("anchor reference to %s does not exists in /etc/pf.conf. Please add it", anchor)
+		}
 	}
 
 	// 3. Retrieve current rules from the anchor.
@@ -34,8 +39,8 @@ func addAFilteringRule(dstAddr string, dstPort int) error {
 	}
 
 	// 4. Construct the new rule.
-	newRule := fmt.Sprintf("block drop out inet proto tcp to %s port = %d flags R/R", dstAddr, dstPort)
-	fmt.Println("Constructed rule:", newRule)
+	//newRule := fmt.Sprintf("block drop out inet proto tcp to %s port = %d flags R/R", dstAddr, dstPort)
+	newRule := fmt.Sprintf("block drop out quick inet proto tcp from any to %s port = %d flags R/R", dstAddr, dstPort)
 
 	// 5. Append the new rule if it does not already exist.
 	if !containsRule(currentRules, newRule) {
@@ -43,7 +48,8 @@ func addAFilteringRule(dstAddr string, dstPort int) error {
 	}
 
 	// 6. Reload the anchor with the updated rule set.
-	rulesText := strings.Join(currentRules, "\n") + "\n"
+	//rulesText := strings.Join(currentRules, "\n") + "\n"
+	rulesText := strings.Join(currentRules, "\n")
 	if err := pfLoadRules(anchor, rulesText); err != nil {
 		return fmt.Errorf("failed to load updated rules: %v", err)
 	}
@@ -66,7 +72,7 @@ func removeAFilteringRule(dstAddr string, dstPort int) error {
 	}
 
 	// 2. Construct the rule to remove.
-	ruleToRemove := fmt.Sprintf("block drop out inet proto tcp to %s port = %d flags R/R", dstAddr, dstPort)
+	ruleToRemove := fmt.Sprintf("block drop out quick inet proto tcp from any to %s port = %d flags R/R", dstAddr, dstPort)
 	fmt.Println("Removing rule:", ruleToRemove)
 
 	// 3. Filter out the rule from the current rules.
@@ -87,9 +93,16 @@ func removeAFilteringRule(dstAddr string, dstPort int) error {
 	return nil
 }
 
-// removeAnchor removes the anchor along with all its rules.
+// finishFiltering flushes all rules in the anchor and then removes the anchor itself.
 func finishFiltering() error {
-	return pfManageAnchor(anchor, false)
+	// Flush the rules associated with the anchor
+	cmdFlush := exec.Command("pfctl", "-a", anchor, "-F", "rules")
+	output, err := cmdFlush.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to flush rules for anchor %s: %v\nCommand output: %s", anchor, err, string(output))
+	}
+
+	return nil
 }
 
 // ======== PF Control Functions ========
@@ -103,24 +116,28 @@ func isPFEnabled() (bool, error) {
 	return strings.Contains(string(output), "Status: Enabled"), nil
 }
 
-// pfManageAnchor creates or removes an anchor.
-// If create is true, it creates (or ensures) the anchor exists;
-// if false, it disables/removes the anchor.
-func pfManageAnchor(anchor string, create bool) error {
-	action := "anchor"
-	if !create {
-		action = "no anchor"
-	}
-	cmd := exec.Command("pfctl", "-a", ".", "-f", "-")
-	cmd.Stdin = strings.NewReader(fmt.Sprintf("%s \"%s\"\n", action, anchor))
-	output, err := cmd.CombinedOutput()
+// pfCheckAnchor checks if /etc/pf.conf contains a reference to the specified anchor.
+// It returns true if the anchor is found, false otherwise.
+func pfCheckAnchor(anchor string) (bool, error) {
+	// Read the content of /etc/pf.conf
+	data, err := os.ReadFile("/etc/pf.conf")
 	if err != nil {
-		return fmt.Errorf("pf anchor operation failed: %v\nCommand output: %s", err, string(output))
+		return false, fmt.Errorf("failed to read /etc/pf.conf: %v", err)
 	}
-	return nil
+
+	// Construct the anchor reference string to look for.
+	// This assumes the reference is written as: anchor "anchor_name"
+	anchorRef := fmt.Sprintf("anchor \"%s\"", anchor)
+
+	// Check if the content contains the anchor reference.
+	if strings.Contains(string(data), anchorRef) {
+		return true, nil
+	}
+
+	return false, nil
 }
 
-// getPfRules retrieves the current PF rules for the given anchor.
+// getPfRules retrieves the current PF rules for the given anchor, keeping only "block" rules which is the only type of rules we use.
 func getPfRules(anchor string) ([]string, error) {
 	cmd := exec.Command("pfctl", "-a", anchor, "-s", "rules")
 	output, err := cmd.CombinedOutput()
@@ -131,17 +148,18 @@ func getPfRules(anchor string) ([]string, error) {
 	lines := strings.Split(string(output), "\n")
 	var rules []string
 	for _, line := range lines {
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "block") {
 			rules = append(rules, trimmed)
 		}
 	}
 	return rules, nil
 }
 
-// pfLoadRules loads the given rules (as a string) into the specified anchor.
 func pfLoadRules(anchor, rules string) error {
-	cmd := exec.Command("pfctl", "-a", anchor, "-f", "-")
-	cmd.Stdin = strings.NewReader(rules)
+	//fmt.Printf("Debug - PF Rules: %q\n", rules) // output quoted string which shows hidden characters
+
+	cmd := exec.Command("sh", "-c", fmt.Sprintf("echo %q | sudo /sbin/pfctl -a %s -f -", rules, anchor))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to load PF rules: %v\nCommand output: %s", err, string(output))
@@ -151,7 +169,7 @@ func pfLoadRules(anchor, rules string) error {
 
 // verifyRuleExactMatch checks if the expected rule exactly appears in the anchor.
 func verifyRuleExactMatch(anchor, expectedRule string) error {
-	cmd := exec.Command("pfctl", "-a", anchor, "-s", "rules")
+	cmd := exec.Command("/sbin/pfctl", "-a", anchor, "-s", "rules")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to query PF rules: %v", err)
