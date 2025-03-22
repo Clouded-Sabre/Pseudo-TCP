@@ -184,9 +184,9 @@ func mergeConnectionConfig(defaultConfig *lib.ConnectionConfig, partial *Partial
 
 // LoadConfig reads the file and merges provided values with defaults.
 func LoadConfig(filename string) (*lib.PcpCoreConfig, *lib.ConnectionConfig, error) {
-	coreConfig := lib.NewPcpCoreConfig()        // default config
-	pcpConfig := lib.NewPcpProtocolConnConfig() // default config
-	connConfig := lib.NewConnectionConfig()     // default config
+	coreConfig := lib.NewDefaultPcpCoreConfig()        // default config
+	pcpConfig := lib.NewDefaultPcpProtocolConnConfig() // default config
+	connConfig := lib.NewDefaultConnectionConfig()     // default config
 
 	data, err := os.ReadFile(filename)
 	if err != nil {

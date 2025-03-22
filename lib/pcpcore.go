@@ -23,7 +23,7 @@ type PcpCoreConfig struct {
 	PcpProtocolConnConfig *PcpProtocolConnConfig // Pcp Protocol Connection configuration
 }
 
-func NewPcpCoreConfig() *PcpCoreConfig {
+func NewDefaultPcpCoreConfig() *PcpCoreConfig {
 	return &PcpCoreConfig{
 		ProtocolID:            6,
 		PayloadPoolSize:       2000,
@@ -32,7 +32,7 @@ func NewPcpCoreConfig() *PcpCoreConfig {
 		PoolDebug:             false,
 		ProcessTimeThreshold:  10,
 		RsConfig:              rs.NewDefaultRsConfig(),
-		PcpProtocolConnConfig: NewPcpProtocolConnConfig(),
+		PcpProtocolConnConfig: NewDefaultPcpProtocolConnConfig(),
 	}
 }
 

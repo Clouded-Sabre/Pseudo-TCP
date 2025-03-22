@@ -138,7 +138,7 @@ type ConnectionConfig struct {
 	return connConfig
 }*/
 
-func NewConnectionConfig() *ConnectionConfig {
+func NewDefaultConnectionConfig() *ConnectionConfig {
 	return &ConnectionConfig{
 		WindowScale:             14,
 		PreferredMSS:            1440,

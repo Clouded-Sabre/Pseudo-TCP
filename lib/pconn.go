@@ -67,7 +67,7 @@ type PcpProtocolConnConfig struct {
 	}
 }*/
 
-func NewPcpProtocolConnConfig() *PcpProtocolConnConfig {
+func NewDefaultPcpProtocolConnConfig() *PcpProtocolConnConfig {
 	return &PcpProtocolConnConfig{
 		IptableRuleDaley:     200,
 		PreferredMSS:         1440, // Maximum Segment Size
@@ -75,7 +75,7 @@ func NewPcpProtocolConnConfig() *PcpProtocolConnConfig {
 		PConnTimeout:         10, // 10 seconds
 		ClientPortUpper:      65535,
 		ClientPortLower:      49152,
-		ConnConfig:           NewConnectionConfig(),
+		ConnConfig:           NewDefaultConnectionConfig(),
 		VerifyChecksum:       true, // Checksum verification is enabled by default
 		PConnOutputQueue:     100,
 	}
