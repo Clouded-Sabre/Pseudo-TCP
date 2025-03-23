@@ -8,7 +8,10 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os/exec"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/gopacket"
@@ -33,13 +36,17 @@ type filterImpl struct {
 )*/
 
 // NewFilter creates a new filter instance
-func NewFilter(identifier string) Filter {
+func NewFilter(identifier string) (Filter, error) {
+	if err := checkDependencies(); err != nil {
+		log.Fatalf("Dependency check failed: %v", err)
+	}
+
 	return &filterImpl{
 		handle:    nil,
 		stopChan:  nil,
 		isRunning: false,
 		ruleSet:   make(map[string]bool),
-	}
+	}, nil
 }
 
 // addAFilteringRule adds a precise rule to filter TCP RST packets
@@ -182,4 +189,221 @@ func (f *filterImpl) AddAServerFilteringRule(srcAddr string, srcPort int) error 
 
 func (f *filterImpl) RemoveAServerFilteringRule(srcAddr string, srcPort int) error {
 	return nil // placeholder
+}
+
+// addIcmpSrcFilteringRule adds a filtering rule which blocks icmp unreacheable packets from srcAddr.
+func (f *filterImpl) AddIcmpSrcFilteringRule(srcAddr string) error {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+
+	// Check if the rule already exists
+	if f.ruleSet[srcAddr] {
+		return fmt.Errorf("rule already exists for source address: %s", srcAddr)
+	}
+
+	// Define the WinDivert filter string to block ICMP type 3/3 packets from srcAddr
+	filter := fmt.Sprintf("icmp and icmp.Type == 3 and icmp.Code == 3 and ip.SrcAddr == %s", srcAddr)
+
+	// Open a WinDivert handle with the specified filter
+	handle, err := divert.Open(filter, divert.LayerNetwork, 0, divert.FlagDrop)
+	if err != nil {
+		return fmt.Errorf("failed to open WinDivert handle: %v", err)
+	}
+
+	// Store the handle and start the filtering loop if not already running
+	if !f.isRunning {
+		f.handle = handle
+		f.stopChan = make(chan struct{})
+		f.isRunning = true
+		go f.runIcmpFilteringLoop()
+	}
+
+	// Add the rule to the rule set
+	f.ruleSet[srcAddr] = true
+	log.Printf("Successfully added ICMP filtering rule for source address: %s\n", srcAddr)
+	return nil
+}
+
+func (f *filterImpl) runIcmpFilteringLoop() {
+	defer func() {
+		f.handle.Close()
+		f.isRunning = false
+	}()
+
+	buf := make([]byte, 1500)
+	addr := divert.Address{}
+
+	for {
+		select {
+		case <-f.stopChan:
+			log.Println("Stopping ICMP filter...")
+			return
+		default:
+			// Receive packets from WinDivert
+			n, err := f.handle.Recv(buf, &addr)
+			if err != nil {
+				log.Println("Failed to receive packet:", err)
+				continue
+			}
+
+			// Parse the packet using gopacket
+			packet := gopacket.NewPacket(buf[:n], layers.LayerTypeIPv4, gopacket.Default)
+			if packet == nil {
+				continue
+			}
+
+			// Extract the IPv4 layer
+			ipv4Layer := packet.Layer(layers.LayerTypeIPv4)
+			if ipv4Layer == nil {
+				continue
+			}
+			ipv4, _ := ipv4Layer.(*layers.IPv4)
+
+			// Extract the ICMP layer
+			icmpLayer := packet.Layer(layers.LayerTypeICMPv4)
+			if icmpLayer == nil {
+				continue
+			}
+			icmp, _ := icmpLayer.(*layers.ICMPv4)
+
+			// Check if the packet matches the rule
+			if icmp.TypeCode.Type() == layers.ICMPv4TypeDestinationUnreachable &&
+				icmp.TypeCode.Code() == 3 {
+				log.Printf("Dropping ICMP packet from %s\n", ipv4.SrcIP.String())
+				continue // Drop the packet
+			}
+
+			// Reinject the packet if it does not match the rule
+			if _, err := f.handle.Send(buf[:n], &addr); err != nil {
+				log.Println("Failed to reinject packet:", err)
+			}
+		}
+	}
+}
+
+// removeIcmpSrcFilteringRule removes a filtering rule which blocks icmp unreacheable packets from srcAddr.
+func (f *filterImpl) RemoveIcmpSrcFilteringRule(srcAddr string) error {
+	f.mutex.Lock()
+
+	// Check if the rule exists
+	if !f.ruleSet[srcAddr] {
+		f.mutex.Unlock()
+		return fmt.Errorf("rule not found for source address: %s", srcAddr)
+	}
+
+	// Remove the rule from the rule set
+	delete(f.ruleSet, srcAddr)
+
+	// Clean up if no rules remain
+	if len(f.ruleSet) == 0 {
+		f.mutex.Unlock()
+		f.FinishFiltering()
+		return nil
+	}
+
+	f.mutex.Unlock()
+	return nil
+}
+
+// addIcmpDstFilteringRule adds a filtering rule which blocks icmp unreacheable packets to dstAddr.
+func (f *filterImpl) AddIcmpDstFilteringRule(dstAddr string) error {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+
+	// Check if the rule already exists
+	if f.ruleSet[dstAddr] {
+		return fmt.Errorf("rule already exists for destination address: %s", dstAddr)
+	}
+
+	// Define the WinDivert filter string to block ICMP type 3/3 packets to dstAddr
+	filter := fmt.Sprintf("icmp and icmp.Type == 3 and icmp.Code == 3 and ip.DstAddr == %s", dstAddr)
+
+	// Open a WinDivert handle with the specified filter
+	handle, err := divert.Open(filter, divert.LayerNetwork, 0, divert.FlagDrop)
+	if err != nil {
+		return fmt.Errorf("failed to open WinDivert handle: %v", err)
+	}
+
+	// Store the handle and start the filtering loop if not already running
+	if !f.isRunning {
+		f.handle = handle
+		f.stopChan = make(chan struct{})
+		f.isRunning = true
+		go f.runIcmpFilteringLoop()
+	}
+
+	// Add the rule to the rule set
+	f.ruleSet[dstAddr] = true
+	log.Printf("Successfully added ICMP filtering rule for destination address: %s\n", dstAddr)
+	return nil
+}
+
+// removeIcmpDstFilteringRule removes a filtering rule which blocks icmp unreacheable packets to dstAddr.
+func (f *filterImpl) RemoveIcmpDstFilteringRule(dstAddr string) error {
+	f.mutex.Lock()
+
+	// Check if the rule exists
+	if !f.ruleSet[dstAddr] {
+		f.mutex.Unlock()
+		return fmt.Errorf("rule not found for destination address: %s", dstAddr)
+	}
+
+	// Remove the rule from the rule set
+	delete(f.ruleSet, dstAddr)
+
+	// Clean up if no rules remain
+	if len(f.ruleSet) == 0 {
+		f.mutex.Unlock()
+		f.FinishFiltering()
+		return nil
+	}
+
+	f.mutex.Unlock()
+	return nil
+}
+
+func isWinDivertInstalled() error {
+	// Attempt to open a dummy WinDivert handle
+	handle, err := divert.Open("true", divert.LayerNetwork, 0, 0)
+	if err != nil {
+		return fmt.Errorf("WinDivert is not installed or not functioning properly: %v", err)
+	}
+	defer handle.Close()
+
+	// If no error, WinDivert is installed and working
+	return nil
+}
+
+// Check if the Npcap service is running
+func isNpcapInstalled() error {
+	// Use the `sc query` command to check the Npcap service
+	cmd := exec.Command("sc", "query", "npcap")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true} // Hide the command window
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("Npcap service is not installed or not running: %v\nOutput: %s", err, string(output))
+	}
+
+	// Check if the service is running
+	if !strings.Contains(string(output), "RUNNING") {
+		return fmt.Errorf("Npcap service is installed but not running")
+	}
+
+	// If no error, Npcap is installed and running
+	return nil
+}
+
+func checkDependencies() error {
+	// Check if WinDivert is installed
+	if err := isWinDivertInstalled(); err != nil {
+		return fmt.Errorf("WinDivert check failed: %v", err)
+	}
+
+	// Check if Npcap is installed
+	if err := isNpcapInstalled(); err != nil {
+		return fmt.Errorf("Npcap check failed: %v", err)
+	}
+
+	// Both dependencies are installed and functioning
+	return nil
 }

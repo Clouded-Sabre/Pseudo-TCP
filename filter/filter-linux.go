@@ -19,10 +19,27 @@ type filterImpl struct {
 	comment string
 }
 
-func NewFilter(identifier string) Filter {
+func NewFilter(identifier string) (Filter, error) {
+	if isIptablesEnabled() != nil {
+		return nil, fmt.Errorf("iptables is not enabled or available")
+	}
 	return &filterImpl{
 		comment: identifier,
+	}, nil
+}
+
+// isIptablesEnabled checks if iptables is enabled and available on the system.
+func isIptablesEnabled() error {
+	// Run the iptables command to list rules in the OUTPUT chain
+	cmd := exec.Command("iptables", "-L", "OUTPUT")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("iptables is not enabled or available: %v\nOutput: %s", err, string(output))
 	}
+
+	// If the command succeeds, iptables is enabled
+	log.Println("iptables is enabled and available.")
+	return nil
 }
 
 // addAFilteringRule adds an iptables rule to drop RST packets originating from the given IP and port.
@@ -139,5 +156,77 @@ func (f *filterImpl) RemoveAServerFilteringRule(srcAddr string, srcPort int) err
 	}
 
 	log.Printf("Successfully removed iptables rule for %s:%d\n", srcAddr, srcPort)
+	return nil
+}
+
+func (f *filterImpl) AddIcmpSrcFilteringRule(srcAddr string) error {
+	// adds an iptables rule to drop icmp port unreachable packets originating from the given IP and port.
+	// Build the iptables command
+	cmd := exec.Command("iptables", "-A", "OUTPUT",
+		"-s", srcAddr,
+		"-p", "icmp",
+		"--icmp-type", "3/3",
+		//"-m", "u32",
+		//"--u32", fmt.Sprintf("0 >> 22 & 0x3C @ 16 >> 16 = %s", portStr),
+		"-j", "REJECT")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to apply iptables rule: %v, command: %s", err, strings.Join(cmd.Args, " "))
+	}
+
+	log.Printf("Successfully added rule: %s\n", cmd.String())
+	return nil
+}
+
+func (f *filterImpl) RemoveIcmpSrcFilteringRule(srcAddr string) error {
+	// removes the iptables rule that blocks icmp port unreachable packets for the given IP and port.
+	// Build the iptables command
+	cmd := exec.Command("iptables", "-D", "OUTPUT",
+		"-s", srcAddr,
+		"-p", "icmp",
+		"--icmp-type", "3/3",
+		//"-m", "u32",
+		//"--u32", fmt.Sprintf("0 >> 22 & 0x3C @ 16 >> 16 = %s", portStr),
+		"-j", "REJECT")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to remove iptables rule: %v, command: %s", err, strings.Join(cmd.Args, " "))
+	}
+
+	log.Printf("Successfully removed rule: %s\n", cmd.String())
+	return nil
+}
+
+func (f *filterImpl) AddIcmpDstFilteringRule(dstAddr string) error {
+	// adds an iptables rule to drop icmp port unreachable packets destined to the given IP.
+	// Build the iptables command
+	cmd := exec.Command("iptables", "-A", "OUTPUT",
+		"-d", dstAddr,
+		"-p", "icmp",
+		"--icmp-type", "3/3",
+		//"-m", "u32",
+		//"--u32", fmt.Sprintf("0 >> 22 & 0x3C @ 16 >> 16 = %s", portStr),
+		"-j", "REJECT")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to apply iptables rule: %v, command: %s", err, strings.Join(cmd.Args, " "))
+	}
+
+	log.Printf("Successfully added rule: %s\n", cmd.String())
+	return nil
+}
+
+func (f *filterImpl) RemoveIcmpDstFilteringRule(dstAddr string) error {
+	// removes the iptables rule that blocks icmp port unreachable packets to the given IP.
+	// Build the iptables command
+	cmd := exec.Command("iptables", "-D", "OUTPUT",
+		"-d", dstAddr,
+		"-p", "icmp",
+		"--icmp-type", "3/3",
+		//"-m", "u32",
+		//"--u32", fmt.Sprintf("0 >> 22 & 0x3C @ 16 >> 16 = %s", portStr),
+		"-j", "REJECT")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to remove iptables rule: %v, command: %s", err, strings.Join(cmd.Args, " "))
+	}
+
+	log.Printf("Successfully removed rule: %s\n", cmd.String())
 	return nil
 }

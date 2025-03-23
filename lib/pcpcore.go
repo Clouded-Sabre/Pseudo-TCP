@@ -50,12 +50,16 @@ type PcpCore struct {
 func NewPcpCore(pcpcoreConfig *PcpCoreConfig) (*PcpCore, error) {
 	// starts the PCP core main service
 	// the main role is to create PcpCore object - one per system
+	filter, err := filter.NewFilter("PCP: ")
+	if err != nil {
+		log.Fatal("Error creating filter object:", err)
+	}
 	pcpServerObj := &PcpCore{
 		config:             pcpcoreConfig,
 		protoConnectionMap: make(map[string]*PcpProtocolConnection),
 		pConnCloseSignal:   make(chan *PcpProtocolConnection),
 		closeSignal:        make(chan struct{}),
-		filter:             filter.NewFilter("PCP: "),
+		filter:             filter,
 	}
 
 	rp.Debug = pcpcoreConfig.PoolDebug
@@ -64,7 +68,6 @@ func NewPcpCore(pcpcoreConfig *PcpCoreConfig) (*PcpCore, error) {
 	Pool.ProcessTimeThreshold = time.Duration(pcpcoreConfig.ProcessTimeThreshold) * time.Millisecond
 
 	// create RSCore object for rawsocket
-	var err error
 	pcpServerObj.rscore, err = rs.NewRSCore(pcpcoreConfig.RsConfig)
 	if err != nil {
 		log.Fatal("Error creating RSCore object:", err)

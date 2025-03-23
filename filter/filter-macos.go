@@ -17,28 +17,34 @@ type filterImpl struct {
 	anchor string
 }
 
-func NewFilter(identifier string) Filter {
+func NewFilter(identifier string) (Filter, error) {
+	// 1. Check if PF is enabled.
+	enabled, err := isPFEnabled()
+	if err != nil || !enabled {
+		return nil, fmt.Errorf("PF service is not enabled: %v", err)
+	}
+
+	// 2. Check if libpcap is installed.
+	if err := isLibpcapInstalled(); err != nil {
+		return nil, fmt.Errorf("libpcap check failed: %v", err)
+	}
+
+	// 3. Ensure the anchor reference exists in /etc/pf.conf.
+	if refExists, err := pfCheckAnchor(identifier); err != nil {
+		return nil, fmt.Errorf("failed to check anchor reference in /etc/pf.conf: %v", err)
+	} else {
+		if !refExists {
+			return nil, fmt.Errorf("anchor reference to %s does not exists in /etc/pf.conf. Please add it", identifier)
+		}
+	}
+
 	return &filterImpl{
 		anchor: identifier,
-	}
+	}, nil
 }
 
 // addAFilteringRule adds a new filtering rule to the anchor while leaving existing rules intact.
 func (f *filterImpl) AddAClientFilteringRule(dstAddr string, dstPort int) error {
-	// 1. Check if PF is enabled.
-	enabled, err := isPFEnabled()
-	if err != nil || !enabled {
-		return fmt.Errorf("PF service is not enabled: %v", err)
-	}
-
-	// 2. Ensure the anchor reference exists in /etc/pf.conf.
-	if refExists, err := pfCheckAnchor(f.anchor); err != nil {
-		return fmt.Errorf("failed to check anchor reference in /etc/pf.conf: %v", err)
-	} else {
-		if !refExists {
-			return fmt.Errorf("anchor reference to %s does not exists in /etc/pf.conf. Please add it", f.anchor)
-		}
-	}
 
 	// 3. Retrieve current rules from the anchor.
 	currentRules, err := getPfRules(f.anchor)
@@ -226,4 +232,140 @@ func (f *filterImpl) AddAServerFilteringRule(srcAddr string, srcPort int) error 
 
 func (f *filterImpl) RemoveAServerFilteringRule(srcAddr string, srcPort int) error {
 	return nil // placeholder
+}
+
+// AddIcmpSrcFilteringRule adds a filtering rule which blocks icmp unreacheable packets from srcAddr.
+func (f *filterImpl) AddIcmpSrcFilteringRule(srcAddr string) error {
+	// 3. Retrieve current rules from the anchor.
+	currentRules, err := getPfRules(f.anchor)
+	if err != nil {
+		return fmt.Errorf("failed to retrieve current rules: %v", err)
+	}
+
+	// 4. Construct the new rule to block ICMP type 3/3 packets.
+	newRule := fmt.Sprintf("block drop out quick inet proto icmp from %s to any icmp-type unreach code 3", srcAddr)
+
+	// 5. Append the new rule if it does not already exist.
+	if !containsRule(currentRules, newRule) {
+		currentRules = append(currentRules, newRule)
+	}
+
+	// 6. Reload the anchor with the updated rule set.
+	rulesText := strings.Join(currentRules, "\n")
+	if err := pfLoadRules(f.anchor, rulesText); err != nil {
+		return fmt.Errorf("failed to load updated rules: %v", err)
+	}
+
+	// 7. Verify that the rule was added.
+	if err := verifyRuleExactMatch(f.anchor, newRule); err != nil {
+		return fmt.Errorf("rule verification failed: %v", err)
+	}
+
+	fmt.Printf("Successfully added rule:\n%s\n", newRule)
+	return nil
+}
+
+// RemoveIcmpSrcFilteringRule removes a filtering rule which blocks icmp unreacheable packets from srcAddr.
+func (f *filterImpl) RemoveIcmpSrcFilteringRule(srcAddr string) error {
+	// 1. Retrieve current rules.
+	currentRules, err := getPfRules(f.anchor)
+	if err != nil {
+		return fmt.Errorf("failed to retrieve current rules: %v", err)
+	}
+
+	// 2. Construct the rule to remove.
+	ruleToRemove := fmt.Sprintf("block drop out quick inet proto icmp from %s to any icmp-type unreach code 3", srcAddr)
+	fmt.Println("Removing rule:", ruleToRemove)
+
+	// 3. Filter out the rule from the current rules.
+	updatedRules := []string{}
+	for _, rule := range currentRules {
+		if strings.TrimSpace(rule) != strings.TrimSpace(ruleToRemove) {
+			updatedRules = append(updatedRules, rule)
+		}
+	}
+
+	// 4. Reload the anchor with the updated rules.
+	rulesText := strings.Join(updatedRules, "\n") + "\n"
+	if err := pfLoadRules(f.anchor, rulesText); err != nil {
+		return fmt.Errorf("failed to load updated rules: %v", err)
+	}
+
+	fmt.Println("Successfully removed rule.")
+	return nil
+}
+
+// AddIcmpDstFilteringRule adds a filtering rule which block icmp unreacheable packets to dstAddr.
+func (f *filterImpl) AddIcmpDstFilteringRule(dstAddr string) error {
+	// 3. Retrieve current rules from the anchor.
+	currentRules, err := getPfRules(f.anchor)
+	if err != nil {
+		return fmt.Errorf("failed to retrieve current rules: %v", err)
+	}
+
+	// 4. Construct the new rule to block ICMP type 3/3 packets.
+	newRule := fmt.Sprintf("block drop out quick inet proto icmp from any to %s icmp-type unreach code 3", dstAddr)
+
+	// 5. Append the new rule if it does not already exist.
+	if !containsRule(currentRules, newRule) {
+		currentRules = append(currentRules, newRule)
+	}
+
+	// 6. Reload the anchor with the updated rule set.
+	rulesText := strings.Join(currentRules, "\n")
+	if err := pfLoadRules(f.anchor, rulesText); err != nil {
+		return fmt.Errorf("failed to load updated rules: %v", err)
+	}
+
+	// 7. Verify that the rule was added.
+	if err := verifyRuleExactMatch(f.anchor, newRule); err != nil {
+		return fmt.Errorf("rule verification failed: %v", err)
+	}
+
+	fmt.Printf("Successfully added rule:\n%s\n", newRule)
+	return nil
+}
+
+// RemoveIcmpDstFilteringRule removes a filtering rule which blocks icmp unreacheable packets to dstAddr.
+func (f *filterImpl) RemoveIcmpDstFilteringRule(dstAddr string) error {
+	// 1. Retrieve current rules.
+	currentRules, err := getPfRules(f.anchor)
+	if err != nil {
+		return fmt.Errorf("failed to retrieve current rules: %v", err)
+	}
+
+	// 2. Construct the rule to remove.
+	ruleToRemove := fmt.Sprintf("block drop out quick inet proto icmp from any to %s icmp-type unreach code 3", dstAddr)
+	fmt.Println("Removing rule:", ruleToRemove)
+
+	// 3. Filter out the rule from the current rules.
+	updatedRules := []string{}
+	for _, rule := range currentRules {
+		if strings.TrimSpace(rule) != strings.TrimSpace(ruleToRemove) {
+			updatedRules = append(updatedRules, rule)
+		}
+	}
+
+	// 4. Reload the anchor with the updated rules.
+	rulesText := strings.Join(updatedRules, "\n") + "\n"
+	if err := pfLoadRules(f.anchor, rulesText); err != nil {
+		return fmt.Errorf("failed to load updated rules: %v", err)
+	}
+
+	fmt.Println("Successfully removed rule.")
+	return nil
+}
+
+// isLibpcapInstalled checks if libpcap is installed on the system.
+func isLibpcapInstalled() error {
+	// Check if tcpdump (which depends on libpcap) is available
+	cmd := exec.Command("which", "tcpdump")
+	output, err := cmd.CombinedOutput()
+	if err != nil || strings.TrimSpace(string(output)) == "" {
+		return fmt.Errorf("libpcap is not installed or tcpdump is not available: %v", err)
+	}
+
+	// If tcpdump is found, libpcap is likely installed
+	fmt.Println("libpcap is installed and available.")
+	return nil
 }
