@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/Clouded-Sabre/Pseudo-TCP/filter"
 	rs "github.com/Clouded-Sabre/rawsocket/lib"
 	rp "github.com/Clouded-Sabre/ringpool/lib"
 
@@ -23,7 +24,7 @@ type PcpCoreConfig struct {
 	PcpProtocolConnConfig *PcpProtocolConnConfig // Pcp Protocol Connection configuration
 }
 
-func NewPcpCoreConfig() *PcpCoreConfig {
+func DefaultPcpCoreConfig() *PcpCoreConfig {
 	return &PcpCoreConfig{
 		ProtocolID:            6,
 		PayloadPoolSize:       2000,
@@ -32,7 +33,7 @@ func NewPcpCoreConfig() *PcpCoreConfig {
 		PoolDebug:             false,
 		ProcessTimeThreshold:  10,
 		RsConfig:              rs.NewDefaultRsConfig(),
-		PcpProtocolConnConfig: NewPcpProtocolConnConfig(),
+		PcpProtocolConnConfig: DefaultPcpProtocolConnConfig(),
 	}
 }
 
@@ -43,6 +44,7 @@ type PcpCore struct {
 	pConnCloseSignal   chan *PcpProtocolConnection
 	closeSignal        chan struct{}  // used to send close signal to go routines to stop when timeout arrives
 	wg                 sync.WaitGroup // WaitGroup to synchronize goroutines
+	filter             filter.Filter  // Filter to prevent RST packets
 }
 
 func NewPcpCore(pcpcoreConfig *PcpCoreConfig) (*PcpCore, error) {
@@ -53,6 +55,7 @@ func NewPcpCore(pcpcoreConfig *PcpCoreConfig) (*PcpCore, error) {
 		protoConnectionMap: make(map[string]*PcpProtocolConnection),
 		pConnCloseSignal:   make(chan *PcpProtocolConnection),
 		closeSignal:        make(chan struct{}),
+		filter:             filter.NewFilter("PCP: "),
 	}
 
 	rp.Debug = pcpcoreConfig.PoolDebug
@@ -145,7 +148,7 @@ func (p *PcpCore) ListenPcp(serviceIP string, port int, connConfig *ConnectionCo
 	if !ok {
 		// need to create new service
 		// create new Pcp service
-		srv, err := newService(pConn, serviceAddr, port, pConn.outputChan, pConn.sigOutputChan, pConn.serviceCloseSignal, connConfig)
+		srv, err := newService(p, pConn, serviceAddr, port, pConn.outputChan, pConn.sigOutputChan, pConn.serviceCloseSignal, connConfig)
 		if err != nil {
 			log.Println("Error creating service:", err)
 			return nil, err
@@ -161,7 +164,7 @@ func (p *PcpCore) ListenPcp(serviceIP string, port int, connConfig *ConnectionCo
 		*/
 
 		// add a server side filtering rule to prevent RST packets
-		if err = addAServerFilteringRule(normServiceIpString, port); err != nil {
+		if err = p.filter.AddAServerFilteringRule(normServiceIpString, port); err != nil {
 			log.Println("Error adding server filtering rule:", err)
 			return nil, err
 		}
@@ -218,7 +221,7 @@ func (p *PcpCore) Close() error {
 
 	close(p.pConnCloseSignal)
 
-	finishFiltering() // finish filtering RST packet by removing any remaining filtering rules
+	p.filter.FinishFiltering() // finish filtering RST packet by removing any remaining filtering rules
 
 	if p.rscore != nil {
 		err := p.rscore.Close()

@@ -20,6 +20,7 @@ type Connection struct {
 	windowSize     uint16            // PCP windows size, static once connection establishes
 	initialSeq     uint32            // connection's initial SEQ, static once connection establishes
 	initialPeerSeq uint32            // the initial SEQ from Peer, static once connection establishes
+
 	//variables
 	nextSequenceNumber              uint32          // the SEQ sequence number of the next outgoing packet
 	lastAckNumber                   uint32          // the last acknowleged incoming packet
@@ -91,6 +92,7 @@ type connectionParams struct {
 	connCloseSignalChan      chan *Connection // send close connection signal to parent service or pConnection to clear it
 	newConnChannel           chan *Connection // server only. send new connection signal to parent service to signal successful 3-way handshake
 	connSignalFailedToParent chan *Connection // used to send signal to parrent to notify connection establishment failed
+	pcpCore                  *PcpCore         // PcpCore object
 }
 
 // connection config - see config file for detailed explanation
@@ -138,7 +140,7 @@ type ConnectionConfig struct {
 	return connConfig
 }*/
 
-func NewConnectionConfig() *ConnectionConfig {
+func DefaultConnectionConfig() *ConnectionConfig {
 	return &ConnectionConfig{
 		WindowScale:             14,
 		PreferredMSS:            1440,
@@ -1238,7 +1240,7 @@ func (c *Connection) clearConnResource() {
 
 	// remove the filtering rule of the client side connection which is used to prevent outgoing RST packet
 	if !c.params.isServer { // client side connection
-		err := removeAFilteringRule(c.RemoteAddr().IP.String(), c.RemotePort())
+		err := c.params.pcpCore.filter.RemoveAClientFilteringRule(c.RemoteAddr().IP.String(), c.RemotePort())
 		if err != nil {
 			log.Println("Pcp Connection: failed to remove filtering rule from client side connection")
 		} else {

@@ -16,6 +16,7 @@ type Service struct {
 	pcpProtocolConnection *PcpProtocolConnection // point back to parent pcp server
 	serviceAddr           net.Addr
 	port                  int
+	pcpCore               *PcpCore // PCP Core
 	// variables
 	//dumbListener              *net.TCPListener       // dumb listener to prevent RST packets created by system TCP/IP network stack
 	inputChannel              chan *PcpPacket        // channel for incoming packets of the whole services (including packets for all connections)
@@ -33,11 +34,12 @@ type Service struct {
 }
 
 // NewService creates a new service listening on the specified port.
-func newService(pcpProtocolConn *PcpProtocolConnection, serviceAddr net.Addr, port int, outputChan, sigOutputChan chan *PcpPacket, serviceCloseSignal chan *Service, connConfig *ConnectionConfig) (*Service, error) {
+func newService(pcpCore *PcpCore, pcpProtocolConn *PcpProtocolConnection, serviceAddr net.Addr, port int, outputChan, sigOutputChan chan *PcpPacket, serviceCloseSignal chan *Service, connConfig *ConnectionConfig) (*Service, error) {
 	newSrv := &Service{
 		pcpProtocolConnection: pcpProtocolConn,
 		serviceAddr:           serviceAddr,
 		port:                  port,
+		pcpCore:               pcpCore,
 		inputChannel:          make(chan *PcpPacket, 200),
 		outputChan:            outputChan,
 		sigOutputChan:         sigOutputChan,
@@ -230,6 +232,7 @@ func (s *Service) handleSynPacket(packet *PcpPacket) {
 		connCloseSignalChan:      s.connCloseSignal,
 		newConnChannel:           s.newConnChannel,
 		connSignalFailedToParent: s.connSignalFailed,
+		pcpCore:                  s.pcpCore,
 	}
 	//newConn, err := NewConnection(connKey, true, sourceAddr, int(sourcePort), s.ServiceAddr, s.Port, s.OutputChan, s.sigOutputChan, s.ConnCloseSignal, s.newConnChannel, s.connSignalFailed)
 	newConn, err := newConnection(connParams, s.connConfig)
@@ -401,7 +404,7 @@ func (s *Service) Close() error {
 	*/
 
 	// remove the server side filtering rule
-	err := removeAServerFilteringRule(s.serviceAddr.String(), s.port)
+	err := s.pcpCore.filter.RemoveAServerFilteringRule(s.serviceAddr.String(), s.port)
 	if err != nil {
 		log.Println("Error removing server filtering rule:", err)
 	}

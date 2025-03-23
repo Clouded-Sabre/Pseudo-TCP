@@ -1,7 +1,7 @@
 //go:build darwin
 // +build darwin
 
-package lib
+package filter
 
 import (
 	"fmt"
@@ -12,11 +12,19 @@ import (
 	"time"
 )
 
-// Global anchor name for the application.
-const anchor = "PCP_anchor"
+// filterImpl is the implementation of the Filter interface for macOS.
+type filterImpl struct {
+	anchor string
+}
+
+func NewFilter(identifier string) Filter {
+	return &filterImpl{
+		anchor: identifier,
+	}
+}
 
 // addAFilteringRule adds a new filtering rule to the anchor while leaving existing rules intact.
-func addAFilteringRule(dstAddr string, dstPort int) error {
+func (f *filterImpl) AddAClientFilteringRule(dstAddr string, dstPort int) error {
 	// 1. Check if PF is enabled.
 	enabled, err := isPFEnabled()
 	if err != nil || !enabled {
@@ -24,16 +32,16 @@ func addAFilteringRule(dstAddr string, dstPort int) error {
 	}
 
 	// 2. Ensure the anchor reference exists in /etc/pf.conf.
-	if refExists, err := pfCheckAnchor(anchor); err != nil {
+	if refExists, err := pfCheckAnchor(f.anchor); err != nil {
 		return fmt.Errorf("failed to check anchor reference in /etc/pf.conf: %v", err)
 	} else {
 		if !refExists {
-			return fmt.Errorf("anchor reference to %s does not exists in /etc/pf.conf. Please add it", anchor)
+			return fmt.Errorf("anchor reference to %s does not exists in /etc/pf.conf. Please add it", f.anchor)
 		}
 	}
 
 	// 3. Retrieve current rules from the anchor.
-	currentRules, err := getPfRules(anchor)
+	currentRules, err := getPfRules(f.anchor)
 	if err != nil {
 		return fmt.Errorf("failed to retrieve current rules: %v", err)
 	}
@@ -50,12 +58,12 @@ func addAFilteringRule(dstAddr string, dstPort int) error {
 	// 6. Reload the anchor with the updated rule set.
 	//rulesText := strings.Join(currentRules, "\n") + "\n"
 	rulesText := strings.Join(currentRules, "\n")
-	if err := pfLoadRules(anchor, rulesText); err != nil {
+	if err := pfLoadRules(f.anchor, rulesText); err != nil {
 		return fmt.Errorf("failed to load updated rules: %v", err)
 	}
 
 	// 7. Verify that the rule was added.
-	if err := verifyRuleExactMatch(anchor, newRule); err != nil {
+	if err := verifyRuleExactMatch(f.anchor, newRule); err != nil {
 		return fmt.Errorf("rule verification failed: %v", err)
 	}
 
@@ -64,9 +72,9 @@ func addAFilteringRule(dstAddr string, dstPort int) error {
 }
 
 // removeAFilteringRule removes a single filtering rule from the anchor while leaving the other rules intact.
-func removeAFilteringRule(dstAddr string, dstPort int) error {
+func (f *filterImpl) RemoveAClientFilteringRule(dstAddr string, dstPort int) error {
 	// 1. Retrieve current rules.
-	currentRules, err := getPfRules(anchor)
+	currentRules, err := getPfRules(f.anchor)
 	if err != nil {
 		return fmt.Errorf("failed to retrieve current rules: %v", err)
 	}
@@ -85,7 +93,7 @@ func removeAFilteringRule(dstAddr string, dstPort int) error {
 
 	// 4. Reload the anchor with the updated rules.
 	rulesText := strings.Join(updatedRules, "\n") + "\n"
-	if err := pfLoadRules(anchor, rulesText); err != nil {
+	if err := pfLoadRules(f.anchor, rulesText); err != nil {
 		return fmt.Errorf("failed to load updated rules: %v", err)
 	}
 
@@ -94,12 +102,12 @@ func removeAFilteringRule(dstAddr string, dstPort int) error {
 }
 
 // finishFiltering flushes all rules in the anchor and then removes the anchor itself.
-func finishFiltering() error {
+func (f *filterImpl) FinishFiltering() error {
 	// Flush the rules associated with the anchor
-	cmdFlush := exec.Command("pfctl", "-a", anchor, "-F", "rules")
+	cmdFlush := exec.Command("pfctl", "-a", f.anchor, "-F", "rules")
 	output, err := cmdFlush.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to flush rules for anchor %s: %v\nCommand output: %s", anchor, err, string(output))
+		return fmt.Errorf("failed to flush rules for anchor %s: %v\nCommand output: %s", f.anchor, err, string(output))
 	}
 
 	return nil
@@ -195,7 +203,7 @@ func containsRule(rules []string, target string) bool {
 }
 
 // addAFilteringRule adds an iptables rule to block RST packets originating from the given IP and port.
-func addAServerFilteringRule(srcAddr string, srcPort int) error {
+func (f *filterImpl) AddAServerFilteringRule(srcAddr string, srcPort int) error {
 	// Create a TCP socket and bind it to the desired IP address and port
 	address := fmt.Sprintf("%s:%d", srcAddr, srcPort)
 	listener, err := net.Listen("tcp", address)
@@ -216,6 +224,6 @@ func addAServerFilteringRule(srcAddr string, srcPort int) error {
 	return nil
 }
 
-func removeAServerFilteringRule(srcAddr string, srcPort int) error {
+func (f *filterImpl) RemoveAServerFilteringRule(srcAddr string, srcPort int) error {
 	return nil // placeholder
 }

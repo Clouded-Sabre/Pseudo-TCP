@@ -23,7 +23,8 @@ type PcpProtocolConnection struct {
 	isServer              bool        // Role of the object
 	serverAddr, localAddr *net.IPAddr // server and local ip address
 	//ipConn                *net.IPConn // net.IPConn connection
-	rsConn rs.RawConnection // RawSocketConn connection
+	rsConn  rs.RawConnection // RawSocketConn connection
+	pcpCore *PcpCore         // PcpCore object
 
 	// variables
 	outputChan, sigOutputChan chan *PcpPacket             // output channel for normal packets and signalling packets respectively
@@ -67,7 +68,7 @@ type PcpProtocolConnConfig struct {
 	}
 }*/
 
-func NewPcpProtocolConnConfig() *PcpProtocolConnConfig {
+func DefaultPcpProtocolConnConfig() *PcpProtocolConnConfig {
 	return &PcpProtocolConnConfig{
 		IptableRuleDaley:     200,
 		PreferredMSS:         1440, // Maximum Segment Size
@@ -75,7 +76,7 @@ func NewPcpProtocolConnConfig() *PcpProtocolConnConfig {
 		PConnTimeout:         10, // 10 seconds
 		ClientPortUpper:      65535,
 		ClientPortLower:      49152,
-		ConnConfig:           NewConnectionConfig(),
+		ConnConfig:           DefaultConnectionConfig(),
 		VerifyChecksum:       true, // Checksum verification is enabled by default
 		PConnOutputQueue:     100,
 	}
@@ -114,6 +115,7 @@ func newPcpProtocolConnection(pcpCore *PcpCore, key string, isServer bool, proto
 		serverAddr: serverAddr,
 		//ipConn:             ipConn,
 		rsConn:             rsConn,
+		pcpCore:            pcpCore,
 		outputChan:         make(chan *PcpPacket, config.PConnOutputQueue),
 		sigOutputChan:      make(chan *PcpPacket, 10),
 		connectionMap:      make(map[string]*Connection),
@@ -163,6 +165,7 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *ConnectionConfi
 		connCloseSignalChan:      p.connCloseSignal,
 		newConnChannel:           nil,
 		connSignalFailedToParent: nil,
+		pcpCore:                  p.pcpCore,
 	}
 
 	// Create a new temporary connection object for the 3-way handshake
@@ -178,7 +181,7 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *ConnectionConfi
 	p.mu.Unlock()
 
 	// Add filtering rule to drop RST packets
-	if err := addAFilteringRule(connParam.remoteAddr.(*net.IPAddr).IP.String(), serverPort); err != nil {
+	if err := p.pcpCore.filter.AddAClientFilteringRule(connParam.remoteAddr.(*net.IPAddr).IP.String(), serverPort); err != nil {
 		log.Println("PcpProtocolConnection.dial: Error adding filtering rule:", err)
 		return nil, err
 	}

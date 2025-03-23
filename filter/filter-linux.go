@@ -1,7 +1,7 @@
 //go:build linux
 // +build linux
 
-package lib
+package filter
 
 import (
 	"fmt"
@@ -11,15 +11,25 @@ import (
 	"strings"
 )
 
-const (
+/*const (
 	myComment = "PCP: "
-) // Comment to identify the rules
+) // Comment to identify the rules */
+
+type filterImpl struct {
+	comment string
+}
+
+func NewFilter(identifier string) Filter {
+	return &filterImpl{
+		comment: identifier,
+	}
+}
 
 // addAFilteringRule adds an iptables rule to drop RST packets originating from the given IP and port.
 // It first checks if the rule already exists to avoid duplicates.
-func addAFilteringRule(dstAddr string, dstPort int) error {
+func (f *filterImpl) AddAClientFilteringRule(dstAddr string, dstPort int) error {
 	// Construct the rule string to check for its existence
-	ruleCheck := fmt.Sprintf("-A OUTPUT -p tcp --tcp-flags RST RST -d %s --dport %d -m comment --comment \"%s\" -j DROP", dstAddr, dstPort, myComment)
+	ruleCheck := fmt.Sprintf("-A OUTPUT -p tcp --tcp-flags RST RST -d %s --dport %d -m comment --comment \"%s\" -j DROP", dstAddr, dstPort, f.comment)
 
 	// List all rules in the OUTPUT chain
 	cmd := exec.Command("iptables", "-S", "OUTPUT")
@@ -36,7 +46,7 @@ func addAFilteringRule(dstAddr string, dstPort int) error {
 	}
 
 	// Rule does not exist, add it
-	cmd = exec.Command("iptables", "-A", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-d", dstAddr, "--dport", strconv.Itoa(dstPort), "-m", "comment", "--comment", myComment, "-j", "DROP")
+	cmd = exec.Command("iptables", "-A", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-d", dstAddr, "--dport", strconv.Itoa(dstPort), "-m", "comment", "--comment", f.comment, "-j", "DROP")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to add iptables rule: %v", err)
 	}
@@ -45,10 +55,10 @@ func addAFilteringRule(dstAddr string, dstPort int) error {
 	return nil
 }
 
-// removeIptablesRule removes the iptables rule that was added for dropping RST packets.
-func removeAFilteringRule(dstAddr string, dstPort int) error {
+// RemoveIptablesRule removes the iptables rule that was added for dropping RST packets.
+func (f *filterImpl) RemoveAClientFilteringRule(dstAddr string, dstPort int) error {
 	// Construct the command to delete the iptables rule
-	cmd := exec.Command("iptables", "-D", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-d", dstAddr, "--dport", strconv.Itoa(dstPort), "-m", "comment", "--comment", myComment, "-j", "DROP")
+	cmd := exec.Command("iptables", "-D", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-d", dstAddr, "--dport", strconv.Itoa(dstPort), "-m", "comment", "--comment", f.comment, "-j", "DROP")
 
 	// Execute the command to delete the iptables rule
 	if err := cmd.Run(); err != nil {
@@ -60,7 +70,7 @@ func removeAFilteringRule(dstAddr string, dstPort int) error {
 }
 
 // finishFiltering removes all iptables rules with the "myAppRule" comment
-func finishFiltering() error {
+func (f *filterImpl) FinishFiltering() error {
 	// List all rules in the INPUT chain
 	cmd := exec.Command("iptables", "-S", "INPUT")
 	output, err := cmd.CombinedOutput()
@@ -71,7 +81,7 @@ func finishFiltering() error {
 	// Identify and delete rules with the "myAppRule" comment
 	var deleteErrors []string
 	for _, line := range strings.Split(string(output), "\n") {
-		if strings.Contains(line, "--comment \""+myComment+"\"") {
+		if strings.Contains(line, "--comment \""+f.comment+"\"") {
 			// Replace "-A" with "-D" to delete the rule
 			deleteCmd := strings.Replace(line, "-A", "-D", 1)
 			cmd := exec.Command("sh", "-c", "iptables "+deleteCmd)
@@ -90,9 +100,9 @@ func finishFiltering() error {
 }
 
 // addAFilteringRule adds an iptables rule to block RST packets originating from the given IP and port.
-func addAServerFilteringRule(srcAddr string, srcPort int) error {
+func (f *filterImpl) AddAServerFilteringRule(srcAddr string, srcPort int) error {
 	// Construct the rule string to check for its existence
-	ruleCheck := fmt.Sprintf("-A OUTPUT -p tcp --tcp-flags RST RST -s %s --sport %d -j DROP", srcAddr, srcPort)
+	ruleCheck := fmt.Sprintf("-A OUTPUT -p tcp --tcp-flags RST RST -s %s --sport %d -m comment --comment %s -j DROP", srcAddr, srcPort, f.comment)
 
 	// List all rules in the OUTPUT chain
 	cmd := exec.Command("iptables", "-S", "OUTPUT")
@@ -109,7 +119,7 @@ func addAServerFilteringRule(srcAddr string, srcPort int) error {
 	}
 
 	// Rule does not exist, add it
-	cmd = exec.Command("iptables", "-A", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-s", srcAddr, "--sport", strconv.Itoa(srcPort), "-j", "DROP")
+	cmd = exec.Command("iptables", "-A", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-s", srcAddr, "--sport", strconv.Itoa(srcPort), "-m", "comment", "--comment", f.comment, "-j", "DROP")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to add iptables rule: %v", err)
 	}
@@ -119,9 +129,9 @@ func addAServerFilteringRule(srcAddr string, srcPort int) error {
 }
 
 // removeAFilteringRule removes the iptables rule that blocks RST packets for the given IP and port.
-func removeAServerFilteringRule(srcAddr string, srcPort int) error {
+func (f *filterImpl) RemoveAServerFilteringRule(srcAddr string, srcPort int) error {
 	// Construct the command to delete the iptables rule
-	cmd := exec.Command("iptables", "-D", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-s", srcAddr, "--sport", strconv.Itoa(srcPort), "-j", "DROP")
+	cmd := exec.Command("iptables", "-D", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-s", srcAddr, "--sport", strconv.Itoa(srcPort), "-m", "comment", "--comment", f.comment, "-j", "DROP")
 
 	// Execute the command to delete the iptables rule
 	if err := cmd.Run(); err != nil {

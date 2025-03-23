@@ -1,7 +1,7 @@
 //go:build windows
 // +build windows
 
-package lib
+package filter
 
 import (
 	"errors"
@@ -16,81 +16,101 @@ import (
 	divert "github.com/imgk/divert-go"
 )
 
-var (
+type filterImpl struct {
+	handle    *divert.Handle
+	stopChan  chan struct{}
+	isRunning bool
+	ruleSet   map[string]bool // Track individual rules
+	mutex     sync.Mutex
+}
+
+/*var (
 	handle    *divert.Handle
 	stopChan  chan struct{}
 	isRunning bool
 	ruleSet   = make(map[string]bool) // Track individual rules
 	mutex     sync.Mutex
-)
+)*/
+
+// NewFilter creates a new filter instance
+func NewFilter(identifier string) Filter {
+	return &filterImpl{
+		handle:    nil,
+		stopChan:  nil,
+		isRunning: false,
+		ruleSet:   make(map[string]bool),
+	}
+}
 
 // addAFilteringRule adds a precise rule to filter TCP RST packets
-func addAFilteringRule(dstAddr string, dstPort int) error {
-	mutex.Lock()
-	defer mutex.Unlock()
+func (f *filterImpl) AddAClientFilteringRule(dstAddr string, dstPort int) error {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
 
 	ruleKey := fmt.Sprintf("%s:%d", dstAddr, dstPort)
-	if ruleSet[ruleKey] {
+	if f.ruleSet[ruleKey] {
 		return fmt.Errorf("rule already exists: %s", ruleKey)
 	}
 
-	if !isRunning {
+	if !f.isRunning {
 		filter := "tcp.Rst" // Capture TCP RST packets
 		h, err := divert.Open(filter, divert.LayerNetwork, 0, 0)
 		if err != nil {
 			return err
 		}
-		handle = h
-		stopChan = make(chan struct{})
-		isRunning = true
+		f.handle = h
+		f.stopChan = make(chan struct{})
+		f.isRunning = true
 
-		go runFilteringLoop() // Start filter loop
+		go f.runFilteringLoop() // Start filter loop
 	}
 
-	ruleSet[ruleKey] = true
+	f.ruleSet[ruleKey] = true
 	return nil
 }
 
 // removeAFilteringRule removes a specific filtering rule
-func removeAFilteringRule(dstAddr string, dstPort int) error {
-	mutex.Lock()
-	defer mutex.Unlock()
+func (f *filterImpl) RemoveAClientFilteringRule(dstAddr string, dstPort int) error {
+	f.mutex.Lock()
 
 	ruleKey := fmt.Sprintf("%s:%d", dstAddr, dstPort)
-	if !ruleSet[ruleKey] {
+	if !f.ruleSet[ruleKey] {
 		return fmt.Errorf("rule not found: %s", ruleKey)
 	}
 
-	delete(ruleSet, ruleKey)
+	delete(f.ruleSet, ruleKey)
 
-	if len(ruleSet) == 0 {
-		finishFiltering() // Clean up if no rules remain
+	if len(f.ruleSet) == 0 {
+		f.mutex.Unlock()
+		f.FinishFiltering() // Clean up if no rules remain
+		f.mutex.Lock()
 	}
 
+	f.mutex.Unlock()
 	return nil
 }
 
 // removeAnchor removes all filtering rules and stops the WinDivert handle
-func finishFiltering() error {
-	mutex.Lock()
-	defer mutex.Unlock()
+func (f *filterImpl) FinishFiltering() error {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
 
-	if !isRunning {
+	if !f.isRunning {
 		return errors.New("no active filtering rules")
 	}
 
-	close(stopChan)
-	isRunning = false
-	ruleSet = make(map[string]bool) // Clear all stored rules
+	close(f.stopChan)
+	f.isRunning = false
+	f.ruleSet = make(map[string]bool) // Clear all stored rules
 	return nil
 }
 
-func runFilteringLoop() {
+func (f *filterImpl) runFilteringLoop() {
 	defer func() {
-		mutex.Lock()
-		handle.Close()
-		isRunning = false
-		mutex.Unlock()
+		f.mutex.Lock()
+		f.handle.Close()
+		f.isRunning = false
+		f.mutex.Unlock()
 	}()
 
 	buf := make([]byte, 1500)
@@ -98,11 +118,11 @@ func runFilteringLoop() {
 
 	for {
 		select {
-		case <-stopChan:
+		case <-f.stopChan:
 			log.Println("Stopping filter...")
 			return
 		default:
-			n, err := handle.Recv(buf, &addr)
+			n, err := f.handle.Recv(buf, &addr)
 			if err != nil {
 				log.Println("Failed to receive packet:", err)
 				continue
@@ -126,12 +146,12 @@ func runFilteringLoop() {
 			tcp, _ := tcpLayer.(*layers.TCP)
 
 			ruleKey := fmt.Sprintf("%s:%d", ipv4.DstIP, tcp.DstPort)
-			if ruleSet[ruleKey] {
+			if f.ruleSet[ruleKey] {
 				log.Printf("Dropping RST packet: %s", ruleKey)
 				continue
 			}
 
-			if _, err := handle.Send(buf[:n], &addr); err != nil {
+			if _, err := f.handle.Send(buf[:n], &addr); err != nil {
 				log.Println("Failed to reinject packet:", err)
 			}
 		}
@@ -139,7 +159,7 @@ func runFilteringLoop() {
 }
 
 // addAFilteringRule adds an iptables rule to block RST packets originating from the given IP and port.
-func addAServerFilteringRule(srcAddr string, srcPort int) error {
+func (f *filterImpl) AddAServerFilteringRule(srcAddr string, srcPort int) error {
 	// Create a TCP socket and bind it to the desired IP address and port
 	address := fmt.Sprintf("%s:%d", srcAddr, srcPort)
 	listener, err := net.Listen("tcp", address)
@@ -160,6 +180,6 @@ func addAServerFilteringRule(srcAddr string, srcPort int) error {
 	return nil
 }
 
-func removeAServerFilteringRule(srcAddr string, srcPort int) error {
+func (f *filterImpl) RemoveAServerFilteringRule(srcAddr string, srcPort int) error {
 	return nil // placeholder
 }
