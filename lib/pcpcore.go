@@ -50,7 +50,7 @@ type PcpCore struct {
 func NewPcpCore(pcpcoreConfig *PcpCoreConfig) (*PcpCore, error) {
 	// starts the PCP core main service
 	// the main role is to create PcpCore object - one per system
-	filter, err := filter.NewFilter("PCP: ")
+	filter, err := filter.NewFilter("PCP_anchor")
 	if err != nil {
 		log.Fatal("Error creating filter object:", err)
 	}
