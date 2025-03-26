@@ -1089,8 +1089,13 @@ func (c *Connection) CloseAsGoRoutine(wg *sync.WaitGroup) {
 
 // PCP connection close
 func (c *Connection) Close() error {
+	if c.isClosed {
+		log.Println("PcpConnection.Close: Conection already closed. Return")
+		return nil
+	}
+
 	if c.connCloseBegins {
-		log.Println("Conection close already began. Return")
+		log.Println("PcpConnection.Close: Conection close already began. Return")
 		return nil
 	}
 
