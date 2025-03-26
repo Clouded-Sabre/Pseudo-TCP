@@ -1156,11 +1156,6 @@ func (c *Connection) clearConnResource() {
 		return
 	}
 
-	if c.connCloseBegins {
-		log.Println("PcpConnection.clearConnResource: Conection close already began. Return")
-		return
-	}
-
 	log.Println("PcpConnection.clearConnResource: Start clearing connection resource")
 	c.isClosedMu.Lock()
 	c.isClosed = true
