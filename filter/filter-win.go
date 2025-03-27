@@ -7,12 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"os/exec"
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -167,28 +165,58 @@ func (f *filterImpl) runFilteringLoop() {
 
 // addAFilteringRule adds an iptables rule to block RST packets originating from the given IP and port.
 func (f *filterImpl) AddAServerFilteringRule(srcAddr string, srcPort int) error {
-	// Create a TCP socket and bind it to the desired IP address and port
-	address := fmt.Sprintf("%s:%d", srcAddr, srcPort)
-	listener, err := net.Listen("tcp", address)
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+
+	ruleKey := fmt.Sprintf("%s:%d", srcAddr, srcPort)
+	if f.ruleSet[ruleKey] {
+		return fmt.Errorf("rule already exists: %s", ruleKey)
+	}
+
+	// Define the WinDivert filter string to block outgoing RST packets from srcAddr and srcPort
+	filter := fmt.Sprintf("tcp and tcp.Rst == 1 and ip.SrcAddr == %s and tcp.SrcPort == %d", srcAddr, srcPort)
+
+	// Open a WinDivert handle with the specified filter
+	handle, err := divert.Open(filter, divert.LayerNetwork, 0, divert.FlagDrop)
 	if err != nil {
-		return fmt.Errorf("failed to create listener on %s: %v", address, err)
+		return fmt.Errorf("failed to open WinDivert handle: %v", err)
 	}
 
-	// Don't accept any connections, just call Listen()
-	tcpListener, ok := listener.(*net.TCPListener)
-	if !ok {
-		return fmt.Errorf("failed to cast listener to TCPListener")
+	// Store the handle and start the filtering loop if not already running
+	if !f.isRunning {
+		f.handle = handle
+		f.stopChan = make(chan struct{})
+		f.isRunning = true
+		go f.runFilteringLoop()
 	}
 
-	// This makes the kernel aware of the port and prevents RST from being sent
-	tcpListener.SetDeadline(time.Now().Add(1 * time.Second)) // optional, just to make it a valid listener
-
-	// Return the listener
+	// Add the rule to the rule set
+	f.ruleSet[ruleKey] = true
+	log.Printf("Successfully added server filtering rule for source address: %s and port: %d\n", srcAddr, srcPort)
 	return nil
 }
 
 func (f *filterImpl) RemoveAServerFilteringRule(srcAddr string, srcPort int) error {
-	return nil // placeholder
+	f.mutex.Lock()
+
+	ruleKey := fmt.Sprintf("%s:%d", srcAddr, srcPort)
+	if !f.ruleSet[ruleKey] {
+		f.mutex.Unlock()
+		return fmt.Errorf("rule not found: %s", ruleKey)
+	}
+
+	// Remove the rule from the rule set
+	delete(f.ruleSet, ruleKey)
+
+	// Clean up if no rules remain
+	if len(f.ruleSet) == 0 {
+		f.mutex.Unlock()
+		f.FinishFiltering()
+		return nil
+	}
+
+	f.mutex.Unlock()
+	return nil
 }
 
 // addIcmpSrcFilteringRule adds a filtering rule which blocks icmp unreacheable packets from srcAddr.
