@@ -5,6 +5,7 @@ package filter
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -208,7 +209,7 @@ func containsRule(rules []string, target string) bool {
 
 // addAFilteringRule adds an iptables rule to block RST packets originating from the given IP and port.
 func (f *filterImpl) AddAServerFilteringRule(srcAddr string, srcPort int) error {
-	// 1. Retrieve current rules from the anchor.
+	/*// 1. Retrieve current rules from the anchor.
 	currentRules, err := getPfRules(f.anchor)
 	if err != nil {
 		return fmt.Errorf("failed to retrieve current rules: %v", err)
@@ -227,9 +228,10 @@ func (f *filterImpl) AddAServerFilteringRule(srcAddr string, srcPort int) error 
 	if err := pfLoadRules(f.anchor, rulesText); err != nil {
 		return fmt.Errorf("failed to load updated rules: %v", err)
 	}
+	*/
 
 	// 5. Start a dumb TCP server that listens on srcAddr:srcPort but does not accept connections.
-	/*go func() {
+	go func() {
 		address := fmt.Sprintf("%s:%d", srcAddr, srcPort)
 		listener, err := net.Listen("tcp", address)
 		if err != nil {
@@ -241,14 +243,14 @@ func (f *filterImpl) AddAServerFilteringRule(srcAddr string, srcPort int) error 
 
 		// Keep the listener open indefinitely without accepting connections.
 		select {}
-	}()*/
+	}()
 
-	// 6. Verify that the rule was added.
+	/*// 6. Verify that the rule was added.
 	if err := verifyRuleExactMatch(f.anchor, newRule); err != nil {
 		return fmt.Errorf("rule verification failed: %v", err)
 	}
 
-	fmt.Printf("Successfully added rule:\n%s\n", newRule)
+	fmt.Printf("Successfully added rule:\n%s\n", newRule)*/
 	return nil
 }
 
