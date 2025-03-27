@@ -5,7 +5,6 @@ package filter
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -230,7 +229,7 @@ func (f *filterImpl) AddAServerFilteringRule(srcAddr string, srcPort int) error 
 	}
 
 	// 5. Start a dumb TCP server that listens on srcAddr:srcPort but does not accept connections.
-	go func() {
+	/*go func() {
 		address := fmt.Sprintf("%s:%d", srcAddr, srcPort)
 		listener, err := net.Listen("tcp", address)
 		if err != nil {
@@ -242,7 +241,7 @@ func (f *filterImpl) AddAServerFilteringRule(srcAddr string, srcPort int) error 
 
 		// Keep the listener open indefinitely without accepting connections.
 		select {}
-	}()
+	}()*/
 
 	// 6. Verify that the rule was added.
 	if err := verifyRuleExactMatch(f.anchor, newRule); err != nil {
