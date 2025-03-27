@@ -215,7 +215,8 @@ func (f *filterImpl) AddAServerFilteringRule(srcAddr string, srcPort int) error 
 	}
 
 	// 2. Construct the new rule to block RST packets regardless of other flags.
-	newRule := fmt.Sprintf("block drop out quick inet proto tcp from %s port = %d to any flags R/R", srcAddr, srcPort)
+	//newRule := fmt.Sprintf("block drop out quick inet proto tcp from %s port = %d to any flags R/R", srcAddr, srcPort)
+	newRule := fmt.Sprintf("block drop out quick inet proto tcp from any port = %d to any flags R/R", srcPort)
 
 	// 3. Append the new rule if it does not already exist.
 	if !containsRule(currentRules, newRule) {
