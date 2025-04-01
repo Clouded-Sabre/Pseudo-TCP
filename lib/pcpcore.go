@@ -32,7 +32,7 @@ func DefaultPcpCoreConfig() *PcpCoreConfig {
 		Debug:                 false,
 		PoolDebug:             false,
 		ProcessTimeThreshold:  10,
-		RsConfig:              rs.NewDefaultRsConfig(),
+		RsConfig:              rs.DefaultRsConfig(),
 		PcpProtocolConnConfig: DefaultPcpProtocolConnConfig(),
 	}
 }
