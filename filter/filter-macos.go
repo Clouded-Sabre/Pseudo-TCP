@@ -206,7 +206,7 @@ func containsRule(rules []string, target string) bool {
 	return false
 }
 
-// addAFilteringRule adds an iptables rule to block RST packets originating from the given IP and port.
+/*// addAFilteringRule adds an iptables rule to block RST packets originating from the given IP and port.
 func (f *filterImpl) AddAServerFilteringRule(srcAddr string, srcPort int) error {
 	// 1. Retrieve current rules from the anchor.
 	currentRules, err := getPfRules(f.anchor)
@@ -264,6 +264,16 @@ func (f *filterImpl) RemoveAServerFilteringRule(srcAddr string, srcPort int) err
 	}
 
 	fmt.Println("Successfully removed rule.")
+	return nil
+}*/
+
+func (f *filterImpl) AddAServerFilteringRule(srcAddr string, srcPort int) error {
+	// placeholder as macos server need some special handling
+	return nil
+}
+
+func (f *filterImpl) RemoveAServerFilteringRule(srcAddr string, srcPort int) error {
+	// placeholder as macos server need some special handling
 	return nil
 }
 
