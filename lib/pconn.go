@@ -293,11 +293,6 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	}
 
 	//log.Println("The received PCP segment's total length is", n)
-	// extract Pcp frame from the received IP frame
-
-	// Extract source and destination IPv4 addresses from the buffer
-	//srcIP := net.IP(buffer[12:16]) // Source IP is at bytes 12-15
-	//dstIP := net.IP(buffer[16:20]) // Destination IP is at bytes 16-19
 	//log.Printf("PcpProtocolConnection.clientProcessingIncomingPacket: Source IP: %s, Destination IP: %s", srcIP, dstIP)
 
 	index, err := ExtractIpPayload(buffer[:n])
@@ -306,7 +301,6 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 		return
 	}
 
-	//log.Println("extracted PCP frame length is", index)
 	// check PCP packet checksum
 	// please note the first TcpPseudoHeaderLength bytes are reseved for Tcp pseudo header
 	if p.config.VerifyChecksum {

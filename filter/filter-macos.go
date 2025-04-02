@@ -5,14 +5,18 @@ package filter
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 )
 
 // filterImpl is the implementation of the Filter interface for macOS.
 type filterImpl struct {
-	anchor string
+	anchor   string
+	listener net.Listener // TCP listener for server filtering
+	mu       sync.Mutex   // protect concurrent access to listener
 }
 
 func NewFilter(identifier string) (Filter, error) {
@@ -206,74 +210,42 @@ func containsRule(rules []string, target string) bool {
 	return false
 }
 
-/*// addAFilteringRule adds an iptables rule to block RST packets originating from the given IP and port.
 func (f *filterImpl) AddAServerFilteringRule(srcAddr string, srcPort int) error {
-	// 1. Retrieve current rules from the anchor.
-	currentRules, err := getPfRules(f.anchor)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	// Check if there's already a listener
+	if f.listener != nil {
+		return fmt.Errorf("filterImpl.AddAServerFilteringRule: a TCP service is already active")
+	}
+
+	// Start TCP listener
+	address := fmt.Sprintf("%s:%d", srcAddr, srcPort)
+	listener, err := net.Listen("tcp", address)
 	if err != nil {
-		return fmt.Errorf("failed to retrieve current rules: %v", err)
+		return fmt.Errorf("filterImpl.AddAServerFilteringRule: failed to start TCP listener on %s: %v", address, err)
 	}
 
-	// 2. Construct the new rule to block RST packets regardless of other flags.
-	//newRule := fmt.Sprintf("block drop out quick inet proto tcp from %s port = %d to any flags R/R", srcAddr, srcPort)
-	newRule := fmt.Sprintf("block drop out quick inet proto tcp from any port = %d to any flags RA/RA", srcPort)
+	// Store the listener
+	f.listener = listener
+	fmt.Printf("filterImpl.AddAServerFilteringRule: TCP listener started on %s\n", address)
 
-	// 3. Append the new rule if it does not already exist.
-	if !containsRule(currentRules, newRule) {
-		currentRules = append(currentRules, newRule)
-	}
-
-	// 4. Reload the anchor with the updated rule set.
-	rulesText := strings.Join(currentRules, "\n")
-	if err := pfLoadRules(f.anchor, rulesText); err != nil {
-		return fmt.Errorf("failed to load updated rules: %v", err)
-	}
-
-	// 5. Verify that the rule was added.
-	if err := verifyRuleExactMatch(f.anchor, newRule); err != nil {
-		return fmt.Errorf("rule verification failed: %v", err)
-	}
-
-	fmt.Printf("Successfully added rule:\n%s\n", newRule)
 	return nil
 }
 
 func (f *filterImpl) RemoveAServerFilteringRule(srcAddr string, srcPort int) error {
-	// 1. Retrieve current rules.
-	currentRules, err := getPfRules(f.anchor)
-	if err != nil {
-		return fmt.Errorf("failed to retrieve current rules: %v", err)
-	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 
-	// 2. Construct the rule to remove.
-	ruleToRemove := fmt.Sprintf("block drop out quick inet proto tcp from %s port = %d to any flags R/R", srcAddr, srcPort)
-	fmt.Println("Removing rule:", ruleToRemove)
-
-	// 3. Filter out the rule from the current rules.
-	updatedRules := []string{}
-	for _, rule := range currentRules {
-		if strings.TrimSpace(rule) != strings.TrimSpace(ruleToRemove) {
-			updatedRules = append(updatedRules, rule)
+	if f.listener != nil {
+		err := f.listener.Close()
+		f.listener = nil
+		if err != nil {
+			return fmt.Errorf("failed to close TCP listener: %v", err)
 		}
+		fmt.Printf("TCP listener on %s:%d closed\n", srcAddr, srcPort)
 	}
 
-	// 4. Reload the anchor with the updated rules.
-	rulesText := strings.Join(updatedRules, "\n") + "\n"
-	if err := pfLoadRules(f.anchor, rulesText); err != nil {
-		return fmt.Errorf("failed to load updated rules: %v", err)
-	}
-
-	fmt.Println("Successfully removed rule.")
-	return nil
-}*/
-
-func (f *filterImpl) AddAServerFilteringRule(srcAddr string, srcPort int) error {
-	// placeholder as macos server need some special handling
-	return nil
-}
-
-func (f *filterImpl) RemoveAServerFilteringRule(srcAddr string, srcPort int) error {
-	// placeholder as macos server need some special handling
 	return nil
 }
 
