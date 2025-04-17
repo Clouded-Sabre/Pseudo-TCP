@@ -143,7 +143,7 @@ type ConnectionConfig struct {
 func DefaultConnectionConfig() *ConnectionConfig {
 	return &ConnectionConfig{
 		WindowScale:             14,
-		PreferredMSS:            1440,
+		PreferredMSS:            1400,
 		SackPermitSupport:       true,
 		SackOptionSupport:       true,
 		IdleTimeout:             25, //seconds
