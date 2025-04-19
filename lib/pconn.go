@@ -54,20 +54,6 @@ type PcpProtocolConnConfig struct {
 	PConnOutputQueue                 int
 }
 
-/*func newPcpProtocolConnConfig(pcpConfig *config.Config) *pcpProtocolConnConfig {
-	return &pcpProtocolConnConfig{
-		iptableRuleDaley:     pcpConfig.IptableRuleDaley,
-		preferredMSS:         pcpConfig.PreferredMSS,
-		packetLostSimulation: pcpConfig.PacketLostSimulation,
-		pConnTimeout:         pcpConfig.PConnTimeout,
-		clientPortUpper:      pcpConfig.ClientPortUpper,
-		clientPortLower:      pcpConfig.ClientPortLower,
-		connConfig:           newConnectionConfig(pcpConfig),
-		verifyChecksum:       pcpConfig.ChecksumVerification,
-		pconnOutputQueue:     pcpConfig.PconnOutputQueue,
-	}
-}*/
-
 func DefaultPcpProtocolConnConfig() *PcpProtocolConnConfig {
 	return &PcpProtocolConnConfig{
 		IptableRuleDaley:     200,
@@ -92,7 +78,7 @@ func newPcpProtocolConnection(pcpCore *PcpCore, key string, isServer bool, proto
 	if isServer {
 		// Listen on the PCP protocol (20) at the server IP
 		//ipConn, err = net.ListenIP("ip:"+strconv.Itoa(protocolId), serverAddr)
-		rsConn, err = pcpCore.rscore.ListenIP("ip:"+strconv.Itoa(protocolId), serverAddr)
+		rsConn, err = (*pcpCore.rscore).ListenIP("ip:"+strconv.Itoa(protocolId), serverAddr)
 		if err != nil {
 			fmt.Println("Error listening:", err)
 			return nil, err
@@ -100,7 +86,7 @@ func newPcpProtocolConnection(pcpCore *PcpCore, key string, isServer bool, proto
 	} else { // client
 		// dial in PCP protocol (20) to the server IP
 		//ipConn, err = net.DialIP("ip:"+strconv.Itoa(protocolId), localAddr, serverAddr)
-		rsConn, err = pcpCore.rscore.DialIP("ip:"+strconv.Itoa(protocolId), localAddr, serverAddr)
+		rsConn, err = (*pcpCore.rscore).DialIP("ip:"+strconv.Itoa(protocolId), localAddr, serverAddr)
 		if err != nil {
 			fmt.Println("Error dialing:", err)
 			return nil, err

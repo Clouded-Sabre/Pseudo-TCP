@@ -5,18 +5,14 @@ package filter
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"strings"
-	"sync"
 )
 
 // filterImpl is the implementation of the Filter interface for macOS.
 type filterImpl struct {
-	anchor   string
-	listener net.Listener // TCP listener for server filtering
-	mu       sync.Mutex   // protect concurrent access to listener
+	anchor string
 }
 
 func NewFilter(identifier string) (Filter, error) {
@@ -211,163 +207,38 @@ func containsRule(rules []string, target string) bool {
 }
 
 func (f *filterImpl) AddAServerFilteringRule(srcAddr string, srcPort int) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	// Check if there's already a listener
-	if f.listener != nil {
-		return fmt.Errorf("filterImpl.AddAServerFilteringRule: a TCP service is already active")
-	}
-
-	// Start TCP listener
-	address := fmt.Sprintf("%s:%d", srcAddr, srcPort)
-	listener, err := net.Listen("tcp", address)
-	if err != nil {
-		return fmt.Errorf("filterImpl.AddAServerFilteringRule: failed to start TCP listener on %s: %v", address, err)
-	}
-
-	// Store the listener
-	f.listener = listener
-	fmt.Printf("filterImpl.AddAServerFilteringRule: TCP listener started on %s\n", address)
+	// we won't use macos as raw socket server, so we do nothing here
 
 	return nil
 }
 
 func (f *filterImpl) RemoveAServerFilteringRule(srcAddr string, srcPort int) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	if f.listener != nil {
-		err := f.listener.Close()
-		f.listener = nil
-		if err != nil {
-			return fmt.Errorf("failed to close TCP listener: %v", err)
-		}
-		fmt.Printf("TCP listener on %s:%d closed\n", srcAddr, srcPort)
-	}
+	// we won't use macos as raw socket server, so we do nothing here
 
 	return nil
 }
 
 // AddIcmpSrcFilteringRule adds a filtering rule which blocks icmp unreacheable packets from srcAddr.
 func (f *filterImpl) AddIcmpSrcFilteringRule(srcAddr string) error {
-	// 3. Retrieve current rules from the anchor.
-	currentRules, err := getPfRules(f.anchor)
-	if err != nil {
-		return fmt.Errorf("failed to retrieve current rules: %v", err)
-	}
-
-	// 4. Construct the new rule to block ICMP type 3/3 packets.
-	newRule := fmt.Sprintf("block drop out quick inet proto icmp from %s to any icmp-type unreach code 3", srcAddr)
-
-	// 5. Append the new rule if it does not already exist.
-	if !containsRule(currentRules, newRule) {
-		currentRules = append(currentRules, newRule)
-	}
-
-	// 6. Reload the anchor with the updated rule set.
-	rulesText := strings.Join(currentRules, "\n")
-	if err := pfLoadRules(f.anchor, rulesText); err != nil {
-		return fmt.Errorf("failed to load updated rules: %v", err)
-	}
-
-	// 7. Verify that the rule was added.
-	if err := verifyRuleExactMatch(f.anchor, newRule); err != nil {
-		return fmt.Errorf("rule verification failed: %v", err)
-	}
-
-	fmt.Printf("Successfully added rule:\n%s\n", newRule)
+	// we won't use macos as raw socket server, so we do nothing here
 	return nil
 }
 
 // RemoveIcmpSrcFilteringRule removes a filtering rule which blocks icmp unreacheable packets from srcAddr.
 func (f *filterImpl) RemoveIcmpSrcFilteringRule(srcAddr string) error {
-	// 1. Retrieve current rules.
-	currentRules, err := getPfRules(f.anchor)
-	if err != nil {
-		return fmt.Errorf("failed to retrieve current rules: %v", err)
-	}
-
-	// 2. Construct the rule to remove.
-	ruleToRemove := fmt.Sprintf("block drop out quick inet proto icmp from %s to any icmp-type unreach code 3", srcAddr)
-	fmt.Println("Removing rule:", ruleToRemove)
-
-	// 3. Filter out the rule from the current rules.
-	updatedRules := []string{}
-	for _, rule := range currentRules {
-		if strings.TrimSpace(rule) != strings.TrimSpace(ruleToRemove) {
-			updatedRules = append(updatedRules, rule)
-		}
-	}
-
-	// 4. Reload the anchor with the updated rules.
-	rulesText := strings.Join(updatedRules, "\n") + "\n"
-	if err := pfLoadRules(f.anchor, rulesText); err != nil {
-		return fmt.Errorf("failed to load updated rules: %v", err)
-	}
-
-	fmt.Println("Successfully removed rule.")
+	// we won't use macos as raw socket server, so we do nothing here
 	return nil
 }
 
 // AddIcmpDstFilteringRule adds a filtering rule which block icmp unreacheable packets to dstAddr.
 func (f *filterImpl) AddIcmpDstFilteringRule(dstAddr string) error {
-	// 3. Retrieve current rules from the anchor.
-	currentRules, err := getPfRules(f.anchor)
-	if err != nil {
-		return fmt.Errorf("failed to retrieve current rules: %v", err)
-	}
-
-	// 4. Construct the new rule to block ICMP type 3/3 packets.
-	newRule := fmt.Sprintf("block drop out quick inet proto icmp from any to %s icmp-type unreach code 3", dstAddr)
-
-	// 5. Append the new rule if it does not already exist.
-	if !containsRule(currentRules, newRule) {
-		currentRules = append(currentRules, newRule)
-	}
-
-	// 6. Reload the anchor with the updated rule set.
-	rulesText := strings.Join(currentRules, "\n")
-	if err := pfLoadRules(f.anchor, rulesText); err != nil {
-		return fmt.Errorf("failed to load updated rules: %v", err)
-	}
-
-	// 7. Verify that the rule was added.
-	if err := verifyRuleExactMatch(f.anchor, newRule); err != nil {
-		return fmt.Errorf("rule verification failed: %v", err)
-	}
-
-	fmt.Printf("Successfully added rule:\n%s\n", newRule)
+	// we won't use macos as raw socket server, so we do nothing here
 	return nil
 }
 
 // RemoveIcmpDstFilteringRule removes a filtering rule which blocks icmp unreacheable packets to dstAddr.
 func (f *filterImpl) RemoveIcmpDstFilteringRule(dstAddr string) error {
-	// 1. Retrieve current rules.
-	currentRules, err := getPfRules(f.anchor)
-	if err != nil {
-		return fmt.Errorf("failed to retrieve current rules: %v", err)
-	}
-
-	// 2. Construct the rule to remove.
-	ruleToRemove := fmt.Sprintf("block drop out quick inet proto icmp from any to %s icmp-type unreach code 3", dstAddr)
-	fmt.Println("Removing rule:", ruleToRemove)
-
-	// 3. Filter out the rule from the current rules.
-	updatedRules := []string{}
-	for _, rule := range currentRules {
-		if strings.TrimSpace(rule) != strings.TrimSpace(ruleToRemove) {
-			updatedRules = append(updatedRules, rule)
-		}
-	}
-
-	// 4. Reload the anchor with the updated rules.
-	rulesText := strings.Join(updatedRules, "\n") + "\n"
-	if err := pfLoadRules(f.anchor, rulesText); err != nil {
-		return fmt.Errorf("failed to load updated rules: %v", err)
-	}
-
-	fmt.Println("Successfully removed rule.")
+	// we won't use macos as raw socket server, so we do nothing here
 	return nil
 }
 

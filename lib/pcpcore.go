@@ -39,7 +39,7 @@ func DefaultPcpCoreConfig() *PcpCoreConfig {
 
 type PcpCore struct {
 	config             *PcpCoreConfig                    // config
-	rscore             rs.RSCore                         // used for macos and windows only
+	rscore             *rs.RSCore                        // used for macos and windows only
 	protoConnectionMap map[string]*PcpProtocolConnection // keep track of all protocolConn created by dialIP
 	pConnCloseSignal   chan *PcpProtocolConnection
 	closeSignal        chan struct{}  // used to send close signal to go routines to stop when timeout arrives
@@ -47,19 +47,23 @@ type PcpCore struct {
 	filter             filter.Filter  // Filter to prevent RST packets
 }
 
-func NewPcpCore(pcpcoreConfig *PcpCoreConfig) (*PcpCore, error) {
+func NewPcpCore(pcpcoreConfig *PcpCoreConfig, rscore *rs.RSCore, filterName string) (*PcpCore, error) { // we have to pass rscore to pcpcore because there should be only one rscore per system
 	// starts the PCP core main service
-	// the main role is to create PcpCore object - one per system
+	if rscore == nil {
+		log.Fatalln("RSCore object should not be nil!")
+	}
+
 	filter, err := filter.NewFilter("PCP_anchor")
 	if err != nil {
 		log.Fatal("Error creating filter object:", err)
 	}
-	pcpServerObj := &PcpCore{
+	pcpCoreObj := &PcpCore{
 		config:             pcpcoreConfig,
 		protoConnectionMap: make(map[string]*PcpProtocolConnection),
 		pConnCloseSignal:   make(chan *PcpProtocolConnection),
 		closeSignal:        make(chan struct{}),
 		filter:             filter,
+		rscore:             rscore,
 	}
 
 	rp.Debug = pcpcoreConfig.PoolDebug
@@ -67,18 +71,13 @@ func NewPcpCore(pcpcoreConfig *PcpCoreConfig) (*PcpCore, error) {
 	Pool.Debug = pcpcoreConfig.PoolDebug
 	Pool.ProcessTimeThreshold = time.Duration(pcpcoreConfig.ProcessTimeThreshold) * time.Millisecond
 
-	// create RSCore object for rawsocket
-	pcpServerObj.rscore, err = rs.NewRSCore(pcpcoreConfig.RsConfig)
-	if err != nil {
-		log.Fatal("Error creating RSCore object:", err)
-	}
 	// Start goroutines
-	pcpServerObj.wg.Add(1) // Increase WaitGroup counter by 1 for the handleClosePConnConnection goroutines
-	go pcpServerObj.handleClosePConnConnection()
+	pcpCoreObj.wg.Add(1) // Increase WaitGroup counter by 1 for the handleClosePConnConnection goroutines
+	go pcpCoreObj.handleClosePConnConnection()
 
 	log.Println("Pcp protocol core started")
 
-	return pcpServerObj, nil
+	return pcpCoreObj, nil
 }
 
 // dialPcp simulates the TCP dial function interface for PCP.
@@ -227,7 +226,7 @@ func (p *PcpCore) Close() error {
 	p.filter.FinishFiltering() // finish filtering RST packet by removing any remaining filtering rules
 
 	if p.rscore != nil {
-		err := p.rscore.Close()
+		err := (*p.rscore).Close()
 		if err != nil {
 			log.Println("Error closing RSCore:", err)
 			return err
@@ -238,27 +237,3 @@ func (p *PcpCore) Close() error {
 
 	return nil
 }
-
-/*
-// setupDumbTcpServer adds an dumb tcp server at a specified ip:port to prevent RST packets originating from the given IP and port.
-func setupDumbTcpServer(ip string, port int) (*net.TCPListener, error) {
-	// Create a TCP socket and bind it to the desired IP address and port
-	address := fmt.Sprintf("%s:%d", ip, port)
-	listener, err := net.Listen("tcp", address)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create listener on %s: %v", address, err)
-	}
-
-	// Don't accept any connections, just call Listen()
-	tcpListener, ok := listener.(*net.TCPListener)
-	if !ok {
-		return nil, fmt.Errorf("failed to cast listener to TCPListener")
-	}
-
-	// This makes the kernel aware of the port and prevents RST from being sent
-	tcpListener.SetDeadline(time.Now().Add(1 * time.Second)) // optional, just to make it a valid listener
-
-	// Return the listener
-	return tcpListener, nil
-}
-*/

@@ -61,6 +61,7 @@ import (
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 	"github.com/Clouded-Sabre/Pseudo-TCP/lib"
+	rs "github.com/Clouded-Sabre/rawsocket/lib"
 )
 
 // Global variables for server configuration
@@ -192,8 +193,15 @@ func startPCPServer() {
 		log.Fatalln("Configurtion file error:", err)
 	}
 
+	defaultRsConf := rs.DefaultRsConfig()
+	rscore, err := rs.NewRSCore(defaultRsConf)
+	if err != nil {
+		log.Fatal("Failed to create rawsocket core. exit!")
+	}
+	defer rscore.Close()
+
 	// Create a PCP core object
-	pcpCoreObj, err = lib.NewPcpCore(pcpCoreConfig)
+	pcpCoreObj, err = lib.NewPcpCore(pcpCoreConfig, &rscore, "PCP_anchor")
 	if err != nil {
 		log.Println("Error creating PCP core:", err)
 		return
