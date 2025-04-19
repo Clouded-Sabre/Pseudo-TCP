@@ -426,7 +426,9 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 	//err = packet.Unmarshal(pcpFrame[:n], addr, p.serverAddr)
 	err = packet.Unmarshal(pcpFrame[:n], addr, p.serverAddr)
 	if err != nil {
-		log.Printf("PcpProtocolConnection.serverProcessingIncomingPacket: PCP packet from %s unmarshal error: %s Ignore the packet!\n", addr.(*net.IPAddr).String(), err)
+		if p.pcpCore.config.Debug {
+			log.Printf("PcpProtocolConnection.serverProcessingIncomingPacket: PCP packet from %s unmarshal error: %s Ignore the packet!\n", addr.(*net.IPAddr).String(), err)
+		}
 		// don't need to return chunk because it is done in copyToPayload
 		return
 	}
