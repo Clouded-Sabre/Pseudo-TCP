@@ -101,6 +101,7 @@ type ConnectionConfig struct {
 	PreferredMSS            int
 	SackPermitSupport       bool
 	SackOptionSupport       bool
+	RetransmissionEnabled   bool // whether to enable packet retransmission
 	IdleTimeout             int
 	KeepAliveEnabled        bool
 	KeepaliveInterval       int
@@ -115,38 +116,14 @@ type ConnectionConfig struct {
 	ShowStatistics          bool
 }
 
-/*func newConnectionConfig(pcpConfig *config.Config) *connectionConfig {
-	connConfig := &connectionConfig{
-		windowScale:             pcpConfig.WindowScale,
-		preferredMSS:            pcpConfig.PreferredMSS,
-		sackPermitSupport:       pcpConfig.SackPermitSupport,
-		sackOptionSupport:       pcpConfig.SackOptionSupport,
-		idleTimeout:             pcpConfig.IdleTimeout,
-		keepAliveEnabled:        pcpConfig.KeepAliveEnabled,
-		keepaliveInterval:       pcpConfig.KeepaliveInterval,
-		maxKeepaliveAttempts:    pcpConfig.MaxKeepaliveAttempts,
-		resendInterval:          pcpConfig.ResendInterval,
-		maxResendCount:          pcpConfig.MaxResendCount,
-		windowSizeWithScale:     pcpConfig.WindowSizeWithScale,
-		connSignalRetryInterval: pcpConfig.ConnSignalRetryInterval,
-		connSignalRetry:         pcpConfig.ConnSignalRetry,
-		connectionInputQueue:    pcpConfig.ConnectionInputQueue,
-		showStatistics:          pcpConfig.ShowStatistics,
-	}
-
-	// Print the configuration
-	log.Printf("PCP connection Configuration: %+v\n", *connConfig)
-
-	return connConfig
-}*/
-
 func DefaultConnectionConfig() *ConnectionConfig {
 	return &ConnectionConfig{
 		WindowScale:             14,
 		PreferredMSS:            1400,
 		SackPermitSupport:       true,
 		SackOptionSupport:       true,
-		IdleTimeout:             25, //seconds
+		RetransmissionEnabled:   false, // disabled by default
+		IdleTimeout:             25,    //seconds
 		KeepAliveEnabled:        true,
 		KeepaliveInterval:       5, //seconds
 		MaxKeepaliveAttempts:    3,
@@ -179,19 +156,20 @@ func newConnection(connParams *connectionParams, connConfig *ConnectionConfig) (
 		inputChannel:       make(chan *PcpPacket, connConfig.ConnectionInputQueue),
 		readChannel:        make(chan *PcpPacket, 200),
 		readDeadline:       time.Time{},
+		tcpOptions:         options,
+		idleTimeout:        time.Second * time.Duration(connConfig.IdleTimeout),
+		keepaliveInterval:  time.Second * time.Duration(connConfig.KeepaliveInterval),
+		closeSignal:        make(chan struct{}),
+		connSignalFailed:   make(chan struct{}),
+		wg:                 sync.WaitGroup{},
+		isClosedMu:         sync.Mutex{},
+	}
 
-		// all the rest variables keep there init value
-		tcpOptions:        options,
-		idleTimeout:       time.Second * time.Duration(connConfig.IdleTimeout),
-		keepaliveInterval: time.Second * time.Duration(connConfig.KeepaliveInterval),
-		resendPackets:     *NewResendPackets(),
-		resendInterval:    time.Duration(connConfig.ResendInterval) * time.Millisecond,
-		revPacketCache:    *NewPacketGapMap(),
-
-		closeSignal:      make(chan struct{}),
-		connSignalFailed: make(chan struct{}),
-		wg:               sync.WaitGroup{},
-		isClosedMu:       sync.Mutex{},
+	// Only initialize retransmission related fields if enabled
+	if connConfig.RetransmissionEnabled {
+		newConn.resendPackets = *NewResendPackets()
+		newConn.resendInterval = time.Duration(connConfig.ResendInterval) * time.Millisecond
+		newConn.revPacketCache = *NewPacketGapMap()
 	}
 
 	if connConfig.KeepAliveEnabled {
@@ -419,9 +397,8 @@ func (c *Connection) handle3WayHandshake() {
 					c.tcpOptions.tsEchoReplyValue = packet.TcpOptions.timestamp
 				}
 
-				//start resend timer if SACK enabled
-				if c.tcpOptions.SackEnabled {
-					// Start the resend timer
+				// Only start resend timer if retransmission is enabled
+				if c.tcpOptions.SackEnabled && c.config.RetransmissionEnabled {
 					c.startResendTimer()
 				}
 
@@ -454,7 +431,7 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 		return
 	}
 
-	if c.tcpOptions.SackEnabled {
+	if c.tcpOptions.SackEnabled && c.config.RetransmissionEnabled {
 		// if the packet is already in RevPacketCache, ignore it
 		if _, found := c.revPacketCache.GetPacket(packet.SequenceNumber); found {
 			if rp.Debug && packet.GetChunkReference() != nil {
@@ -529,9 +506,9 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 			c.revPacketCache.RemovePacket(seqNum) // remove the packet from RevPacketCache but do not return the chunk yet
 			// chunk will be returned after being read from ReadChannel
 		}
-	} else { // SACK support is disabled
+	} else { // Simple handling when retransmission or SACK support is disabled
 		// put packet payload to read channel regardless if it out-of-order or not, just like UDP
-		// higher layer is responsible for handling OOO
+		// higher layer is responsible for handling Out-of-order
 		if isGreaterOrEqual(packet.SequenceNumber, c.lastAckNumber) {
 			c.lastAckNumber = SeqIncrementBy(packet.SequenceNumber, uint32(len(packet.Payload)))
 		}
