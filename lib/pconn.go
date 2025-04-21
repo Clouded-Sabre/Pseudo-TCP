@@ -523,6 +523,7 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 			fp = packet.AddFootPrint("pcpProtocolConnection.handleOutgoingPackets")
 		}
 
+		// Packet loss simulation
 		if p.config.PacketLostSimulation {
 			if count == 0 {
 				lostCount = rand.Intn(10)
@@ -555,35 +556,42 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 			}
 		}
 
-		// add packet to the connection's ResendPackets to wait for acknowledgement from peer or resend if lost
-		if len(packet.Payload) > 0 {
-			if packet.Conn.tcpOptions.SackEnabled && !packet.IsKeepAliveMassege {
-				// if the packet is already in ResendPackets, it is a resend packet. Ignore it. Otherwise, add it to ResendPackets
-				if _, found := packet.Conn.resendPackets.GetSentPacket(packet.SequenceNumber); !found {
-					if rp.Debug && packet.GetChunkReference() != nil {
-						packet.TickFootPrint(fp)
-					}
-					packet.Conn.resendPackets.AddSentPacket(packet)
-				} else {
-					if p.config.ConnConfig.Debug {
-						fmt.Println("PCPProtocolConnection.handleOutgoingPackets: this is a resent packet. Do not put it into ResendPackets")
-					}
-					if rp.Debug && packet.GetChunkReference() != nil {
-						packet.TickFootPrint(fp)
-					}
-					packet.ReturnChunk() //return its chunk to pool
-				}
-			} else { // SACK is not enabled or it is a keepalive massage
-				if rp.Debug && packet.GetChunkReference() != nil {
-					packet.TickFootPrint(fp)
-				}
-				packet.ReturnChunk() //return its chunk to pool
-			}
-		}
-
+		// Always run packet loss simulation before handling the packet
 		if p.config.PacketLostSimulation {
 			count = (count + 1) % 10
 			packetLost = false
+		}
+
+		// Return chunk to pool if:
+		// 1. Retransmission is disabled, or
+		// 2. It's not a data packet, or
+		// 3. SACK is not enabled, or
+		// 4. It's a keepalive message
+		if !packet.Conn.config.RetransmissionEnabled ||
+			len(packet.Payload) == 0 ||
+			!packet.Conn.tcpOptions.SackEnabled ||
+			packet.IsKeepAliveMassege {
+			if rp.Debug && packet.GetChunkReference() != nil {
+				packet.TickFootPrint(fp)
+			}
+			packet.ReturnChunk()
+			continue
+		}
+
+		// Only add to ResendPackets if retransmission is enabled and packet not already in ResendPackets
+		if _, found := packet.Conn.resendPackets.GetSentPacket(packet.SequenceNumber); !found {
+			if rp.Debug && packet.GetChunkReference() != nil {
+				packet.TickFootPrint(fp)
+			}
+			packet.Conn.resendPackets.AddSentPacket(packet)
+		} else {
+			if p.config.ConnConfig.Debug {
+				fmt.Println("PCPProtocolConnection.handleOutgoingPackets: this is a resent packet. Do not put it into ResendPackets")
+			}
+			if rp.Debug && packet.GetChunkReference() != nil {
+				packet.TickFootPrint(fp)
+			}
+			packet.ReturnChunk()
 		}
 	}
 }
