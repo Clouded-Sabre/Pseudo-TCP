@@ -402,7 +402,7 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 
 	if p.config.VerifyChecksum {
 		if !VerifyChecksum(buffer[:TcpPseudoHeaderLength+n], addr, p.serverAddr, uint8(p.protocolId)) {
-			log.Println("PcpProtocolConnection.serverProcessingIncomingPacket: Packet checksum verification failed. Skip this packet.")
+			log.Printf("PcpProtocolConnection.serverProcessingIncomingPacket: Packet from %s checksum verification failed. Skip this packet.\n", addr.(*net.IPAddr).String())
 			return
 		}
 	}
