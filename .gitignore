@@ -14,3 +14,4 @@ test/testserver/main.go
 client/client.exe
 test/clientcompare/clientcompare.exe
 test/testclient/testclient.exe
+test/sshtest/client/client

@@ -570,7 +570,11 @@ func (c *Connection) Read(buffer []byte) (int, error) {
 		packet *PcpPacket
 		fp     int
 	)
-	if c == nil {
+
+	c.isClosedMu.Lock()
+	isClosed := c.isClosed
+	c.isClosedMu.Unlock()
+	if isClosed || c == nil {
 		return 0, io.EOF
 	}
 
@@ -640,6 +644,13 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 	// send out message to the other end
 	// mimicking net lib TCP write function interface
 	var fp int
+
+	c.isClosedMu.Lock()
+	isClosed := c.isClosed
+	c.isClosedMu.Unlock()
+	if isClosed || c == nil {
+		return 0, io.EOF
+	}
 
 	if c.writeOnHold {
 		err := fmt.Errorf("pcpConnection.Write: Connection termination in process")
