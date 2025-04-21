@@ -400,6 +400,15 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 		return
 	}
 
+	// Make an immediate copy of the received data
+	frameCopy := make([]byte, n)
+	copy(frameCopy, pcpFrame[:n])
+
+	if p.pcpCore.config.Debug {
+		log.Printf("Server received packet: len=%d first16=%x", n, frameCopy[:min(16, n)])
+	}
+
+	// Use the copy for all subsequent processing
 	if p.config.VerifyChecksum {
 		if !VerifyChecksum(buffer[:TcpPseudoHeaderLength+n], addr, p.serverAddr, uint8(p.protocolId)) {
 			log.Printf("PcpProtocolConnection.serverProcessingIncomingPacket: Packet from %s checksum verification failed. Skip this packet.\n", addr.(*net.IPAddr).String())
@@ -409,8 +418,7 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 
 	// Extract destination port
 	packet := &PcpPacket{}
-	//err = packet.Unmarshal(pcpFrame[:n], addr, p.serverAddr)
-	err = packet.Unmarshal(pcpFrame[:n], addr, p.serverAddr)
+	err = packet.Unmarshal(frameCopy, addr, p.serverAddr)
 	if err != nil {
 		if p.pcpCore.config.Debug {
 			log.Printf("PcpProtocolConnection.serverProcessingIncomingPacket: PCP packet from %s unmarshal error: %s Ignore the packet!\n", addr.(*net.IPAddr).String(), err)
@@ -467,6 +475,9 @@ func (p *PcpProtocolConnection) handleIncomingPackets() {
 	var buffer []byte
 	if p.isServer {
 		buffer = make([]byte, p.config.PreferredMSS+TcpHeaderLength+TcpOptionsMaxLength+TcpPseudoHeaderLength)
+		if p.pcpCore.config.Debug {
+			log.Printf("Server created receive buffer %p", buffer)
+		}
 	} else {
 		buffer = make([]byte, p.config.PreferredMSS+TcpHeaderLength+TcpOptionsMaxLength+IpHeaderMaxLength+TcpPseudoHeaderLength)
 	}

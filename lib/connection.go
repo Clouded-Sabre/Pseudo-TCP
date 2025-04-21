@@ -520,6 +520,10 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 		c.readChannel <- packet
 	}
 
+	if rp.Debug && packet.GetChunkReference() != nil {
+		log.Printf("Processing data packet: len=%d payload=%x", len(packet.Payload), packet.Payload[:min(16, len(packet.Payload))])
+	}
+
 	// send ACK packet back to the server
 	c.acknowledge()
 }
