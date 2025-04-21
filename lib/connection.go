@@ -256,11 +256,11 @@ func (c *Connection) handleIncomingPackets() {
 			}
 
 			// update ResendPackets if it's ACK packet
-			if packet.Conn.config.RetransmissionEnabled {
-				if packet.TcpOptions.SackEnabled && isACK && !isSYN && !isFIN && !isRST {
-					c.updateResendPacketsOnAck(packet)
-				}
+			//if packet.Conn.config.RetransmissionEnabled {
+			if packet.TcpOptions.SackEnabled && isACK && !isSYN && !isFIN && !isRST {
+				c.updateResendPacketsOnAck(packet)
 			}
+			//}
 
 			if isDataPacket {
 				// data packet received
