@@ -659,9 +659,9 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 
 	totalBytesWritten := 0
 
-	if len(buffer) > int(c.tcpOptions.mss) {
+	/*if len(buffer) > int(c.tcpOptions.mss) {
 		return 0, fmt.Errorf("pcpConnection.Write: buffer length (%d) is too short to hold the payload (length %d) to be written out", int(c.tcpOptions.mss), len(buffer))
-	}
+	}*/
 
 	c.txCount++
 
