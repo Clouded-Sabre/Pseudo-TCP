@@ -242,15 +242,6 @@ func (c *Connection) handleIncomingPackets() {
 			isRST = packet.Flags&RSTFlag != 0
 			isDataPacket = len(packet.Payload) > 0
 
-			/*// if the role is client, filter out 3-way handshake's ACK message from server, which is invalid
-			if !c.isServer && packet.Flags == ACKFlag && len(packet.Payload) == 0 {
-				if (packet.SequenceNumber == seqIncrement(c.InitialPeerSeq) &&
-					(packet.AcknowledgmentNum == seqIncrement(c.InitialSeq) {
-						// skip this packet because it's invalid
-						continue
-					}
-			}*/
-
 			if !isSYN && !isRST {
 				c.isBidirectional = true
 				if !c.writeOnHold && c.connSignalTimer != nil {
@@ -265,8 +256,10 @@ func (c *Connection) handleIncomingPackets() {
 			}
 
 			// update ResendPackets if it's ACK packet
-			if packet.TcpOptions.SackEnabled && isACK && !isSYN && !isFIN && !isRST {
-				c.updateResendPacketsOnAck(packet)
+			if packet.Conn.config.RetransmissionEnabled {
+				if packet.TcpOptions.SackEnabled && isACK && !isSYN && !isFIN && !isRST {
+					c.updateResendPacketsOnAck(packet)
+				}
 			}
 
 			if isDataPacket {

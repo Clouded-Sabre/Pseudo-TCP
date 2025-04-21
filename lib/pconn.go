@@ -400,12 +400,8 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 		return
 	}
 
-	// Make an immediate copy of the received data
-	frameCopy := make([]byte, n)
-	copy(frameCopy, pcpFrame[:n])
-
 	if p.pcpCore.config.Debug {
-		log.Printf("Server received packet: len=%d first16=%x", n, frameCopy[:min(16, n)])
+		log.Printf("Server received packet: len=%d first16=%x", n, pcpFrame[:min(16, n)])
 	}
 
 	// Use the copy for all subsequent processing
@@ -418,7 +414,7 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 
 	// Extract destination port
 	packet := &PcpPacket{}
-	err = packet.Unmarshal(frameCopy, addr, p.serverAddr)
+	err = packet.Unmarshal(pcpFrame, addr, p.serverAddr)
 	if err != nil {
 		if p.pcpCore.config.Debug {
 			log.Printf("PcpProtocolConnection.serverProcessingIncomingPacket: PCP packet from %s unmarshal error: %s Ignore the packet!\n", addr.(*net.IPAddr).String(), err)
@@ -466,7 +462,7 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 	service.inputChannel <- packet
 }
 
-// handleServicePacket is the main service packet dispatches loop.
+// handleIncomingPackets is the main service packet dispatches loop.
 func (p *PcpProtocolConnection) handleIncomingPackets() {
 	// Decrease WaitGroup counter when the goroutine completes
 	defer p.wg.Done()

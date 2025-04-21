@@ -138,7 +138,7 @@ func (s *Service) handleIncomingPackets() {
 	}
 }
 
-// handleDataPacket forward non-syn packet to corresponding open connection if present.
+// handleOtherPacket forward non-syn packet to corresponding open connection if present.
 func (s *Service) handleOtherPacket(packet *PcpPacket) {
 	var fp int
 	if rp.Debug && packet.GetChunkReference() != nil {
