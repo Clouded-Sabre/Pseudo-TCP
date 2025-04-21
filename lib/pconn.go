@@ -414,7 +414,7 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 
 	// Extract destination port
 	packet := &PcpPacket{}
-	err = packet.Unmarshal(pcpFrame, addr, p.serverAddr)
+	err = packet.Unmarshal(pcpFrame[:n], addr, p.serverAddr)
 	if err != nil {
 		if p.pcpCore.config.Debug {
 			log.Printf("PcpProtocolConnection.serverProcessingIncomingPacket: PCP packet from %s unmarshal error: %s Ignore the packet!\n", addr.(*net.IPAddr).String(), err)
