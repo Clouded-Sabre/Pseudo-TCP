@@ -8,6 +8,8 @@ github.com/Clouded-Sabre/rawsocket v0.0.0-20250422013342-6a07e56922d1 h1:DWjtwU2
 github.com/Clouded-Sabre/rawsocket v0.0.0-20250422013342-6a07e56922d1/go.mod h1:0cAz7wGZi4q4ZGJK5vUhzB6jI+IAiimj+qMxWGZObac=
 github.com/Clouded-Sabre/rawsocket v0.0.0-20250422015139-94566476144c h1:MyPgLJnUisuj5m4qt+elNYrNjTRmgrX7yr79wrYflQ8=
 github.com/Clouded-Sabre/rawsocket v0.0.0-20250422015139-94566476144c/go.mod h1:0cAz7wGZi4q4ZGJK5vUhzB6jI+IAiimj+qMxWGZObac=
+github.com/Clouded-Sabre/rawsocket v0.0.0-20250422151215-d3b02d753ade h1:3VtlgGjVqdzgzqz55QKyInTIyYMDHO6qmmGaO8ueqmI=
+github.com/Clouded-Sabre/rawsocket v0.0.0-20250422151215-d3b02d753ade/go.mod h1:0cAz7wGZi4q4ZGJK5vUhzB6jI+IAiimj+qMxWGZObac=
 github.com/Clouded-Sabre/ringpool v0.0.0-20240714075617-d50807410f3f h1:sHzGoaqIi19h8MIzDr9lMgiFcmk3XIXxo8YBKBedW+A=
 github.com/Clouded-Sabre/ringpool v0.0.0-20240714075617-d50807410f3f/go.mod h1:/78UKfbnsF0Mzdt6uygwmdvDMiiTgouyD91plgQxuFc=
 github.com/google/gopacket v1.1.19 h1:ves8RnFZPGiFnTS0uPQStjwru6uO6h+nlr9j6fL7kF8=
