@@ -6,6 +6,8 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"sync"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
@@ -14,6 +16,11 @@ import (
 )
 
 func main() {
+	// In your main function or init()
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
+
 	// Command-line flags
 	localPort := flag.Int("localPort", 2222, "Local port to listen for SSH clients")
 	serverIP := flag.String("serverIP", "127.0.0.2", "Forwarder server IP address")

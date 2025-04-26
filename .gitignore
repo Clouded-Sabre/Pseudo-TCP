@@ -16,3 +16,5 @@ test/clientcompare/clientcompare.exe
 test/testclient/testclient.exe
 test/sshtest/client/client
 test/sshtest/server/server
+test/sshtest/client/client.exe
+test/sshtest/server/server.exe

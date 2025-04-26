@@ -9,7 +9,7 @@ require github.com/Clouded-Sabre/ringpool v0.0.0-20240714075617-d50807410f3f
 require github.com/imgk/divert-go v0.0.0-20220205193416-faaa83c2c10a
 
 require (
-	github.com/Clouded-Sabre/rawsocket v0.0.0-20250422151215-d3b02d753ade
+	github.com/Clouded-Sabre/rawsocket v0.0.0-20250426143345-66c986b4e77c
 	github.com/google/gopacket v1.1.19
 	github.com/moriyoshi/routewrapper v0.0.0-20180228100351-e52d8d14cf39 // indirect
 	golang.org/x/net v0.27.0 // indirect
