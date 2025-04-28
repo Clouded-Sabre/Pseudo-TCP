@@ -44,19 +44,19 @@ type PcpCore struct {
 	pConnCloseSignal   chan *PcpProtocolConnection
 	closeSignal        chan struct{}  // used to send close signal to go routines to stop when timeout arrives
 	wg                 sync.WaitGroup // WaitGroup to synchronize goroutines
-	filter             filter.Filter  // Filter to prevent RST packets
+	filter             *filter.Filter // Filter to prevent RST packets
 }
 
-func NewPcpCore(pcpcoreConfig *PcpCoreConfig, rscore *rs.RSCore, filterName string) (*PcpCore, error) { // we have to pass rscore to pcpcore because there should be only one rscore per system
+func NewPcpCore(pcpcoreConfig *PcpCoreConfig, rscore *rs.RSCore, filter *filter.Filter) (*PcpCore, error) { // we have to pass rscore to pcpcore because there should be only one rscore per system
 	// starts the PCP core main service
 	if rscore == nil {
 		log.Fatalln("RSCore object should not be nil!")
 	}
 
-	filter, err := filter.NewFilter("PCP_anchor")
+	/*filter, err := filter.NewFilter("PCP_anchor")
 	if err != nil {
 		log.Fatal("Error creating filter object:", err)
-	}
+	}*/
 	pcpCoreObj := &PcpCore{
 		config:             pcpcoreConfig,
 		protoConnectionMap: make(map[string]*PcpProtocolConnection),
@@ -166,7 +166,7 @@ func (p *PcpCore) ListenPcp(serviceIP string, port int, connConfig *ConnectionCo
 		*/
 
 		// add a server side filtering rule to prevent RST packets
-		if err = p.filter.AddTcpServerFiltering(normServiceIpString, port); err != nil {
+		if err = (*p.filter).AddTcpServerFiltering(normServiceIpString, port); err != nil {
 			log.Println("Error adding server filtering rule:", err)
 			return nil, err
 		}
@@ -223,7 +223,7 @@ func (p *PcpCore) Close() error {
 
 	close(p.pConnCloseSignal)
 
-	p.filter.FinishFiltering() // finish filtering RST packet by removing any remaining filtering rules
+	(*p.filter).FinishFiltering() // finish filtering RST packet by removing any remaining filtering rules
 
 	if p.rscore != nil {
 		err := (*p.rscore).Close()
