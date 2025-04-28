@@ -166,7 +166,7 @@ func (p *PcpCore) ListenPcp(serviceIP string, port int, connConfig *ConnectionCo
 		*/
 
 		// add a server side filtering rule to prevent RST packets
-		if err = p.filter.AddAServerFilteringRule(normServiceIpString, port); err != nil {
+		if err = p.filter.AddTcpServerFiltering(normServiceIpString, port); err != nil {
 			log.Println("Error adding server filtering rule:", err)
 			return nil, err
 		}

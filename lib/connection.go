@@ -1230,7 +1230,7 @@ func (c *Connection) clearConnResource() {
 
 	// remove the filtering rule of the client side connection which is used to prevent outgoing RST packet
 	if !c.params.isServer { // client side connection
-		err := c.params.pcpCore.filter.RemoveAClientFilteringRule(c.RemoteAddr().IP.String(), c.RemotePort())
+		err := c.params.pcpCore.filter.RemoveTcpClientFiltering(c.RemoteAddr().IP.String(), c.RemotePort())
 		if err != nil {
 			log.Println("PcpConnection.clearConnResource: failed to remove filtering rule from client side connection")
 		} else {

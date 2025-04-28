@@ -30,8 +30,10 @@ func NewFilter(identifier string) (Filter, error) {
 
 // isIptablesEnabled checks if iptables is enabled and available on the system.
 func isIptablesEnabled() error {
-	// Run the iptables command to list rules in the OUTPUT chain
-	cmd := exec.Command("iptables", "-L", "OUTPUT")
+	// Run the iptables command to check if it is available and enabled
+	// The command "iptables -S" lists all rules in the filter table
+	// If iptables is not available, it will return an error
+	cmd := exec.Command("iptables", "-S")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("iptables is not enabled or available: %v\nOutput: %s", err, string(output))
@@ -44,7 +46,7 @@ func isIptablesEnabled() error {
 
 // addAFilteringRule adds an iptables rule to drop RST packets originating from the given IP and port.
 // It first checks if the rule already exists to avoid duplicates.
-func (f *filterImpl) AddAClientFilteringRule(dstAddr string, dstPort int) error {
+func (f *filterImpl) AddTcpClientFiltering(dstAddr string, dstPort int) error {
 	// Construct the rule string to check for its existence
 	ruleCheck := fmt.Sprintf("-A OUTPUT -p tcp --tcp-flags RST RST -d %s --dport %d -m comment --comment \"%s\" -j DROP", dstAddr, dstPort, f.comment)
 
@@ -73,7 +75,7 @@ func (f *filterImpl) AddAClientFilteringRule(dstAddr string, dstPort int) error 
 }
 
 // RemoveIptablesRule removes the iptables rule that was added for dropping RST packets.
-func (f *filterImpl) RemoveAClientFilteringRule(dstAddr string, dstPort int) error {
+func (f *filterImpl) RemoveTcpClientFiltering(dstAddr string, dstPort int) error {
 	// Construct the command to delete the iptables rule
 	cmd := exec.Command("iptables", "-D", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-d", dstAddr, "--dport", strconv.Itoa(dstPort), "-m", "comment", "--comment", f.comment, "-j", "DROP")
 
@@ -117,7 +119,7 @@ func (f *filterImpl) FinishFiltering() error {
 }
 
 // addAFilteringRule adds an iptables rule to block RST packets originating from the given IP and port.
-func (f *filterImpl) AddAServerFilteringRule(srcAddr string, srcPort int) error {
+func (f *filterImpl) AddTcpServerFiltering(srcAddr string, srcPort int) error {
 	// Construct the rule string to check for its existence
 	ruleCheck := fmt.Sprintf("-A OUTPUT -p tcp --tcp-flags RST RST -s %s --sport %d -m comment --comment %s -j DROP", srcAddr, srcPort, f.comment)
 
@@ -146,7 +148,7 @@ func (f *filterImpl) AddAServerFilteringRule(srcAddr string, srcPort int) error 
 }
 
 // removeAFilteringRule removes the iptables rule that blocks RST packets for the given IP and port.
-func (f *filterImpl) RemoveAServerFilteringRule(srcAddr string, srcPort int) error {
+func (f *filterImpl) RemoveTcpServerFiltering(srcAddr string, srcPort int) error {
 	// Construct the command to delete the iptables rule
 	cmd := exec.Command("iptables", "-D", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-s", srcAddr, "--sport", strconv.Itoa(srcPort), "-m", "comment", "--comment", f.comment, "-j", "DROP")
 
@@ -159,7 +161,7 @@ func (f *filterImpl) RemoveAServerFilteringRule(srcAddr string, srcPort int) err
 	return nil
 }
 
-func (f *filterImpl) AddIcmpSrcFilteringRule(srcAddr string) error {
+func (f *filterImpl) AddUdpServerFiltering(srcAddr string) error {
 	// adds an iptables rule to drop icmp port unreachable packets originating from the given IP and port.
 	// Build the iptables command
 	cmd := exec.Command("iptables", "-A", "OUTPUT",
@@ -177,7 +179,7 @@ func (f *filterImpl) AddIcmpSrcFilteringRule(srcAddr string) error {
 	return nil
 }
 
-func (f *filterImpl) RemoveIcmpSrcFilteringRule(srcAddr string) error {
+func (f *filterImpl) RemoveUdpServerFiltering(srcAddr string) error {
 	// removes the iptables rule that blocks icmp port unreachable packets for the given IP and port.
 	// Build the iptables command
 	cmd := exec.Command("iptables", "-D", "OUTPUT",
@@ -195,7 +197,7 @@ func (f *filterImpl) RemoveIcmpSrcFilteringRule(srcAddr string) error {
 	return nil
 }
 
-func (f *filterImpl) AddIcmpDstFilteringRule(dstAddr string) error {
+func (f *filterImpl) AddUdpClientFiltering(dstAddr string) error {
 	// adds an iptables rule to drop icmp port unreachable packets destined to the given IP.
 	// Build the iptables command
 	cmd := exec.Command("iptables", "-A", "OUTPUT",
@@ -213,7 +215,7 @@ func (f *filterImpl) AddIcmpDstFilteringRule(dstAddr string) error {
 	return nil
 }
 
-func (f *filterImpl) RemoveIcmpDstFilteringRule(dstAddr string) error {
+func (f *filterImpl) RemoveUdpClientFiltering(dstAddr string) error {
 	// removes the iptables rule that blocks icmp port unreachable packets to the given IP.
 	// Build the iptables command
 	cmd := exec.Command("iptables", "-D", "OUTPUT",

@@ -48,7 +48,7 @@ func NewFilter(identifier string) (Filter, error) {
 }
 
 // addAFilteringRule adds a precise rule to filter TCP RST packets
-func (f *filterImpl) AddAClientFilteringRule(dstAddr string, dstPort int) error {
+func (f *filterImpl) AddTcpClientFiltering(dstAddr string, dstPort int) error {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 
@@ -75,7 +75,7 @@ func (f *filterImpl) AddAClientFilteringRule(dstAddr string, dstPort int) error 
 }
 
 // removeAFilteringRule removes a specific filtering rule
-func (f *filterImpl) RemoveAClientFilteringRule(dstAddr string, dstPort int) error {
+func (f *filterImpl) RemoveTcpClientFiltering(dstAddr string, dstPort int) error {
 	f.mutex.Lock()
 
 	ruleKey := fmt.Sprintf("%s:%d", dstAddr, dstPort)
@@ -164,7 +164,7 @@ func (f *filterImpl) runFilteringLoop() {
 }
 
 // addAFilteringRule adds an iptables rule to block RST packets originating from the given IP and port.
-func (f *filterImpl) AddAServerFilteringRule(srcAddr string, srcPort int) error {
+func (f *filterImpl) AddTcpServerFiltering(srcAddr string, srcPort int) error {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 
@@ -196,7 +196,7 @@ func (f *filterImpl) AddAServerFilteringRule(srcAddr string, srcPort int) error 
 	return nil
 }
 
-func (f *filterImpl) RemoveAServerFilteringRule(srcAddr string, srcPort int) error {
+func (f *filterImpl) RemoveTcpServerFiltering(srcAddr string, srcPort int) error {
 	f.mutex.Lock()
 
 	ruleKey := fmt.Sprintf("%s:%d", srcAddr, srcPort)
@@ -220,7 +220,7 @@ func (f *filterImpl) RemoveAServerFilteringRule(srcAddr string, srcPort int) err
 }
 
 // addIcmpSrcFilteringRule adds a filtering rule which blocks icmp unreacheable packets from srcAddr.
-func (f *filterImpl) AddIcmpSrcFilteringRule(srcAddr string) error {
+func (f *filterImpl) AddUdpServerFiltering(srcAddr string) error {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 
@@ -310,7 +310,7 @@ func (f *filterImpl) runIcmpFilteringLoop() {
 }
 
 // removeIcmpSrcFilteringRule removes a filtering rule which blocks icmp unreacheable packets from srcAddr.
-func (f *filterImpl) RemoveIcmpSrcFilteringRule(srcAddr string) error {
+func (f *filterImpl) RemoveUdpServerFiltering(srcAddr string) error {
 	f.mutex.Lock()
 
 	// Check if the rule exists
@@ -334,7 +334,7 @@ func (f *filterImpl) RemoveIcmpSrcFilteringRule(srcAddr string) error {
 }
 
 // addIcmpDstFilteringRule adds a filtering rule which blocks icmp unreacheable packets to dstAddr.
-func (f *filterImpl) AddIcmpDstFilteringRule(dstAddr string) error {
+func (f *filterImpl) AddUdpClientFiltering(dstAddr string) error {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 
@@ -367,7 +367,7 @@ func (f *filterImpl) AddIcmpDstFilteringRule(dstAddr string) error {
 }
 
 // removeIcmpDstFilteringRule removes a filtering rule which blocks icmp unreacheable packets to dstAddr.
-func (f *filterImpl) RemoveIcmpDstFilteringRule(dstAddr string) error {
+func (f *filterImpl) RemoveUdpClientFiltering(dstAddr string) error {
 	f.mutex.Lock()
 
 	// Check if the rule exists

@@ -42,7 +42,7 @@ func NewFilter(identifier string) (Filter, error) {
 }
 
 // addAFilteringRule adds a new filtering rule to the anchor while leaving existing rules intact.
-func (f *filterImpl) AddAClientFilteringRule(dstAddr string, dstPort int) error {
+func (f *filterImpl) AddTcpClientFiltering(dstAddr string, dstPort int) error {
 
 	// 3. Retrieve current rules from the anchor.
 	currentRules, err := getPfRules(f.anchor)
@@ -76,7 +76,7 @@ func (f *filterImpl) AddAClientFilteringRule(dstAddr string, dstPort int) error 
 }
 
 // removeAFilteringRule removes a single filtering rule from the anchor while leaving the other rules intact.
-func (f *filterImpl) RemoveAClientFilteringRule(dstAddr string, dstPort int) error {
+func (f *filterImpl) RemoveTcpClientFiltering(dstAddr string, dstPort int) error {
 	// 1. Retrieve current rules.
 	currentRules, err := getPfRules(f.anchor)
 	if err != nil {
@@ -206,38 +206,38 @@ func containsRule(rules []string, target string) bool {
 	return false
 }
 
-func (f *filterImpl) AddAServerFilteringRule(srcAddr string, srcPort int) error {
+func (f *filterImpl) AddTcpServerFiltering(srcAddr string, srcPort int) error {
 	// we won't use macos as raw socket server, so we do nothing here
 
 	return nil
 }
 
-func (f *filterImpl) RemoveAServerFilteringRule(srcAddr string, srcPort int) error {
+func (f *filterImpl) RemoveTcpServerFiltering(srcAddr string, srcPort int) error {
 	// we won't use macos as raw socket server, so we do nothing here
 
 	return nil
 }
 
 // AddIcmpSrcFilteringRule adds a filtering rule which blocks icmp unreacheable packets from srcAddr.
-func (f *filterImpl) AddIcmpSrcFilteringRule(srcAddr string) error {
+func (f *filterImpl) AddUdpServerFiltering(srcAddr string) error {
 	// we won't use macos as raw socket server, so we do nothing here
 	return nil
 }
 
 // RemoveIcmpSrcFilteringRule removes a filtering rule which blocks icmp unreacheable packets from srcAddr.
-func (f *filterImpl) RemoveIcmpSrcFilteringRule(srcAddr string) error {
+func (f *filterImpl) RemoveUdpServerFiltering(srcAddr string) error {
 	// we won't use macos as raw socket server, so we do nothing here
 	return nil
 }
 
 // AddIcmpDstFilteringRule adds a filtering rule which block icmp unreacheable packets to dstAddr.
-func (f *filterImpl) AddIcmpDstFilteringRule(dstAddr string) error {
+func (f *filterImpl) AddUdpClientFiltering(dstAddr string) error {
 	// we won't use macos as raw socket server, so we do nothing here
 	return nil
 }
 
 // RemoveIcmpDstFilteringRule removes a filtering rule which blocks icmp unreacheable packets to dstAddr.
-func (f *filterImpl) RemoveIcmpDstFilteringRule(dstAddr string) error {
+func (f *filterImpl) RemoveUdpClientFiltering(dstAddr string) error {
 	// we won't use macos as raw socket server, so we do nothing here
 	return nil
 }
