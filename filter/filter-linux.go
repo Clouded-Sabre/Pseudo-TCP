@@ -6,9 +6,11 @@ package filter
 import (
 	"fmt"
 	"log"
+	"net"
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 /*const (
@@ -16,7 +18,8 @@ import (
 ) // Comment to identify the rules */
 
 type filterImpl struct {
-	comment string
+	comment   string
+	udpSrcMap sync.Map // Map to store UDP source addresses and ports to udp connections
 }
 
 func NewFilter(identifier string) (Filter, error) {
@@ -161,7 +164,48 @@ func (f *filterImpl) RemoveTcpServerFiltering(srcAddr string, srcPort int) error
 	return nil
 }
 
-func (f *filterImpl) AddUdpServerFiltering(srcAddr string) error {
+func (f *filterImpl) AddUdpServerFiltering(srcAddr string) error { // srcAddr is the source ip address and port of the UDP server in "ip:port" format
+	// start a dummy UDP server to prevent icmp port unreachable packets
+	// Check if we already have a UDP server for this address
+	if _, exists := f.udpSrcMap.Load(srcAddr); exists {
+		// Server already exists, just increment the reference count
+		return nil
+	}
+
+	// No existing server, create a new one
+	udpAddr, err := net.ResolveUDPAddr("udp", srcAddr)
+	if err != nil {
+		return fmt.Errorf("invalid UDP address: %v", err)
+	}
+
+	// Create UDP connection
+	conn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		return fmt.Errorf("failed to start UDP server: %v", err)
+	}
+
+	// Store the connection with initial reference count of 1
+	f.udpSrcMap.Store(srcAddr, conn)
+
+	log.Printf("Started the dummy UDP server at %s\n", srcAddr)
+	return nil
+}
+
+func (f *filterImpl) RemoveUdpServerFiltering(srcAddr string) error { // srcAddr is the source ip address and port of the UDP server in "ip:port" format
+	// removes the dummy udp server listening at the given IP and port.
+	// Check if we have a UDP server for this address
+	if conn, exists := f.udpSrcMap.Load(srcAddr); exists {
+		// Server already exists, just increment the reference count
+		conn.(*net.UDPConn).Close()
+		log.Printf("Stopped the dummy UDP server at %s\n", srcAddr)
+		return nil
+	}
+
+	// No existing server
+	return nil
+}
+
+/* func (f *filterImpl) AddUdpServerFiltering(srcAddr string) error {  // srcAddr is the source ip address of the UDP server
 	// adds an iptables rule to drop icmp port unreachable packets originating from the given IP and port.
 	// Build the iptables command
 	cmd := exec.Command("iptables", "-A", "OUTPUT",
@@ -179,7 +223,7 @@ func (f *filterImpl) AddUdpServerFiltering(srcAddr string) error {
 	return nil
 }
 
-func (f *filterImpl) RemoveUdpServerFiltering(srcAddr string) error {
+func (f *filterImpl) RemoveUdpServerFiltering(srcAddr string) error { // srcAddr is the source ip address of the UDP server
 	// removes the iptables rule that blocks icmp port unreachable packets for the given IP and port.
 	// Build the iptables command
 	cmd := exec.Command("iptables", "-D", "OUTPUT",
@@ -195,13 +239,18 @@ func (f *filterImpl) RemoveUdpServerFiltering(srcAddr string) error {
 
 	log.Printf("Successfully removed rule: %s\n", cmd.String())
 	return nil
-}
+}*/
 
-func (f *filterImpl) AddUdpClientFiltering(dstAddr string) error {
+func (f *filterImpl) AddUdpClientFiltering(dstAddr string) error { // srcAddr is the destination address of the UDP server in "ip:port" format
 	// adds an iptables rule to drop icmp port unreachable packets destined to the given IP.
+	// first we need to extract the ip address from the dstAddr string
+	ipStr, _, err := net.SplitHostPort(dstAddr)
+	if err != nil {
+		return fmt.Errorf("invalid destination address format: %v", err)
+	}
 	// Build the iptables command
 	cmd := exec.Command("iptables", "-A", "OUTPUT",
-		"-d", dstAddr,
+		"-d", ipStr,
 		"-p", "icmp",
 		"--icmp-type", "3/3",
 		//"-m", "u32",
@@ -215,11 +264,16 @@ func (f *filterImpl) AddUdpClientFiltering(dstAddr string) error {
 	return nil
 }
 
-func (f *filterImpl) RemoveUdpClientFiltering(dstAddr string) error {
+func (f *filterImpl) RemoveUdpClientFiltering(dstAddr string) error { // srcAddr is the destination ip address of the UDP server in "ip:port" format
 	// removes the iptables rule that blocks icmp port unreachable packets to the given IP.
+	// first we need to extract the ip address from the dstAddr string
+	ipStr, _, err := net.SplitHostPort(dstAddr)
+	if err != nil {
+		return fmt.Errorf("invalid destination address format: %v", err)
+	}
 	// Build the iptables command
 	cmd := exec.Command("iptables", "-D", "OUTPUT",
-		"-d", dstAddr,
+		"-d", ipStr,
 		"-p", "icmp",
 		"--icmp-type", "3/3",
 		//"-m", "u32",

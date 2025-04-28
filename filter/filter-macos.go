@@ -232,13 +232,13 @@ func (f *filterImpl) RemoveUdpServerFiltering(srcAddr string) error {
 
 // AddIcmpDstFilteringRule adds a filtering rule which block icmp unreacheable packets to dstAddr.
 func (f *filterImpl) AddUdpClientFiltering(dstAddr string) error {
-	// we won't use macos as raw socket server, so we do nothing here
+	// we won't use macos as udp raw socket client, so we do nothing here
 	return nil
 }
 
 // RemoveIcmpDstFilteringRule removes a filtering rule which blocks icmp unreacheable packets to dstAddr.
 func (f *filterImpl) RemoveUdpClientFiltering(dstAddr string) error {
-	// we won't use macos as raw socket server, so we do nothing here
+	// we won't use macos as udp raw socket client, so we do nothing here
 	return nil
 }
 
