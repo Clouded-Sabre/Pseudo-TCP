@@ -63,6 +63,7 @@ import (
 	"time"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
+	"github.com/Clouded-Sabre/Pseudo-TCP/filter"
 	"github.com/Clouded-Sabre/Pseudo-TCP/lib"
 	rs "github.com/Clouded-Sabre/rawsocket/lib"
 )
@@ -94,7 +95,11 @@ func main() {
 	}
 	defer rscore.Close()
 
-	pcpCoreObj, err := lib.NewPcpCore(pcpCoreConfig, &rscore, "PCP_anchor")
+	filter, err := filter.NewFilter("PCP_anchor")
+	if err != nil {
+		log.Fatal("Error creating filter object:", err)
+	}
+	pcpCoreObj, err := lib.NewPcpCore(pcpCoreConfig, &rscore, &filter)
 	if err != nil {
 		log.Println(err)
 		return
