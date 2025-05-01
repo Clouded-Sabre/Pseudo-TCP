@@ -11,7 +11,6 @@ import (
 	"syscall"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
-	"github.com/Clouded-Sabre/Pseudo-TCP/filter"
 	"github.com/Clouded-Sabre/Pseudo-TCP/lib"
 	rs "github.com/Clouded-Sabre/rawsocket/lib"
 )
@@ -45,12 +44,8 @@ func main() {
 	}
 	defer rscore.Close()
 
-	filter, err := filter.NewFilter("PCP_anchor")
-	if err != nil {
-		log.Fatal("Error creating filter object:", err)
-	}
 	// Create PCP core
-	pcpCoreObj, err := lib.NewPcpCore(pcpCoreConfig, &rscore, &filter)
+	pcpCoreObj, err := lib.NewPcpCore(pcpCoreConfig, &rscore, "PCP_anchor")
 	if err != nil {
 		log.Fatalf("Error creating PCP core: %v", err)
 	}

@@ -167,7 +167,7 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *ConnectionConfi
 	p.mu.Unlock()
 
 	// Add filtering rule to drop RST packets
-	if err := (*p.pcpCore.filter).AddTcpClientFiltering(connParam.remoteAddr.(*net.IPAddr).IP.String(), serverPort); err != nil {
+	if err := p.pcpCore.filter.AddTcpClientFiltering(connParam.remoteAddr.(*net.IPAddr).IP.String(), serverPort); err != nil {
 		log.Println("PcpProtocolConnection.dial: Error adding filtering rule:", err)
 		return nil, err
 	}

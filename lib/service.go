@@ -404,7 +404,7 @@ func (s *Service) Close() error {
 	*/
 
 	// remove the server side filtering rule
-	err := (*s.pcpCore.filter).RemoveTcpServerFiltering(s.serviceAddr.String(), s.port)
+	err := s.pcpCore.filter.RemoveTcpServerFiltering(s.serviceAddr.String(), s.port)
 	if err != nil {
 		log.Println("Error removing server filtering rule:", err)
 	}
