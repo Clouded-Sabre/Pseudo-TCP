@@ -11,14 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
-
-type udpConnEntry struct {
-	conn        *net.UDPConn
-	closeSignal chan struct{}
-	wg          sync.WaitGroup
-}
 
 /*const (
 	myComment = "PCP: "
@@ -191,40 +184,8 @@ func (f *filterImpl) AddUdpServerFiltering(srcAddr string) error { // srcAddr is
 		return fmt.Errorf("failed to start UDP server: %v", err)
 	}
 
-	// Create UDP connection entry
-	entry := &udpConnEntry{
-		conn:        conn,
-		closeSignal: make(chan struct{}),
-	}
-
-	// Start goroutine to handle incoming packets
-	entry.wg.Add(1)
-	go func() {
-		defer entry.wg.Done()
-		buffer := make([]byte, 65535)
-		for {
-			select {
-			case <-entry.closeSignal:
-				return
-			default:
-				conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-				_, _, err := conn.ReadFromUDP(buffer)
-				if err != nil {
-					if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-						continue
-					}
-					// other errors - probably connection closed
-					return
-				}
-				// Discard the received data - we just want to prevent ICMP unreachable
-			}
-		}
-	}()
-
-	// Store the connection entry in the map
-	//f.udpSrcMap.Store(srcAddr, conn)
-	// Store the connection entry
-	f.udpSrcMap.Store(srcAddr, entry)
+	// Store the connection with initial reference count of 1
+	f.udpSrcMap.Store(srcAddr, conn)
 
 	log.Printf("Started the dummy UDP server at %s\n", srcAddr)
 	return nil
@@ -233,26 +194,11 @@ func (f *filterImpl) AddUdpServerFiltering(srcAddr string) error { // srcAddr is
 func (f *filterImpl) RemoveUdpServerFiltering(srcAddr string) error { // srcAddr is the source ip address and port of the UDP server in "ip:port" format
 	// removes the dummy udp server listening at the given IP and port.
 	// Check if we have a UDP server for this address
-	/*if conn, exists := f.udpSrcMap.Load(srcAddr); exists {
+	if conn, exists := f.udpSrcMap.Load(srcAddr); exists {
 		// Server already exists, just increment the reference count
 		conn.(*net.UDPConn).Close()
 		log.Printf("Stopped the dummy UDP server at %s\n", srcAddr)
 		return nil
-	}*/
-	value, exists := f.udpSrcMap.Load(srcAddr)
-	if !exists {
-
-		entry := value.(*udpConnEntry)
-		// Signal the goroutine to stop
-		close(entry.closeSignal)
-		// Close the connection
-		entry.conn.Close()
-		// Wait for the goroutine to finish
-		entry.wg.Wait()
-		// Remove from the map
-		f.udpSrcMap.Delete(srcAddr)
-
-		log.Printf("Stopped the dummy UDP server at %s\n", srcAddr)
 	}
 
 	// No existing server
