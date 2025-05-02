@@ -12,7 +12,8 @@ import (
 
 // filterImpl is the implementation of the Filter interface for macOS.
 type filterImpl struct {
-	anchor string
+	anchor          string
+	udpServerFilter *udpServerFilter // Struct containing the shared method
 }
 
 func NewFilter(identifier string) (Filter, error) {
@@ -37,7 +38,8 @@ func NewFilter(identifier string) (Filter, error) {
 	}
 
 	return &filterImpl{
-		anchor: identifier,
+		anchor:          identifier,
+		udpServerFilter: NewUdpServerFilter(),
 	}, nil
 }
 
@@ -218,16 +220,12 @@ func (f *filterImpl) RemoveTcpServerFiltering(srcAddr string, srcPort int) error
 	return nil
 }
 
-// AddIcmpSrcFilteringRule adds a filtering rule which blocks icmp unreacheable packets from srcAddr.
-func (f *filterImpl) AddUdpServerFiltering(srcAddr string) error {
-	// we won't use macos as raw socket server, so we do nothing here
-	return nil
+func (f *filterImpl) AddUdpServerFiltering(srcAddr string) error { // srcAddr is the source ip address and port of the UDP server in "ip:port" format
+	return f.udpServerFilter.AddUdpServerFiltering(srcAddr)
 }
 
-// RemoveIcmpSrcFilteringRule removes a filtering rule which blocks icmp unreacheable packets from srcAddr.
-func (f *filterImpl) RemoveUdpServerFiltering(srcAddr string) error {
-	// we won't use macos as raw socket server, so we do nothing here
-	return nil
+func (f *filterImpl) RemoveUdpServerFiltering(srcAddr string) error { // srcAddr is the source ip address and port of the UDP server in "ip:port" format
+	return f.udpServerFilter.RemoveUdpServerFiltering(srcAddr)
 }
 
 // AddIcmpDstFilteringRule adds a filtering rule which block icmp unreacheable packets to dstAddr.

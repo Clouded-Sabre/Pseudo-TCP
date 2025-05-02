@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"sync"
 )
 
 /*const (
@@ -18,8 +17,9 @@ import (
 ) // Comment to identify the rules */
 
 type filterImpl struct {
-	comment   string
-	udpSrcMap sync.Map // Map to store UDP source addresses and ports to udp connections
+	comment         string
+	udpServerFilter *udpServerFilter // Struct containing the shared method
+	//udpSrcMap sync.Map // Map to store UDP source addresses and ports to udp connections
 }
 
 func NewFilter(identifier string) (Filter, error) {
@@ -27,7 +27,8 @@ func NewFilter(identifier string) (Filter, error) {
 		return nil, fmt.Errorf("iptables is not enabled or available")
 	}
 	return &filterImpl{
-		comment: identifier,
+		comment:         identifier,
+		udpServerFilter: NewUdpServerFilter(),
 	}, nil
 }
 
@@ -165,44 +166,11 @@ func (f *filterImpl) RemoveTcpServerFiltering(srcAddr string, srcPort int) error
 }
 
 func (f *filterImpl) AddUdpServerFiltering(srcAddr string) error { // srcAddr is the source ip address and port of the UDP server in "ip:port" format
-	// start a dummy UDP server to prevent icmp port unreachable packets
-	// Check if we already have a UDP server for this address
-	if _, exists := f.udpSrcMap.Load(srcAddr); exists {
-		// Server already exists, just increment the reference count
-		return nil
-	}
-
-	// No existing server, create a new one
-	udpAddr, err := net.ResolveUDPAddr("udp", srcAddr)
-	if err != nil {
-		return fmt.Errorf("invalid UDP address: %v", err)
-	}
-
-	// Create UDP connection
-	conn, err := net.ListenUDP("udp", udpAddr)
-	if err != nil {
-		return fmt.Errorf("failed to start UDP server: %v", err)
-	}
-
-	// Store the connection with initial reference count of 1
-	f.udpSrcMap.Store(srcAddr, conn)
-
-	log.Printf("Started the dummy UDP server at %s\n", srcAddr)
-	return nil
+	return f.udpServerFilter.AddUdpServerFiltering(srcAddr)
 }
 
 func (f *filterImpl) RemoveUdpServerFiltering(srcAddr string) error { // srcAddr is the source ip address and port of the UDP server in "ip:port" format
-	// removes the dummy udp server listening at the given IP and port.
-	// Check if we have a UDP server for this address
-	if conn, exists := f.udpSrcMap.Load(srcAddr); exists {
-		// Server already exists, just increment the reference count
-		conn.(*net.UDPConn).Close()
-		log.Printf("Stopped the dummy UDP server at %s\n", srcAddr)
-		return nil
-	}
-
-	// No existing server
-	return nil
+	return f.udpServerFilter.RemoveUdpServerFiltering(srcAddr)
 }
 
 /* func (f *filterImpl) AddUdpServerFiltering(srcAddr string) error {  // srcAddr is the source ip address of the UDP server

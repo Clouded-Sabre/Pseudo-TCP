@@ -18,12 +18,12 @@ import (
 )
 
 type filterImpl struct {
-	handle    *divert.Handle
-	stopChan  chan struct{}
-	isRunning bool
-	ruleSet   map[string]bool // Track individual rules
-	mutex     sync.Mutex
-	udpSrcMap sync.Map // Map to store UDP source addresses and ports to udp connections
+	handle          *divert.Handle
+	stopChan        chan struct{}
+	isRunning       bool
+	ruleSet         map[string]bool // Track individual rules
+	mutex           sync.Mutex
+	udpServerFilter *udpServerFilter // Struct containing the shared method
 }
 
 /*var (
@@ -41,10 +41,11 @@ func NewFilter(identifier string) (Filter, error) {
 	}
 
 	return &filterImpl{
-		handle:    nil,
-		stopChan:  nil,
-		isRunning: false,
-		ruleSet:   make(map[string]bool),
+		handle:          nil,
+		stopChan:        nil,
+		isRunning:       false,
+		ruleSet:         make(map[string]bool),
+		udpServerFilter: NewUdpServerFilter(),
 	}, nil
 }
 
@@ -221,7 +222,8 @@ func (f *filterImpl) RemoveTcpServerFiltering(srcAddr string, srcPort int) error
 }
 
 // AddUdpServerFiltering adds a filtering rule which blocks icmp unreacheable packets from srcAddr.
-func (f *filterImpl) AddUdpServerFiltering(srcAddr string) error {
+func (f *filterImpl) AddUdpServerFiltering(srcAddr string) error { // srcAddr is the source ip address of the UDP server
+	return f.udpServerFilter.AddUdpServerFiltering(srcAddr)
 	/*
 		f.mutex.Lock()
 		defer f.mutex.Unlock()
@@ -254,7 +256,7 @@ func (f *filterImpl) AddUdpServerFiltering(srcAddr string) error {
 	*/
 
 	// we don't use udp raw socket server on windows platform, so we do nothing here
-	return nil
+	//return nil
 }
 
 /*func (f *filterImpl) runIcmpFilteringLoop() {
@@ -315,7 +317,8 @@ func (f *filterImpl) AddUdpServerFiltering(srcAddr string) error {
 }*/
 
 // RemoveUdpServerFiltering removes a filtering rule which blocks icmp unreacheable packets from srcAddr.
-func (f *filterImpl) RemoveUdpServerFiltering(srcAddr string) error {
+func (f *filterImpl) RemoveUdpServerFiltering(srcAddr string) error { // srcAddr is the source ip address of the UDP server in "ip:port" format
+	return f.udpServerFilter.RemoveUdpServerFiltering(srcAddr)
 	/*
 		f.mutex.Lock()
 
@@ -339,7 +342,7 @@ func (f *filterImpl) RemoveUdpServerFiltering(srcAddr string) error {
 	*/
 
 	// we don't use udp raw socket server on windows platform, so we do nothing here
-	return nil
+	//return nil
 }
 
 // AddUdpClientFiltering adds a filtering rule which blocks icmp unreacheable packets to dstAddr.
