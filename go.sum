@@ -1,5 +1,7 @@
 github.com/Clouded-Sabre/rawsocket v0.0.0-20250426143345-66c986b4e77c h1:QDl4xB6erX4+lABV7Z+wIwZUUzBI5NwP15/+Kq3m5Ow=
 github.com/Clouded-Sabre/rawsocket v0.0.0-20250426143345-66c986b4e77c/go.mod h1:0cAz7wGZi4q4ZGJK5vUhzB6jI+IAiimj+qMxWGZObac=
+github.com/Clouded-Sabre/rawsocket v0.0.0-20250503012121-0a73c0ef6461 h1:T0mILrt6lI+hxxiOM+YSfEm4comOiqdaaUG+j4WzXno=
+github.com/Clouded-Sabre/rawsocket v0.0.0-20250503012121-0a73c0ef6461/go.mod h1:0cAz7wGZi4q4ZGJK5vUhzB6jI+IAiimj+qMxWGZObac=
 github.com/Clouded-Sabre/ringpool v0.0.0-20240714075617-d50807410f3f h1:sHzGoaqIi19h8MIzDr9lMgiFcmk3XIXxo8YBKBedW+A=
 github.com/Clouded-Sabre/ringpool v0.0.0-20240714075617-d50807410f3f/go.mod h1:/78UKfbnsF0Mzdt6uygwmdvDMiiTgouyD91plgQxuFc=
 github.com/google/gopacket v1.1.19 h1:ves8RnFZPGiFnTS0uPQStjwru6uO6h+nlr9j6fL7kF8=
