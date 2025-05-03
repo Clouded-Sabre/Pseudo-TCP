@@ -118,13 +118,12 @@ type ConnectionConfig struct {
 
 func DefaultConnectionConfig() *ConnectionConfig {
 	return &ConnectionConfig{
-		WindowScale:           14,
-		PreferredMSS:          1400,
-		SackPermitSupport:     true,
-		SackOptionSupport:     true,
-		RetransmissionEnabled: true,
-		//RetransmissionEnabled:   false, // disabled by default
-		IdleTimeout:             25, //seconds
+		WindowScale:             14,
+		PreferredMSS:            1400,
+		SackPermitSupport:       true,
+		SackOptionSupport:       true,
+		RetransmissionEnabled:   false, // disabled by default
+		IdleTimeout:             25,    //seconds
 		KeepAliveEnabled:        true,
 		KeepaliveInterval:       5, //seconds
 		MaxKeepaliveAttempts:    3,
