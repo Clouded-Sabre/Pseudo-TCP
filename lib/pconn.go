@@ -468,7 +468,7 @@ func (p *PcpProtocolConnection) handleIncomingPackets() {
 	defer p.wg.Done()
 
 	// the first lib.TcpPseudoHeaderLength bytes are reserved for Tcp Pseudo Header
-	var buffer []byte
+	/*var buffer []byte
 	if p.isServer {
 		buffer = make([]byte, p.config.PreferredMSS+TcpHeaderLength+TcpOptionsMaxLength+TcpPseudoHeaderLength)
 		if p.pcpCore.config.Debug {
@@ -476,7 +476,8 @@ func (p *PcpProtocolConnection) handleIncomingPackets() {
 		}
 	} else {
 		buffer = make([]byte, p.config.PreferredMSS+TcpHeaderLength+TcpOptionsMaxLength+IpHeaderMaxLength+TcpPseudoHeaderLength)
-	}
+	}*/
+	buffer := make([]byte, bufferLength) // buffer length is 65536 bytes to be big engough for max TCP segment length
 
 	// main loop for incoming packets
 	for {

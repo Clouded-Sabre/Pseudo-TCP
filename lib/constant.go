@@ -51,3 +51,7 @@ const ( //linux convention
 	minPort = 32768
 	maxPort = 60999
 )
+
+const (
+	bufferLength = 65536 // Maximum buffer length for receiving TCP segment
+)

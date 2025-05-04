@@ -30,18 +30,20 @@ func NewPayload(params ...interface{}) rp.DataInterface {
 		return nil
 	}
 
-	bufferLength, ok := params[0].(int)
+	/*bufferLength, ok := params[0].(int)
 	if !ok {
 		log.Println("NewPayload: Invalid data type of bufferLength. Should be of type int")
 		return nil
-	}
+	}*/
+
+	pBufferLength := bufferLength // make it 65536 to accommodate the maximum tcp segment size
 
 	if len(emptySlice) == 0 { // initialize it
-		SetEmptySlice(bufferLength)
+		SetEmptySlice(pBufferLength)
 	}
 
 	return &Payload{
-		payloadBytes: make([]byte, bufferLength),
+		payloadBytes: make([]byte, pBufferLength),
 	}
 }
 
