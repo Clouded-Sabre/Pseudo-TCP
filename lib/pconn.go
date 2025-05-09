@@ -63,7 +63,7 @@ func DefaultPcpProtocolConnConfig() *PcpProtocolConnConfig {
 		ClientPortUpper:      65535,
 		ClientPortLower:      49152,
 		ConnConfig:           DefaultConnectionConfig(),
-		VerifyChecksum:       true, // Checksum verification is enabled by default
+		VerifyChecksum:       false, // Checksum verification is turned off by default because TCP checksum offload is widely used nowadays
 		PConnOutputQueue:     100,
 	}
 }
@@ -407,7 +407,7 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 	// Use the copy for all subsequent processing
 	if p.config.VerifyChecksum {
 		if !VerifyChecksum(buffer[:TcpPseudoHeaderLength+n], addr, p.serverAddr, uint8(p.protocolId)) {
-			log.Printf("PcpProtocolConnection.serverProcessingIncomingPacket: Packet from %s checksum verification failed. Skip this packet.\n", addr.(*net.IPAddr).String())
+			log.Printf("PcpProtocolConnection.serverProcessingIncomingPacket: Packet from %s checksum verification failed. Skip this packet(length %d).\n", addr.(*net.IPAddr).String(), n)
 			return
 		}
 	}
