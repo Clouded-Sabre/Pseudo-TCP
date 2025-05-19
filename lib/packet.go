@@ -472,6 +472,12 @@ func assemblePseudoHeader(buffer []byte, srcAddr, dstAddr net.Addr, protocolId u
 	if len(buffer) != TcpPseudoHeaderLength {
 		return fmt.Errorf("tcp pseudo header Buffer length(%d) is not TcpPseudoHeaderLength", len(buffer))
 	}
+	if srcAddr == nil {
+		return fmt.Errorf("assemblePseudoHeader: srcAddr is nil")
+	}
+	if dstAddr == nil {
+		return fmt.Errorf("assemblePseudoHeader: dstAddr is nil")
+	}
 	srcIP := srcAddr.(*net.IPAddr).IP.To4() // Type assertion to get the IPv4 address
 	dstIP := dstAddr.(*net.IPAddr).IP.To4() // Type assertion to get the IPv4 address
 	binary.BigEndian.PutUint32(buffer[0:4], binary.BigEndian.Uint32(srcIP))

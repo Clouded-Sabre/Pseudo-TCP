@@ -1,7 +1,9 @@
 package lib
 
 import (
+	"fmt"
 	"math"
+	"net"
 	"time"
 )
 
@@ -69,4 +71,83 @@ func (e *TimeoutError) Temporary() bool {
 func SleepForMs(n int) {
 	timeout := time.After(time.Duration(n) * time.Millisecond)
 	<-timeout // Wait on the channel
+}
+
+// findLocalIP selects a local IP address that is in the same subnet as the targetIP,
+// or falls back to an IP in the same subnet as the default gateway.
+func findLocalIP(targetIP string) (string, error) {
+	// Parse target IP
+	target := net.ParseIP(targetIP)
+	if target == nil {
+		return "", fmt.Errorf("invalid target IP: %s", targetIP)
+	}
+
+	// Assume a /24 subnet mask for simplicity
+	targetNet := &net.IPNet{
+		IP:   target,
+		Mask: net.CIDRMask(24, 32), // 255.255.255.0
+	}
+
+	// Get all network interfaces
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return "", fmt.Errorf("failed to get network interfaces: %v", err)
+	}
+
+	// Check for an interface in the same subnet as targetIP
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue // Skip down or loopback interfaces
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip := ipNet.IP
+			if ip.To4() == nil {
+				continue // Skip IPv6
+			}
+
+			// Check if local IP is in the same subnet as targetIP
+			localNet := &net.IPNet{
+				IP:   ip,
+				Mask: net.CIDRMask(24, 32),
+			}
+			if localNet.Contains(target) || targetNet.Contains(ip) {
+				return ip.String(), nil
+			}
+		}
+	}
+
+	// Fallback: Return the first non-loopback IPv4 address
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip := ipNet.IP
+			if ip.To4() != nil {
+				return ip.String(), nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("no suitable local IP found for target %s", targetIP)
 }

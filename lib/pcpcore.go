@@ -80,7 +80,7 @@ func NewPcpCore(pcpcoreConfig *PcpCoreConfig, rscore *rs.RSCore, filter *filter.
 	return pcpCoreObj, nil
 }
 
-// dialPcp simulates the TCP dial function interface for PCP.
+// dialPcp simulates the TCP dial function interface for PCP.  If localIP is "", system will choose the right local IP
 func (p *PcpCore) DialPcp(localIP string, serverIP string, serverPort uint16, ConnConfig *ConnectionConfig) (*Connection, error) {
 	// first normalize IP address string before making key
 	serverAddr, err := net.ResolveIPAddr("ip", serverIP)
@@ -88,10 +88,21 @@ func (p *PcpCore) DialPcp(localIP string, serverIP string, serverPort uint16, Co
 		return nil, err
 	}
 
+	if localIP == "" {
+		// Find appropriate local IP for PCP connection
+		localIP, err = findLocalIP(serverIP)
+		if err != nil {
+			log.Printf("PcpCore.DialPcp: error finding local IP: %v", err)
+			return nil, err
+		}
+		log.Printf("PcpCore.DialPcp: Selected local IP: %s", localIP)
+	}
+
 	localAddr, err := net.ResolveIPAddr("ip", localIP)
 	if err != nil {
 		return nil, err
 	}
+	log.Printf("pcpcore.dial: Protocol connection's local ip is %v\n", localAddr)
 
 	//pcpConnConfig := newPcpProtocolConnConfig(pcpConfig)
 	pConnKey := fmt.Sprintf("%s-%s", serverAddr.IP.To4().String(), localAddr.IP.To4().String())
@@ -155,15 +166,6 @@ func (p *PcpCore) ListenPcp(serviceIP string, port int, connConfig *ConnectionCo
 			log.Println("Error creating service:", err)
 			return nil, err
 		}
-
-		/*
-			// Add a dumb TCP server to prevent RST packets created by system TCP/IP network stack
-			if srv.dumbListener, err = setupDumbTcpServer(serviceIP, port); err != nil {
-				log.Println("Error adding dumb TCP server:", err)
-				return nil, err
-			}
-			log.Println("Dumb TCP server added to prevent RST packets at ", serviceIP, ":", port)
-		*/
 
 		// add a server side filtering rule to prevent RST packets
 		if err = (*p.filter).AddTcpServerFiltering(normServiceIpString, port); err != nil {
