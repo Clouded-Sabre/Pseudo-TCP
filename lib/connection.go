@@ -381,7 +381,7 @@ func (c *Connection) handle3WayHandshake() {
 
 				// handle TCP option negotiation
 				if c.tcpOptions.windowScaleShiftCount > 0 {
-					fmt.Println("PcpConnection.handle3WayHandshake: Set Window Size with Scaling support!")
+					log.Println("PcpConnection.handle3WayHandshake: Set Window Size with Scaling support!")
 					c.windowSize = uint16(c.config.WindowSizeWithScale)
 				}
 

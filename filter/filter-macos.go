@@ -5,6 +5,7 @@ package filter
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -73,7 +74,7 @@ func (f *filterImpl) AddTcpClientFiltering(dstAddr string, dstPort int) error {
 		return fmt.Errorf("rule verification failed: %v", err)
 	}
 
-	fmt.Printf("Successfully added rule:\n%s\n", newRule)
+	log.Printf("Successfully added rule:\n%s\n", newRule)
 	return nil
 }
 

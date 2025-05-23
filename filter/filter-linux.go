@@ -74,7 +74,7 @@ func (f *filterImpl) AddTcpClientFiltering(dstAddr string, dstPort int) error {
 		return fmt.Errorf("failed to add iptables rule: %v", err)
 	}
 
-	fmt.Printf("Successfully added rule: %s\n", ruleCheck)
+	log.Printf("Successfully added rule: %s\n", ruleCheck)
 	return nil
 }
 
