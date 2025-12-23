@@ -19,3 +19,4 @@ test/sshtest/server/server
 test/sshtest/client/client.exe
 test/sshtest/server/server.exe
 test/sshtest/client/client.go
+test/droptestgw/droptestgw
