@@ -1030,8 +1030,12 @@ func (c *Connection) startConnSignalTimer() {
 			// Signal 3-way handshake or 4-way termination failure
 			c.connSignalTimer.Stop()
 			c.connSignalRetryCount = 0 // reset it to 0
-			c.isConnSignalFailedAlreadyClosed = true
-			close(c.connSignalFailed) // send failure signal to other function
+			//c.isConnSignalFailedAlreadyClosed = true
+			//close(c.connSignalFailed) // send failure signal to other function
+			if !c.isConnSignalFailedAlreadyClosed {
+				c.isConnSignalFailedAlreadyClosed = true
+				close(c.connSignalFailed) // send failure signal to other function
+			}
 			return
 		}
 
