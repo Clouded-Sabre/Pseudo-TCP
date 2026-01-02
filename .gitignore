@@ -11,3 +11,7 @@ test/servercompare/build/linux_amd64/servercompare
 test/testclient/testclient
 test/testclient/build/linux_amd64/testclient
 test/testserver/main.go
+client/client.exe
+test/droptestgw/droptestgw
+test/sshtest/client/client
+test/sshtest/server/server
