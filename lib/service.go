@@ -368,6 +368,8 @@ func (s *Service) Close() error {
 	s.mu.Unlock()
 	for _, tempConn := range tempConns {
 		if tempConn != nil {
+			tempConn.connSignalFailedMutex.Lock()
+			defer tempConn.connSignalFailedMutex.Unlock()
 			if !tempConn.isConnSignalFailedAlreadyClosed {
 				tempConn.isConnSignalFailedAlreadyClosed = true
 				close(tempConn.connSignalFailed)

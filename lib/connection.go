@@ -55,6 +55,7 @@ type Connection struct {
 	closeSignal                     chan struct{}   // used to send close signal to HandleIncomingPackets go routine to stop when keepalive failed
 	connSignalFailed                chan struct{}   // used to notify Connection signalling process (3-way handshake and 4-way termination) failed
 	isConnSignalFailedAlreadyClosed bool            // denote if connSignalFailed is already closed to prevent closing it again and cause panic
+	connSignalFailedMutex           sync.Mutex      // mutex for isConnSignalFailedAlreadyClosed
 	wg                              sync.WaitGroup  // wait group for go routine
 	// statistics
 	rxCount, txCount int64 // count of number of packets received, sent since birth
@@ -1032,6 +1033,8 @@ func (c *Connection) startConnSignalTimer() {
 			c.connSignalRetryCount = 0 // reset it to 0
 			//c.isConnSignalFailedAlreadyClosed = true
 			//close(c.connSignalFailed) // send failure signal to other function
+			c.connSignalFailedMutex.Lock()
+			defer c.connSignalFailedMutex.Unlock()
 			if !c.isConnSignalFailedAlreadyClosed {
 				c.isConnSignalFailedAlreadyClosed = true
 				close(c.connSignalFailed) // send failure signal to other function
