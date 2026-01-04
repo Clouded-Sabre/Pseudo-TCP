@@ -255,10 +255,14 @@ func (p *PcpPacket) Unmarshal(data []byte, srcAddr, destAddr net.Addr) error {
 				optionLength = optionsBytes[i+1]
 				if optionLength == 2 {
 					p.TcpOptions.permitSack = true
+					// If SACK is permitted, mark it as enabled for future communication
+					p.TcpOptions.SackEnabled = true
 				}
 			case 5: // SACK option
 				optionLength = optionsBytes[i+1]
 				if optionLength > 2 && i+int(optionLength) <= optionsLength {
+					// If we receive SACK blocks, mark SackEnabled as true
+					p.TcpOptions.SackEnabled = true
 					// Parse SACK blocks
 					sackBlocks := make([]sackblock, 0)
 					for j := i + 2; j < i+int(optionLength); j += 8 {
