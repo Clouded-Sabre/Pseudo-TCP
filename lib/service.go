@@ -14,6 +14,7 @@ import (
 type Service struct {
 	// static
 	connConfig            *connectionConfig      // Connection Config
+	packetFilterer        PacketFilterer         // packet filter for firewall rule management
 	pcpProtocolConnection *PcpProtocolConnection // point back to parent pcp server
 	serviceAddr           net.Addr
 	port                  int
@@ -38,6 +39,7 @@ func newService(pcpProtocolConn *PcpProtocolConnection, serviceAddr net.Addr, po
 		pcpProtocolConnection: pcpProtocolConn,
 		serviceAddr:           serviceAddr,
 		port:                  port,
+		packetFilterer:        pcpProtocolConn.packetFilterer,
 		inputChannel:          make(chan *PcpPacket, 200),
 		outputChan:            outputChan,
 		sigOutputChan:         sigOutputChan,
@@ -400,10 +402,10 @@ func (s *Service) Close() error {
 	s.serviceCloseSignal <- s
 	log.Println("PCP Service: signal sent to parent PCP service to remove service entry.")
 
-	// remove the iptable rules for the service
-	err := removeIptablesRule(s.serviceAddr.(*net.IPAddr).IP.String(), s.port)
+	// remove the firewall rules for the service (using abstraction layer - supports both iptables and nftables)
+	err := s.packetFilterer.RemoveRule(s.serviceAddr.(*net.IPAddr).IP.String(), s.port, "server")
 	if err != nil {
-		log.Printf("PCP Service: Error removing iptable rules for service %s:%d: %s", s.serviceAddr.(*net.IPAddr).IP.String(), s.port, err)
+		log.Printf("PCP Service: Error removing firewall rules for service %s:%d: %s", s.serviceAddr.(*net.IPAddr).IP.String(), s.port, err)
 		return err
 	}
 

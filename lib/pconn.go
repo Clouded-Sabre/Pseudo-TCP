@@ -26,6 +26,7 @@ type PcpProtocolConnection struct {
 	ipConn                *net.IPConn // net.IPConn connection
 
 	// variables
+	packetFilterer            PacketFilterer              // packet filter for firewall rule management
 	outputChan, sigOutputChan chan *PcpPacket             // output channel for normal packets and signalling packets respectively
 	connectionMap             map[string]*Connection      // used for client side only
 	tempConnectionMap         map[string]*Connection      // used for client side only
@@ -96,6 +97,7 @@ func newPcpProtocolConnection(key string, isServer bool, protocolId int, serverA
 		localAddr:          localAddr,
 		serverAddr:         serverAddr,
 		ipConn:             ipConn,
+		packetFilterer:     NewPacketFilterer(),
 		outputChan:         make(chan *PcpPacket, config.pconnOutputQueue),
 		sigOutputChan:      make(chan *PcpPacket, 10),
 		connectionMap:      make(map[string]*Connection),
@@ -177,9 +179,9 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *connectionConfi
 	p.tempConnectionMap[connKey] = newConn
 	p.mu.Unlock()
 
-	// Add iptables rule to drop RST packets
-	if err := addIptablesRule(p.serverAddr.IP.To4().String(), serverPort); err != nil {
-		log.Println("PcpProtocolConnection.dial: Error adding iptables rule:", err)
+	// Add firewall rule to drop RST packets (using abstraction layer - supports both iptables and nftables)
+	if err := p.packetFilterer.AddRule(p.serverAddr.IP.To4().String(), serverPort, "client"); err != nil {
+		log.Println("PcpProtocolConnection.dial: Error adding firewall rule:", err)
 		return nil, err
 	}
 	p.iptableRules = append(p.iptableRules, serverPort) // record it for later deletion of the rules when connection closes
@@ -738,13 +740,13 @@ func (p *PcpProtocolConnection) Close() {
 		p.emptyMapTimer = nil
 	}
 
-	// Remove iptables rules
+	// Remove firewall rules (using abstraction layer - supports both iptables and nftables)
 	for _, port := range p.iptableRules {
-		err := removeIptablesRule(p.serverAddr.IP.To4().String(), port)
+		err := p.packetFilterer.RemoveRule(p.serverAddr.IP.To4().String(), port, "client")
 		if err != nil {
-			log.Printf("PcpProtocolConnection: Error removing iptables rule for port %d: %v\n", port, err)
+			log.Printf("PcpProtocolConnection: Error removing firewall rule for port %d: %v\n", port, err)
 		} else {
-			log.Printf("PcpProtocolConnection: Removed iptables rule for port %d\n", port)
+			log.Printf("PcpProtocolConnection: Removed firewall rule for port %d\n", port)
 		}
 	}
 	p.iptableRules = nil // Clear the slice
@@ -761,6 +763,7 @@ func (p *PcpProtocolConnection) Close() {
 }
 
 // addIptablesRule adds an iptables rule to drop RST packets originating from the given IP and port.
+// Deprecated: Use PacketFilterer.AddRule() instead, which supports both iptables and nftables.
 func addIptablesRule(ip string, port int) error {
 	cmd := exec.Command("iptables", "-A", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-d", ip, "--dport", strconv.Itoa(port), "-j", "DROP")
 	if err := cmd.Run(); err != nil {
@@ -770,6 +773,7 @@ func addIptablesRule(ip string, port int) error {
 }
 
 // removeIptablesRule removes the iptables rule that was added for dropping RST packets.
+// Deprecated: Use PacketFilterer.RemoveRule() instead, which supports both iptables and nftables.
 func removeIptablesRule(ip string, port int) error {
 	// Construct the command to delete the iptables rule
 	cmd := exec.Command("iptables", "-D", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-d", ip, "--dport", strconv.Itoa(port), "-j", "DROP")
