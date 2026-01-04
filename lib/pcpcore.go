@@ -81,12 +81,58 @@ func (p *PcpCore) DialPcp(localIP string, serverIP string, serverPort uint16, pc
 		}
 		// add it to ProtoConnectionMap
 		p.protoConnectionMap[pConnKey] = pConn
+	} else {
+		// Check if the existing PcpProtocolConnection is still valid (not closed)
+		pConn.mu.Lock()
+		isClosed := pConn.isClosed
+		pConn.mu.Unlock()
+
+		if isClosed {
+			// The protocol connection is closed, remove it from map and create a new one
+			log.Printf("PcpProtocolConnection %s is closed, creating new one\n", pConnKey)
+			delete(p.protoConnectionMap, pConnKey)
+
+			pConn, err = newPcpProtocolConnection(pConnKey, false, int(p.config.ProtocolID), serverAddr, localAddr, p.pConnCloseSignal, pcpConnConfig)
+			if err != nil {
+				fmt.Println("Error creating new Pcp Client Protocol Connection:", err)
+				return nil, err
+			}
+			// add it to ProtoConnectionMap
+			p.protoConnectionMap[pConnKey] = pConn
+		}
 	}
 
 	newClientConn, err := pConn.dial(int(serverPort), pcpConnConfig.connConfig)
 	if err != nil {
-		fmt.Println("Error creating Pcp Client Connection:", err)
-		return nil, err
+		// If dial failed, check if we should close and recreate the protocol connection
+		// This handles cases where the underlying ipConn is broken
+		pConn.mu.Lock()
+		isClosed := pConn.isClosed
+		pConn.mu.Unlock()
+
+		if !isClosed {
+			log.Printf("PcpProtocolConnection.dial failed: %v. Attempting to close and recreate protocol connection\n", err)
+			pConn.Close()
+			delete(p.protoConnectionMap, pConnKey)
+
+			// Try one more time with a fresh protocol connection
+			pConn, err = newPcpProtocolConnection(pConnKey, false, int(p.config.ProtocolID), serverAddr, localAddr, p.pConnCloseSignal, pcpConnConfig)
+			if err != nil {
+				fmt.Println("Error creating new Pcp Client Protocol Connection after failure:", err)
+				return nil, err
+			}
+			p.protoConnectionMap[pConnKey] = pConn
+
+			// Try dial again with the new protocol connection
+			newClientConn, err = pConn.dial(int(serverPort), pcpConnConfig.connConfig)
+			if err != nil {
+				fmt.Println("Error creating Pcp Client Connection on retry:", err)
+				return nil, err
+			}
+		} else {
+			fmt.Println("Error creating Pcp Client Connection:", err)
+			return nil, err
+		}
 	}
 
 	return newClientConn, nil
