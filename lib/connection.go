@@ -271,6 +271,7 @@ func (c *Connection) handleIncomingPackets() {
 
 			// update ResendPackets if it's ACK packet
 			if packet.TcpOptions.SackEnabled && isACK && !isSYN && !isFIN && !isRST {
+				log.Printf("[RESEND-DEBUG] handleIncomingPackets: incoming ACK, SackBlocks=%d", len(packet.TcpOptions.inSACKOption.blocks))
 				c.updateResendPacketsOnAck(packet)
 			}
 
@@ -449,6 +450,7 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 		}
 
 		c.lastAckNumber, c.tcpOptions.outSACKOption.blocks = c.updateACKAndSACK(packet)
+		log.Printf("[RESEND-DEBUG] handleDataPacket: updateACKAndSACK returned %d blocks (lastAckNumber=%d)", len(c.tcpOptions.outSACKOption.blocks), c.lastAckNumber)
 		// Insert the current packet into RevPacketCache
 		c.revPacketCache.AddPacket(packet)
 
@@ -893,10 +895,10 @@ func (c *Connection) updateACKAndSACK(packet *PcpPacket) (uint32, []sackblock) {
 	}
 
 	if receivedSEQ == lastACKNum {
-		// Update last ACK number
+		// Packet arrives in order - advance ACK number
 		lastACKNum = SeqIncrementBy(lastACKNum, uint32(payloadLength))
 
-		// Update SACK blocks if necessary
+		// Check if advancing lastACKNum allows us to absorb any SACK blocks
 		if len(sackBlocks) > 0 {
 			// since sackBlocks is ordered block, we can simple check if the new lastACKNum
 			// touches block 0's leftEdge

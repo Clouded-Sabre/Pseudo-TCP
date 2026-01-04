@@ -135,6 +135,7 @@ func (p *PcpPacket) Marshal(protocolId uint8, buffer []byte) (int, error) {
 	}
 	if p.IsOpenConnection && p.TcpOptions.SackEnabled {
 		if len(p.TcpOptions.outSACKOption.blocks) > 0 {
+			log.Printf("[RESEND-DEBUG] Marshal SACK option: %d blocks", len(p.TcpOptions.outSACKOption.blocks))
 			// SACK option kind 5: kind (1 byte), length (1 byte), SACK blocks
 			frame[optionOffset] = 5                                                    // Kind: SACK
 			frame[optionOffset+1] = byte(2 + len(p.TcpOptions.outSACKOption.blocks)*8) // Length: variable
@@ -144,10 +145,13 @@ func (p *PcpPacket) Marshal(protocolId uint8, buffer []byte) (int, error) {
 				if optionOffset+8 >= TcpHeaderLength+TcpOptionsMaxLength {
 					break
 				}
+				log.Printf("[RESEND-DEBUG]   SACK block: [%d, %d]", block.leftEdge, block.rightEdge)
 				binary.BigEndian.PutUint32(frame[optionOffset:optionOffset+4], block.leftEdge)
 				binary.BigEndian.PutUint32(frame[optionOffset+4:optionOffset+8], block.rightEdge)
 				optionOffset += 8
 			}
+		} else {
+			log.Printf("[RESEND-DEBUG] Marshal: SACK enabled but NO blocks to send")
 		}
 	}
 	if p.TcpOptions.timestampEnabled {
