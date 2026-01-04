@@ -269,13 +269,12 @@ func (c *Connection) handleIncomingPackets() {
 				c.tcpOptions.tsEchoReplyValue = packet.TcpOptions.timestamp
 			}
 
-			// update ResendPackets if it's ACK packet
-			log.Printf("[RESEND-DEBUG] handleIncomingPackets: isACK=%v, SackEnabled=%v, isSYN=%v, isFIN=%v, isRST=%v", isACK, packet.TcpOptions.SackEnabled, isSYN, isFIN, isRST)
-			if packet.TcpOptions.SackEnabled && isACK && !isSYN && !isFIN && !isRST {
-				log.Printf("[RESEND-DEBUG]   -> Calling updateResendPacketsOnAck with %d SACK blocks", len(packet.TcpOptions.inSACKOption.blocks))
+			// update ResendPackets on any ACK packet (always removes packets covered by cumulative ACK number)
+			// If SACK is enabled, also removes packets in SACK blocks
+			log.Printf("[RESEND-DEBUG] handleIncomingPackets: isACK=%v, connSackEnabled=%v, isSYN=%v, isFIN=%v, isRST=%v", isACK, c.tcpOptions.SackEnabled, isSYN, isFIN, isRST)
+			if isACK && !isSYN && !isFIN && !isRST {
+				log.Printf("[RESEND-DEBUG]   -> Calling updateResendPacketsOnAck (has %d SACK blocks)", len(packet.TcpOptions.inSACKOption.blocks))
 				c.updateResendPacketsOnAck(packet)
-			} else if isACK && !isSYN && !isFIN && !isRST {
-				log.Printf("[RESEND-DEBUG]   -> SACK not enabled, skipping updateResendPacketsOnAck")
 			}
 
 			if isDataPacket {
