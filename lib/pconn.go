@@ -6,7 +6,8 @@ import (
 	"log"
 	"math/rand"
 	"net"
-	"os/exec"
+
+	//"os/exec"
 	"strconv"
 	"sync"
 	"time"
@@ -234,13 +235,13 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *connectionConfi
 				// Prepare ACK packet
 				newConn.lastAckNumber = SeqIncrement(packet.SequenceNumber)
 				newConn.initialPeerSeq = packet.SequenceNumber
-				
+
 				// SACK and other TCP option negotiation MUST happen before sending ACK
 				newConn.tcpOptions.timestampEnabled = packet.TcpOptions.timestampEnabled
 				// Sack permit and SackOption support
 				newConn.tcpOptions.permitSack = newConn.tcpOptions.permitSack && packet.TcpOptions.permitSack    // both sides need to permit SACK
 				newConn.tcpOptions.SackEnabled = newConn.tcpOptions.permitSack && newConn.tcpOptions.SackEnabled // Sack Option support also needs to be manually enabled
-				
+
 				newConn.initSendAck()
 
 				// Connection established, remove newConn from tempClientConnections, and place it into clientConnections pool
@@ -767,17 +768,17 @@ func (p *PcpProtocolConnection) Close() {
 
 // addIptablesRule adds an iptables rule to drop RST packets originating from the given IP and port.
 // Deprecated: Use PacketFilterer.AddRule() instead, which supports both iptables and nftables.
-func addIptablesRule(ip string, port int) error {
+/*func addIptablesRule(ip string, port int) error {
 	cmd := exec.Command("iptables", "-A", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-d", ip, "--dport", strconv.Itoa(port), "-j", "DROP")
 	if err := cmd.Run(); err != nil {
 		return err
 	}
 	return nil
-}
+}*/
 
 // removeIptablesRule removes the iptables rule that was added for dropping RST packets.
 // Deprecated: Use PacketFilterer.RemoveRule() instead, which supports both iptables and nftables.
-func removeIptablesRule(ip string, port int) error {
+/*func removeIptablesRule(ip string, port int) error {
 	// Construct the command to delete the iptables rule
 	cmd := exec.Command("iptables", "-D", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-d", ip, "--dport", strconv.Itoa(port), "-j", "DROP")
 
@@ -788,4 +789,4 @@ func removeIptablesRule(ip string, port int) error {
 	}
 
 	return nil
-}
+}*/

@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os/exec"
-	"strconv"
+
+	//"os/exec"
+	//"strconv"
 	"time"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
@@ -253,17 +254,17 @@ func (p *PcpCore) Close() error {
 
 // addServerIptablesRule adds an iptables rule to drop RST packets originating from the given IP and port.
 // Deprecated: Use PacketFilterer.AddRule() instead, which supports both iptables and nftables.
-func addServerIptablesRule(ip string, port int) error {
+/*func addServerIptablesRule(ip string, port int) error {
 	cmd := exec.Command("iptables", "-A", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-s", ip, "--sport", strconv.Itoa(port), "-j", "DROP")
 	if err := cmd.Run(); err != nil {
 		return err
 	}
 	return nil
-}
+}*/
 
 // removeServerIptablesRule removes the iptables rule that was added for dropping RST packets.
 // Deprecated: Use PacketFilterer.RemoveRule() instead, which supports both iptables and nftables.
-func removeServerIptablesRule(ip string, port int) error {
+/*func removeServerIptablesRule(ip string, port int) error {
 	// Construct the command to delete the iptables rule
 	cmd := exec.Command("iptables", "-D", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-s", ip, "--sport", strconv.Itoa(port), "-j", "DROP")
 
@@ -274,4 +275,4 @@ func removeServerIptablesRule(ip string, port int) error {
 	}
 
 	return nil
-}
+}*/

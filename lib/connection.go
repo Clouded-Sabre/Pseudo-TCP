@@ -271,9 +271,9 @@ func (c *Connection) handleIncomingPackets() {
 
 			// update ResendPackets on any ACK packet (always removes packets covered by cumulative ACK number)
 			// If SACK is enabled, also removes packets in SACK blocks
-			log.Printf("[RESEND-DEBUG] handleIncomingPackets: isACK=%v, connSackEnabled=%v, isSYN=%v, isFIN=%v, isRST=%v", isACK, c.tcpOptions.SackEnabled, isSYN, isFIN, isRST)
+			//log.Printf("[RESEND-DEBUG] handleIncomingPackets: isACK=%v, connSackEnabled=%v, isSYN=%v, isFIN=%v, isRST=%v", isACK, c.tcpOptions.SackEnabled, isSYN, isFIN, isRST)
 			if isACK && !isSYN && !isFIN && !isRST {
-				log.Printf("[RESEND-DEBUG]   -> Calling updateResendPacketsOnAck (has %d SACK blocks)", len(packet.TcpOptions.inSACKOption.blocks))
+				//log.Printf("[RESEND-DEBUG]   -> Calling updateResendPacketsOnAck (has %d SACK blocks)", len(packet.TcpOptions.inSACKOption.blocks))
 				c.updateResendPacketsOnAck(packet)
 			}
 
@@ -452,7 +452,7 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 		}
 
 		c.lastAckNumber, c.tcpOptions.outSACKOption.blocks = c.updateACKAndSACK(packet)
-		log.Printf("[RESEND-DEBUG] handleDataPacket: updateACKAndSACK returned %d blocks (lastAckNumber=%d)", len(c.tcpOptions.outSACKOption.blocks), c.lastAckNumber)
+		//log.Printf("[RESEND-DEBUG] handleDataPacket: updateACKAndSACK returned %d blocks (lastAckNumber=%d)", len(c.tcpOptions.outSACKOption.blocks), c.lastAckNumber)
 		// Insert the current packet into RevPacketCache
 		c.revPacketCache.AddPacket(packet)
 
@@ -712,7 +712,7 @@ func (c *Connection) resendLostPackets() {
 
 	// Get a collection of packet keys for iteration
 	keys := c.resendPackets.GetPacketKeys()
-	log.Printf("[RESEND-DEBUG] resendLostPackets: Checking %d packets, SACK blocks=%d", len(keys), len(c.tcpOptions.inSACKOption.blocks))
+	//log.Printf("[RESEND-DEBUG] resendLostPackets: Checking %d packets, SACK blocks=%d", len(keys), len(c.tcpOptions.inSACKOption.blocks))
 
 	for _, seqNum := range keys {
 		packetInfo, ok := c.resendPackets.GetSentPacket(seqNum)
@@ -730,7 +730,7 @@ func (c *Connection) resendLostPackets() {
 				if isGreaterOrEqual(seqNum, sackBlock.leftEdge) && isLessOrEqual(seqNum, sackBlock.rightEdge) {
 					lost = false
 					packetsToRemove = append(packetsToRemove, seqNum)
-					log.Printf("[RESEND-DEBUG]   SEQ=%d found in SACK block, marking for removal", seqNum)
+					//log.Printf("[RESEND-DEBUG]   SEQ=%d found in SACK block, marking for removal", seqNum)
 					break
 				}
 			}
@@ -738,11 +738,11 @@ func (c *Connection) resendLostPackets() {
 			// If the packet is marked as lost, check if it's time to resend
 			if lost {
 				timeSinceSent := now.Sub(packetInfo.LastSentTime)
-				log.Printf("[RESEND-DEBUG]   SEQ=%d: lost=%true, timeSinceSent=%v, resendInterval=%v, resendCount=%d/%d", seqNum, timeSinceSent, c.resendInterval, packetInfo.ResendCount, c.config.maxResendCount)
+				//log.Printf("[RESEND-DEBUG]   SEQ=%d: lost=%true, timeSinceSent=%v, resendInterval=%v, resendCount=%d/%d", seqNum, timeSinceSent, c.resendInterval, packetInfo.ResendCount, c.config.maxResendCount)
 				if timeSinceSent >= c.resendInterval {
 					// Resend the packet
 					log.Printf("One Packet resent with SEQ %d and payload length %d!\n", packetInfo.Data.SequenceNumber-c.initialSeq, len(packetInfo.Data.Payload))
-					log.Printf("[RESEND-DEBUG]   -> RESENDING SEQ=%d (timeout expired: %v >= %v)", seqNum, timeSinceSent, c.resendInterval)
+					//log.Printf("[RESEND-DEBUG]   -> RESENDING SEQ=%d (timeout expired: %v >= %v)", seqNum, timeSinceSent, c.resendInterval)
 					// make a copy of packetInfo.Data and resend it
 					dPacket, err := packetInfo.Data.Duplicate()
 					if err != nil {
@@ -757,13 +757,13 @@ func (c *Connection) resendLostPackets() {
 					c.params.outputChan <- dPacket
 					// Update resend information
 					c.resendPackets.UpdateSentPacket(seqNum)
-				} else {
-					log.Printf("[RESEND-DEBUG]   -> NOT RESENDING SEQ=%d (timeout not yet: %v < %v)", seqNum, timeSinceSent, c.resendInterval)
+					//} else {
+					//log.Printf("[RESEND-DEBUG]   -> NOT RESENDING SEQ=%d (timeout not yet: %v < %v)", seqNum, timeSinceSent, c.resendInterval)
 				}
 			}
 		} else {
 			// Mark the packet for removal if it has been resent too many times
-			log.Printf("[RESEND-DEBUG]   SEQ=%d: max resends exceeded (%d >= %d), marking for removal", seqNum, packetInfo.ResendCount, c.config.maxResendCount)
+			//log.Printf("[RESEND-DEBUG]   SEQ=%d: max resends exceeded (%d >= %d), marking for removal", seqNum, packetInfo.ResendCount, c.config.maxResendCount)
 			packetsToRemove = append(packetsToRemove, seqNum)
 		}
 
@@ -999,10 +999,10 @@ func (c *Connection) updateResendPacketsOnAck(packet *PcpPacket) {
 	})
 
 	// Log received SACK blocks
-	log.Printf("[RESEND-DEBUG] updateResendPacketsOnAck: ACKnum=%d, SACK blocks count=%d", packet.AcknowledgmentNum, len(c.tcpOptions.inSACKOption.blocks))
-	for i, block := range c.tcpOptions.inSACKOption.blocks {
-		log.Printf("[RESEND-DEBUG]   SACK[%d]: [%d, %d]", i, block.leftEdge, block.rightEdge)
-	}
+	//log.Printf("[RESEND-DEBUG] updateResendPacketsOnAck: ACKnum=%d, SACK blocks count=%d", packet.AcknowledgmentNum, len(c.tcpOptions.inSACKOption.blocks))
+	//for i, block := range c.tcpOptions.inSACKOption.blocks {
+	//	log.Printf("[RESEND-DEBUG]   SACK[%d]: [%d, %d]", i, block.leftEdge, block.rightEdge)
+	//}
 
 	// Create a list to store resend packet's SEQ in ascending order
 	var seqToRemove []uint32
@@ -1012,7 +1012,7 @@ func (c *Connection) updateResendPacketsOnAck(packet *PcpPacket) {
 
 	// Get a collection of packet keys for iteration
 	keys := c.resendPackets.GetPacketKeys()
-	log.Printf("[RESEND-DEBUG] updateResendPacketsOnAck: Checking %d packets in ResendPackets", len(keys))
+	//log.Printf("[RESEND-DEBUG] updateResendPacketsOnAck: Checking %d packets in ResendPackets", len(keys))
 
 	// Iterate through ResendPackets
 	for _, seqNum := range keys {
@@ -1027,18 +1027,18 @@ func (c *Connection) updateResendPacketsOnAck(packet *PcpPacket) {
 				// If the sequence number is within a SACK block, mark it for removal
 				seqToRemove = append(seqToRemove, seqNum)
 				foundInSack = true
-				log.Printf("[RESEND-DEBUG]   SEQ=%d found in SACK block [%d, %d]", seqNum, sackBlock.leftEdge, sackBlock.rightEdge)
+				//log.Printf("[RESEND-DEBUG]   SEQ=%d found in SACK block [%d, %d]", seqNum, sackBlock.leftEdge, sackBlock.rightEdge)
 				break
 			}
 		}
 		// or, if seqNum < packet.AckNum, also remove it
 		if !foundInSack && isLess(seqNum, packet.AcknowledgmentNum) {
 			seqToRemove = append(seqToRemove, seqNum)
-			log.Printf("[RESEND-DEBUG]   SEQ=%d covered by cumulative ACK=%d", seqNum, packet.AcknowledgmentNum)
+			//log.Printf("[RESEND-DEBUG]   SEQ=%d covered by cumulative ACK=%d", seqNum, packet.AcknowledgmentNum)
 		}
-		if !foundInSack && !isLess(seqNum, packet.AcknowledgmentNum) {
-			log.Printf("[RESEND-DEBUG]   SEQ=%d NOT acknowledged (cumulative ACK=%d, no SACK)", seqNum, packet.AcknowledgmentNum)
-		}
+		//if !foundInSack && !isLess(seqNum, packet.AcknowledgmentNum) {
+		//log.Printf("[RESEND-DEBUG]   SEQ=%d NOT acknowledged (cumulative ACK=%d, no SACK)", seqNum, packet.AcknowledgmentNum)
+		//}
 	}
 
 	// Remove marked packets from ResendPackets
