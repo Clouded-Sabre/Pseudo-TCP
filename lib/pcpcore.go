@@ -177,9 +177,9 @@ func (p *PcpCore) ListenPcp(serviceIP string, port int, pcpConfig *config.Config
 			return nil, err
 		}
 
-		// Add iptables rule to drop RST packets created by system TCP/IP network stack
-		if err := addServerIptablesRule(serviceIP, port); err != nil {
-			log.Println("Error adding iptables rule:", err)
+		// Add firewall rule to drop RST packets created by system TCP/IP network stack (using abstraction layer - supports both iptables and nftables)
+		if err := pConn.packetFilterer.AddRule(serviceIP, port, "server"); err != nil {
+			log.Println("Error adding firewall rule:", err)
 			return nil, err
 		}
 
@@ -226,9 +226,9 @@ func (p *PcpCore) Close() error {
 	for _, pConn := range p.protoConnectionMap {
 		pConn.Close()
 		if pConn.isServer {
-			// remove iptable rules for server protocol connection
+			// remove firewall rules for server protocol connection (using abstraction layer - supports both iptables and nftables)
 			for port := range pConn.iptableRules {
-				err := removeServerIptablesRule(pConn.serverAddr.IP.String(), port)
+				err := pConn.packetFilterer.RemoveRule(pConn.serverAddr.IP.String(), port, "server")
 				if err != nil {
 					log.Println(err)
 					return err
@@ -251,7 +251,8 @@ func (p *PcpCore) Close() error {
 	return nil
 }
 
-// addIptablesRule adds an iptables rule to drop RST packets originating from the given IP and port.
+// addServerIptablesRule adds an iptables rule to drop RST packets originating from the given IP and port.
+// Deprecated: Use PacketFilterer.AddRule() instead, which supports both iptables and nftables.
 func addServerIptablesRule(ip string, port int) error {
 	cmd := exec.Command("iptables", "-A", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-s", ip, "--sport", strconv.Itoa(port), "-j", "DROP")
 	if err := cmd.Run(); err != nil {
@@ -260,7 +261,8 @@ func addServerIptablesRule(ip string, port int) error {
 	return nil
 }
 
-// removeIptablesRule removes the iptables rule that was added for dropping RST packets.
+// removeServerIptablesRule removes the iptables rule that was added for dropping RST packets.
+// Deprecated: Use PacketFilterer.RemoveRule() instead, which supports both iptables and nftables.
 func removeServerIptablesRule(ip string, port int) error {
 	// Construct the command to delete the iptables rule
 	cmd := exec.Command("iptables", "-D", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-s", ip, "--sport", strconv.Itoa(port), "-j", "DROP")
