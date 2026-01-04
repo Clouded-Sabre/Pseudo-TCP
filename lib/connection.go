@@ -57,6 +57,9 @@ type Connection struct {
 	isConnSignalFailedAlreadyClosed bool            // denote if connSignalFailed is already closed to prevent closing it again and cause panic
 	connSignalFailedMutex           sync.Mutex      // mutex for isConnSignalFailedAlreadyClosed
 	wg                              sync.WaitGroup  // wait group for go routine
+	// error signaling
+	lastError      error      // Last error (e.g., KeepAliveTimeoutError) when connection closes
+	lastErrorMutex sync.Mutex // mutex to protect lastError
 	// statistics
 	rxCount, txCount int64 // count of number of packets received, sent since birth
 	rxOooCount       int64 // count of number of received Out-Of-Order packet
@@ -594,10 +597,30 @@ func (c *Connection) Read(buffer []byte) (int, error) {
 
 	if c.readDeadline.IsZero() { // blocking read
 		packet = <-c.readChannel
+		if packet == nil {
+			// Channel closed - check if there's a specific error to return
+			c.lastErrorMutex.Lock()
+			err := c.lastError
+			c.lastErrorMutex.Unlock()
+			if err != nil {
+				return 0, err
+			}
+			return 0, io.EOF
+		}
 		return pcpRead()
 	} else if c.readDeadline.After(time.Now()) {
 		select {
 		case packet = <-c.readChannel:
+			if packet == nil {
+				// Channel closed - check if there's a specific error to return
+				c.lastErrorMutex.Lock()
+				err := c.lastError
+				c.lastErrorMutex.Unlock()
+				if err != nil {
+					return 0, err
+				}
+				return 0, io.EOF
+			}
 			return pcpRead()
 		case <-time.After(time.Until(c.readDeadline)):
 			return 0, &TimeoutError{"Read deadline exceeded"}
@@ -759,6 +782,16 @@ func (c *Connection) startResendTimer() {
 
 func (c *Connection) sendKeepalivePacket() {
 	var fp int
+
+	// Check if connection is already closed before attempting to send
+	c.isClosedMu.Lock()
+	isClosed := c.isClosed
+	c.isClosedMu.Unlock()
+	if isClosed {
+		log.Println("Connection is closed, skipping keepalive packet send")
+		return
+	}
+
 	// Create and send the keepalive packet
 	keepalivePacket := NewPcpPacket(c.nextSequenceNumber-1, c.lastAckNumber, ACKFlag, []byte{0}, c)
 	if keepalivePacket == nil {
@@ -773,14 +806,32 @@ func (c *Connection) sendKeepalivePacket() {
 	}
 
 	keepalivePacket.IsKeepAliveMassege = true
-	c.params.outputChan <- keepalivePacket
-	fmt.Println("keepalive packet sent...")
+
+	// Use non-blocking send to avoid panic if channel is closed
+	select {
+	case c.params.outputChan <- keepalivePacket:
+		fmt.Println("keepalive packet sent...")
+	default:
+		// Channel might be closed or full, don't panic
+		log.Println("Failed to send keepalive packet (channel closed or full)")
+		if rp.Debug && keepalivePacket.GetChunkReference() != nil {
+			keepalivePacket.ReturnChunk()
+		}
+	}
 }
 
 func (c *Connection) startKeepaliveTimer() {
 	// Lock to ensure exclusive access to the timer
 	c.keepaliveTimerMutex.Lock()
 	defer c.keepaliveTimerMutex.Unlock()
+
+	// Check if connection is closed before starting timer
+	c.isClosedMu.Lock()
+	isClosed := c.isClosed
+	c.isClosedMu.Unlock()
+	if isClosed {
+		return
+	}
 
 	// Stop the existing timer if it's running
 	if c.keepaliveTimer != nil {
@@ -797,8 +848,20 @@ func (c *Connection) startKeepaliveTimer() {
 
 	// Start the keepalive timer
 	c.keepaliveTimer = time.AfterFunc(timeout, func() {
+		// Check if connection is closed before processing timeout
+		c.isClosedMu.Lock()
+		isClosed := c.isClosed
+		c.isClosedMu.Unlock()
+		if isClosed {
+			return
+		}
+
 		if c.timeoutCount == c.config.maxKeepaliveAttempts {
 			log.Printf("Connection %s idle timed out. Close it.\n", c.params.key)
+			// Set the keepalive timeout error before clearing resources
+			c.lastErrorMutex.Lock()
+			c.lastError = &KeepAliveTimeoutError{ConnectionKey: c.params.key}
+			c.lastErrorMutex.Unlock()
 			// connection idle timed out. clear connection resoureces and close connection
 			c.clearConnResource()
 

@@ -15,3 +15,7 @@ client/client.exe
 test/droptestgw/droptestgw
 test/sshtest/client/client
 test/sshtest/server/server
+test/echoclient/echoclient
+test/echoserver/echoserver
+client/client_with_reconnect
+client/testclient

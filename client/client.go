@@ -2,9 +2,11 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"io"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
@@ -16,21 +18,17 @@ func main() {
 	sourceIP := flag.String("sourceIP", "127.0.0.4", "Source IP address")
 	serverIP := flag.String("serverIP", "127.0.0.2", "Server IP address")
 	serverPort := flag.Int("serverPort", 8901, "Server port")
+	packetInterval := flag.Duration("interval", 500*time.Millisecond, "Time between packets")
 	flag.Parse()
 
-	const (
-		iteration         = 1000
-		numOfPackets      = 20
-		msOfSleep         = 1000
-		iterationInterval = 15 // in seconds
-	)
-
+	// Load configuration
 	var err error
 	config.AppConfig, err = config.ReadConfig("config.yaml")
 	if err != nil {
-		log.Fatalln("Configurtion file error:", err)
+		log.Fatalln("Configuration file error:", err)
 	}
 
+	// Initialize PCP core
 	pcpCoreConfig := &lib.PcpCoreConfig{
 		ProtocolID:      uint8(config.AppConfig.ProtocolID),
 		PreferredMSS:    config.AppConfig.PreferredMSS,
@@ -43,62 +41,140 @@ func main() {
 	}
 	defer pcpCoreObj.Close()
 
+	// Create reconnection helper with configuration
+	reconnectCfg := &lib.ClientReconnectConfig{
+		MaxRetries:        10,
+		InitialBackoff:    1 * time.Second,
+		MaxBackoff:        60 * time.Second,
+		BackoffMultiplier: 1.5,
+		OnReconnect: func() {
+			log.Println("✅ Successfully reconnected to server")
+		},
+		OnFinalFailure: func(err error) {
+			log.Printf("❌ Failed to reconnect after all attempts: %v\n", err)
+		},
+	}
+
+	helper := lib.NewClientReconnectHelper(
+		pcpCoreObj,
+		*sourceIP,
+		*serverIP,
+		uint16(*serverPort),
+		config.AppConfig,
+		reconnectCfg,
+	)
+
+	// Set up signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	done := make(chan struct{})
+	go func() {
+		<-sigChan
+		close(done)
+	}()
+
+	// Create initial connection
+	conn, err := pcpCoreObj.DialPcp(*sourceIP, *serverIP, uint16(*serverPort), config.AppConfig)
+	if err != nil {
+		log.Fatalf("Failed to connect: %v", err)
+	}
+	log.Printf("Connected to %s\n", *serverIP)
+
+	// Set initial connection in helper
+	helper.SetConnection(conn)
+
+	// Ticker for sending packets
+	ticker := time.NewTicker(*packetInterval)
+	defer ticker.Stop()
+
+	packetCount := 0
 	buffer := make([]byte, config.AppConfig.PreferredMSS)
-	for j := 0; j < iteration; j++ {
-		// Dial to the server
-		conn, err := pcpCoreObj.DialPcp(*sourceIP, *serverIP, uint16(*serverPort), config.AppConfig)
-		if err != nil {
-			fmt.Println("Error connecting:", err)
-			return
-		}
-		//defer conn.Close()
 
-		fmt.Println("PCP connection established!")
+	// Main event loop
+	for {
+		select {
+		case <-done:
+			log.Println("Shutting down...")
+			goto shutdown
 
-		// Simulate data transmission
-		for i := 0; i < numOfPackets; i++ {
-			// Construct a packet
-			payload := []byte(fmt.Sprintf("Data packet %d \n", i))
+		case <-ticker.C:
+			packetCount++
 
-			// Send the packet to the server
-			fmt.Println("Sending packet", i)
-			conn.Write(payload)
-			log.Printf("Packet %d sent.\n", i)
+			// Prepare payload
+			payload := []byte("PCP client packet")
 
-			SleepForMs(msOfSleep) // Simulate some delay between packets
-		}
-
-		payload := []byte("Client Done")
-		conn.Write(payload)
-		log.Println("Packet sent:", string(payload))
-
-		for {
-			n, err := conn.Read(buffer)
+			// Try to send
+			currentConn := helper.GetConnection()
+			n, err := currentConn.Write(payload)
 			if err != nil {
-				if err == io.EOF {
-					// Connection closed by the server, exit the loop
-					fmt.Println("Server closed the connection.")
-					break
-				} else {
-					fmt.Println("Error reading:", err)
+				log.Printf("[%d] ERROR: Write error - %v\n", packetCount, err)
+
+				// Check if it's a keepalive timeout (needs reconnection)
+				if isKeepAliveTimeoutError(err) {
+					log.Printf("[%d] ERROR: Keepalive timeout detected, initiating reconnection\n",
+						packetCount)
+
+					// Attempt reconnection (HandleError manages backoff internally)
+					if !helper.HandleError(err) {
+						log.Printf("[%d] ERROR: Reconnection failed\n", packetCount)
+						continue
+					}
+
+					// Success! Get the new connection
+					currentConn = helper.GetConnection()
+					log.Printf("[%d] ✅ Reconnection successful\n", packetCount)
+				}
+				continue
+			}
+
+			// Set read deadline for responsiveness to Ctrl+C
+			currentConn.SetReadDeadline(time.Now().Add(*packetInterval + 100*time.Millisecond))
+			n, err = currentConn.Read(buffer)
+
+			if err != nil {
+				// Check for read deadline timeout (normal, not an error)
+				if err.Error() == "Read deadline exceeded" {
 					continue
 				}
-			}
-			log.Println("Received packet:", string(buffer[:n]))
-			/*if string(buffer[:n]) == "Server Done" {
-				break
-			}*/
-		}
 
-		// Close the connection
-		//conn.Close()
-		time.Sleep(time.Second * iterationInterval)
+				log.Printf("[%d] ERROR: Read error - %v\n", packetCount, err)
+
+				if isKeepAliveTimeoutError(err) {
+					log.Printf("[%d] ERROR: Keepalive timeout detected, initiating reconnection\n",
+						packetCount)
+
+					if !helper.HandleError(err) {
+						log.Printf("[%d] ERROR: Reconnection failed\n", packetCount)
+						continue
+					}
+
+					currentConn = helper.GetConnection()
+					log.Printf("[%d] ✅ Reconnection successful\n", packetCount)
+				} else if err == io.EOF {
+					log.Println("Server closed the connection")
+				}
+				continue
+			}
+
+			log.Printf("[%d] Sent: %d bytes, Received: %d bytes\n",
+				packetCount, n, len(buffer[:n]))
+		}
 	}
-	fmt.Println("PCP client exit")
+
+shutdown:
+	currentConn := helper.GetConnection()
+	if currentConn != nil {
+		currentConn.Close()
+	}
+	log.Println("Client closed")
 }
 
-// sleep for n milliseconds
-func SleepForMs(n int) {
-	timeout := time.After(time.Duration(n) * time.Millisecond)
-	<-timeout // Wait on the channel
+// isKeepAliveTimeoutError checks if an error is a keepalive timeout
+func isKeepAliveTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	_, ok := err.(*lib.KeepAliveTimeoutError)
+	return ok
 }

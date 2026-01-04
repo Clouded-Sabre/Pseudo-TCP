@@ -124,6 +124,24 @@ func newPcpProtocolConnection(key string, isServer bool, protocolId int, serverA
 
 func (p *PcpProtocolConnection) dial(serverPort int, connConfig *connectionConfig) (*Connection, error) {
 	log.Println("PcpProtocolConnection.dial: connConfig is", connConfig)
+
+	// Fail fast if protocol connection is already closing
+	p.mu.Lock()
+	if p.isClosed {
+		p.mu.Unlock()
+		return nil, fmt.Errorf("PcpProtocolConnection.dial: protocol connection is closing, cannot establish new connection")
+	}
+
+	// Cancel the emptyMapTimer since we are now trying to reuse the protocol connection to dial a new connection
+	// This prevents the protocol connection from closing during reconnection attempts
+	if p.emptyMapTimer != nil {
+		p.emptyMapTimer.Stop()
+		p.emptyMapTimer = nil
+		log.Println("PcpProtocolConnection.dial: Cancelled emptyMapTimer due to new connection")
+	}
+
+	p.mu.Unlock()
+
 	// Choose a random client port
 	clientPort, err := p.localPortPool.allocatePort()
 	if err != nil {
@@ -661,10 +679,13 @@ func (p *PcpProtocolConnection) handleCloseConnection() {
 
 // Function to close the connection gracefully
 func (p *PcpProtocolConnection) Close() {
+	p.mu.Lock()
 	if p.isClosed {
+		p.mu.Unlock()
 		return
 	}
 	p.isClosed = true
+	p.mu.Unlock()
 
 	// Close all PCP Connections
 	log.Println("PcpProtocolConnection: begin to close...")

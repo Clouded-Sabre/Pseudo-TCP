@@ -65,6 +65,23 @@ func (e *TimeoutError) Temporary() bool {
 	return false
 }
 
+// KeepAliveTimeoutError signals that a connection was closed due to keepalive probe failure
+type KeepAliveTimeoutError struct {
+	ConnectionKey string
+}
+
+func (e *KeepAliveTimeoutError) Error() string {
+	return "connection " + e.ConnectionKey + " idle timed out due to keepalive failure"
+}
+
+func (e *KeepAliveTimeoutError) Timeout() bool {
+	return true
+}
+
+func (e *KeepAliveTimeoutError) Temporary() bool {
+	return false // Not temporary - connection is dead and must be recreated
+}
+
 // sleep for n milliseconds
 func SleepForMs(n int) {
 	timeout := time.After(time.Duration(n) * time.Millisecond)
