@@ -234,6 +234,13 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *connectionConfi
 				// Prepare ACK packet
 				newConn.lastAckNumber = SeqIncrement(packet.SequenceNumber)
 				newConn.initialPeerSeq = packet.SequenceNumber
+				
+				// SACK and other TCP option negotiation MUST happen before sending ACK
+				newConn.tcpOptions.timestampEnabled = packet.TcpOptions.timestampEnabled
+				// Sack permit and SackOption support
+				newConn.tcpOptions.permitSack = newConn.tcpOptions.permitSack && packet.TcpOptions.permitSack    // both sides need to permit SACK
+				newConn.tcpOptions.SackEnabled = newConn.tcpOptions.permitSack && newConn.tcpOptions.SackEnabled // Sack Option support also needs to be manually enabled
+				
 				newConn.initSendAck()
 
 				// Connection established, remove newConn from tempClientConnections, and place it into clientConnections pool
@@ -242,10 +249,6 @@ func (p *PcpProtocolConnection) dial(serverPort int, connConfig *connectionConfi
 				p.mu.Unlock()
 
 				newConn.isOpenConnection = true
-				newConn.tcpOptions.timestampEnabled = packet.TcpOptions.timestampEnabled
-				// Sack permit and SackOption support
-				newConn.tcpOptions.permitSack = newConn.tcpOptions.permitSack && packet.TcpOptions.permitSack    // both sides need to permit SACK
-				newConn.tcpOptions.SackEnabled = newConn.tcpOptions.permitSack && newConn.tcpOptions.SackEnabled // Sack Option support also needs to be manually enabled
 
 				p.mu.Lock()
 				p.connectionMap[connKey] = newConn
