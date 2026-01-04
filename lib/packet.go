@@ -549,6 +549,7 @@ func (r *ResendPackets) AddSentPacket(packet *PcpPacket) {
 		ResendCount:  0, // Initial resend count is 1
 		Data:         packet,
 	}
+	log.Printf("[RESEND-DEBUG] AddSentPacket: SEQ=%d, PayloadLen=%d, TotalInMap=%d", packet.SequenceNumber, len(packet.Payload), len(r.packets))
 }
 
 // Function to update information about a sent packet
@@ -594,6 +595,7 @@ func (r *ResendPackets) RemoveSentPacket(seqNum uint32) {
 	}
 
 	delete(r.packets, seqNum)
+	log.Printf("[RESEND-DEBUG] RemoveSentPacket: SEQ=%d (was resent %d times), RemainingInMap=%d", seqNum, packet.ResendCount, len(r.packets))
 	// now that we delete packet from SentPackets, we no longer
 	// need it so it's time to return its chunk
 	if rp.Debug && packet.Data.GetChunkReference() != nil {
