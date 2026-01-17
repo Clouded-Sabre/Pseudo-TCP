@@ -108,8 +108,15 @@ func (p *PcpCore) DialPcp(localIP string, serverIP string, serverPort uint16, Co
 	pConnKey := fmt.Sprintf("%s-%s", serverAddr.IP.To4().String(), localAddr.IP.To4().String())
 	// Check if the connection exists in the connection map
 	pConn, ok := p.protoConnectionMap[pConnKey]
-	if !ok {
+	if ok {
+		if pConn.isClosed {
+			delete(p.protoConnectionMap, pConnKey)
+			pConn = nil
+		}
+	}
+	if pConn == nil {
 		// need to create new protocol connection
+		var err error
 		pConn, err = newPcpProtocolConnection(p, pConnKey, false, int(p.config.ProtocolID), serverAddr, localAddr, p.pConnCloseSignal, p.config.PcpProtocolConnConfig)
 		if err != nil {
 			fmt.Println("Error creating Pcp Client Protocol Connection:", err)
@@ -122,6 +129,8 @@ func (p *PcpCore) DialPcp(localIP string, serverIP string, serverPort uint16, Co
 	newClientConn, err := pConn.dial(int(serverPort), ConnConfig)
 	if err != nil {
 		fmt.Println("Error creating Pcp Client Connection:", err)
+		// dial failed, PcpProtocolConnection is likely broken, so remove it
+		delete(p.protoConnectionMap, pConnKey)
 		return nil, err
 	}
 

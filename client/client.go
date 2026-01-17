@@ -60,7 +60,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
+	"net"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 	"github.com/Clouded-Sabre/Pseudo-TCP/filter"
@@ -81,6 +85,16 @@ func main() {
 		msOfSleep         = 1000
 		iterationInterval = 15 // in seconds
 	)
+
+	// Set up signal handling for Ctrl+C
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT)
+	done := make(chan struct{})
+	go func() {
+		<-sigChan
+		log.Println("Ctrl+C received, shutting down...")
+		close(done)
+	}()
 
 	//var err error
 	pcpCoreConfig, connConfig, err := config.LoadConfig("config.yaml")
@@ -107,7 +121,13 @@ func main() {
 	defer pcpCoreObj.Close()
 
 	buffer := make([]byte, pcpCoreConfig.PreferredMSS)
+mainLoop:
 	for j := 0; j < iteration; j++ {
+		select {
+		case <-done:
+			break mainLoop
+		default:
+		}
 		// Dial to the server
 		pcpCoreConfig.PcpProtocolConnConfig.ConnConfig = connConfig
 		conn, err := pcpCoreObj.DialPcp(*sourceIP, *serverIP, uint16(*serverPort), connConfig)
@@ -136,13 +156,23 @@ func main() {
 		conn.Write(payload)
 		log.Println("Packet sent:", string(payload))
 
+	readLoop:
 		for {
+			select {
+			case <-done:
+				break readLoop
+			default:
+			}
+			conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 			n, err := conn.Read(buffer)
 			if err != nil {
 				if err == io.EOF {
 					// Connection closed by the server, exit the loop
 					fmt.Println("Server closed the connection.")
 					break
+				} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					// Read timeout, not a fatal error
+					continue
 				} else {
 					fmt.Println("Error reading:", err)
 					continue
@@ -156,7 +186,11 @@ func main() {
 
 		// Close the connection
 		//conn.Close()
-		time.Sleep(time.Second * iterationInterval)
+		select {
+		case <-time.After(time.Second * iterationInterval):
+		case <-done:
+			break mainLoop
+		}
 	}
 	fmt.Println("PCP client exit")
 }
@@ -164,5 +198,7 @@ func main() {
 // sleep for n milliseconds
 func SleepForMs(n int) {
 	timeout := time.After(time.Duration(n) * time.Millisecond)
-	<-timeout // Wait on the channel
+	select {
+	case <-timeout: // Wait on the channel
+	}
 }

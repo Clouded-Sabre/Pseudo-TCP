@@ -257,7 +257,7 @@ func (c *Connection) handleIncomingPackets() {
 
 			// update ResendPackets if it's ACK packet
 			//if packet.Conn.config.RetransmissionEnabled {
-			if packet.TcpOptions.SackEnabled && isACK && !isSYN && !isFIN && !isRST {
+			if c.tcpOptions.SackEnabled && isACK && !isSYN && !isFIN && !isRST {
 				c.updateResendPacketsOnAck(packet)
 			}
 			//}
@@ -763,6 +763,12 @@ func (c *Connection) startResendTimer() {
 }
 
 func (c *Connection) sendKeepalivePacket() {
+	c.isClosedMu.Lock()
+	if c.isClosed {
+		c.isClosedMu.Unlock()
+		return
+	}
+	c.isClosedMu.Unlock()
 	var fp int
 	// Create and send the keepalive packet
 	keepalivePacket := NewPcpPacket(c.nextSequenceNumber-1, c.lastAckNumber, ACKFlag, []byte{0}, c)
@@ -778,8 +784,16 @@ func (c *Connection) sendKeepalivePacket() {
 	}
 
 	keepalivePacket.IsKeepAliveMassege = true
-	c.params.outputChan <- keepalivePacket
-	fmt.Println("PcpConnection.sendKeepalivePacket: keepalive packet sent...")
+	select {
+	case c.params.outputChan <- keepalivePacket:
+		fmt.Println("PcpConnection.sendKeepalivePacket: keepalive packet sent...")
+	default:
+		log.Println("PcpConnection.sendKeepalivePacket: could not send keepalive packet, channel closed or full.")
+		// Since we couldn't send, we must return the chunk if we got one.
+		if keepalivePacket != nil {
+			keepalivePacket.ReturnChunk()
+		}
+	}
 }
 
 func (c *Connection) startKeepaliveTimer() {
@@ -802,6 +816,12 @@ func (c *Connection) startKeepaliveTimer() {
 
 	// Start the keepalive timer
 	c.keepaliveTimer = time.AfterFunc(timeout, func() {
+		c.isClosedMu.Lock()
+		if c.isClosed {
+			c.isClosedMu.Unlock()
+			return
+		}
+		c.isClosedMu.Unlock()
 		if c.timeoutCount == c.config.MaxKeepaliveAttempts {
 			log.Printf("PcpConnection.startKeepaliveTimer: PCP connection %s idle timed out. Close it.\n", c.params.key)
 			// connection idle timed out. clear connection resoureces and close connection
