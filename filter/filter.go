@@ -8,15 +8,15 @@ import (
 )
 
 type Filter interface {
-	AddTcpClientFiltering(dstAddr string, dstPort int) error    // AddFilteringRule adds a filtering rule to block RST packets.
-	RemoveTcpClientFiltering(dstAddr string, dstPort int) error // RemoveFilteringRule removes a filtering rule to block RST packets.                                // finishFiltering flushes all rules.
-	AddTcpServerFiltering(dstAddr string, dstPort int) error    // AddFilteringRule adds a filtering rule to block RST packets.
-	RemoveTcpServerFiltering(dstAddr string, dstPort int) error // RemoveFilteringRule removes a filtering rule to block RST packets.
-	FinishFiltering() error                                     // finishFiltering flushes all rules.
-	AddUdpServerFiltering(srcAddr string) error                 // AddFilteringRule adds a filtering rule which blocks icmp unreacheable packets from srcAddr .
-	RemoveUdpServerFiltering(srcAddr string) error              // RemoveFilteringRule removes a filtering rule which blocks icmp unreacheable packets from srcAddr.
-	AddUdpClientFiltering(dstAddr string) error                 // AddFilteringRule adds a filtering rule which block icmp unreacheable packets to dstAddr.
-	RemoveUdpClientFiltering(dstAddr string) error              // RemoveFilteringRule removes a filtering rule which blocks icmp unreacheable packets to dstAddr.
+	AddTcpClientFiltering(dstAddr string, dstPort int) error    // adds a TCP filtering rule on client side to block RST packets sent out to server.
+	RemoveTcpClientFiltering(dstAddr string, dstPort int) error // removes a TCP filtering rule on client side to block RST packets sent out to server.                                // finishFiltering flushes all rules.
+	AddTcpServerFiltering(srtAddr string, srtPort int) error    // adds a TCP filtering rule on server side to block RST packets sent from server's listening port.
+	RemoveTcpServerFiltering(srtAddr string, srtPort int) error // removes a TCP filtering rule on server side to block RST packets sent from server's listening port.
+	FinishFiltering() error                                     // flushes all rules and stop filtering.
+	AddUdpServerFiltering(srcAddr string) error                 // adds a UDP filtering rule on server side which blocks icmp unreacheable packets from srcAddr.
+	RemoveUdpServerFiltering(srcAddr string) error              // removes a UDP filtering rule on server side which blocks icmp unreacheable packets from srcAddr.
+	AddUdpClientFiltering(dstAddr string) error                 // adds a filtering rule on client side which block icmp unreacheable packets to dstAddr on server.
+	RemoveUdpClientFiltering(dstAddr string) error              // removes a filtering rule on client side which blocks icmp unreacheable packets to dstAddr on server.
 }
 
 // Struct containing the shared method

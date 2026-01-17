@@ -8,104 +8,221 @@ import (
 	"log"
 	"net"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 )
 
-/*const (
-	myComment = "PCP: "
-) // Comment to identify the rules */
+// firewallTool represents the firewall management tool to be used.
+type firewallTool int
 
+const (
+	iptables firewallTool = iota
+	nftables
+	none
+)
+
+// filterImpl is the main implementation of the Filter interface for Linux.
+// It detects the available firewall tool (iptables or nftables) and delegates
+// the filtering operations to the corresponding implementation.
 type filterImpl struct {
-	comment         string
-	udpServerFilter *udpServerFilter // Struct containing the shared method
-	//udpSrcMap sync.Map // Map to store UDP source addresses and ports to udp connections
+	toolSpecificFilter toolSpecificFilter
+	udpServerFilter    *udpServerFilter // Struct containing the shared method
 }
 
+// toolSpecificFilter is an interface that abstracts the firewall-specific operations.
+type toolSpecificFilter interface {
+	AddTcpClientFiltering(dstAddr string, dstPort int) error
+	RemoveTcpClientFiltering(dstAddr string, dstPort int) error
+	AddTcpServerFiltering(srcAddr string, srcPort int) error
+	RemoveTcpServerFiltering(srcAddr string, srcPort int) error
+	AddUdpClientFiltering(dstAddr string) error
+	RemoveUdpClientFiltering(dstAddr string) error
+	FinishFiltering() error
+}
+
+// NewFilter creates a new Filter instance.
+// It detects whether iptables or nftables is available and returns the appropriate filterer.
 func NewFilter(identifier string) (Filter, error) {
-	if isIptablesEnabled() != nil {
-		return nil, fmt.Errorf("iptables is not enabled or available")
+	tool := detectFirewallTool()
+	var toolFilter toolSpecificFilter
+
+	switch tool {
+	case nftables:
+		log.Println("Using nftables for filtering.")
+		toolFilter = newNftablesFilterer(identifier)
+	case iptables:
+		log.Println("Using iptables for filtering.")
+		toolFilter = newIptablesFilterer(identifier)
+	default:
+		return nil, fmt.Errorf("no supported firewall tool (iptables or nftables) found")
 	}
+
 	return &filterImpl{
-		comment:         identifier,
-		udpServerFilter: NewUdpServerFilter(),
+		toolSpecificFilter: toolFilter,
+		udpServerFilter:    NewUdpServerFilter(),
 	}, nil
 }
 
-// isIptablesEnabled checks if iptables is enabled and available on the system.
-func isIptablesEnabled() error {
-	// Run the iptables command to check if it is available and enabled
-	// The command "iptables -S" lists all rules in the filter table
-	// If iptables is not available, it will return an error
-	cmd := exec.Command("iptables", "-S")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("iptables is not enabled or available: %v\nOutput: %s", err, string(output))
+// detectFirewallTool checks for the presence of nftables and iptables.
+func detectFirewallTool() firewallTool {
+	if _, err := exec.LookPath("nft"); err == nil {
+		// Check if nftables is usable
+		cmd := exec.Command("nft", "list", "tables")
+		if err := cmd.Run(); err == nil {
+			return nftables
+		}
 	}
-
-	// If the command succeeds, iptables is enabled
-	log.Println("iptables is enabled and available.")
-	return nil
+	if _, err := exec.LookPath("iptables"); err == nil {
+		cmd := exec.Command("iptables", "-S")
+		if err := cmd.Run(); err == nil {
+			return iptables
+		}
+	}
+	return none
 }
 
-// addAFilteringRule adds an iptables rule to drop RST packets originating from the given IP and port.
-// It first checks if the rule already exists to avoid duplicates.
 func (f *filterImpl) AddTcpClientFiltering(dstAddr string, dstPort int) error {
-	// Construct the rule string to check for its existence
-	ruleCheck := fmt.Sprintf("-A OUTPUT -p tcp --tcp-flags RST RST -d %s --dport %d -m comment --comment \"%s\" -j DROP", dstAddr, dstPort, f.comment)
+	return f.toolSpecificFilter.AddTcpClientFiltering(dstAddr, dstPort)
+}
 
-	// List all rules in the OUTPUT chain
+func (f *filterImpl) RemoveTcpClientFiltering(dstAddr string, dstPort int) error {
+	return f.toolSpecificFilter.RemoveTcpClientFiltering(dstAddr, dstPort)
+}
+
+func (f *filterImpl) AddTcpServerFiltering(srcAddr string, srcPort int) error {
+	return f.toolSpecificFilter.AddTcpServerFiltering(srcAddr, srcPort)
+}
+
+func (f *filterImpl) RemoveTcpServerFiltering(srcAddr string, srcPort int) error {
+	return f.toolSpecificFilter.RemoveTcpServerFiltering(srcAddr, srcPort)
+}
+
+func (f *filterImpl) AddUdpClientFiltering(dstAddr string) error {
+	return f.toolSpecificFilter.AddUdpClientFiltering(dstAddr)
+}
+
+func (f *filterImpl) RemoveUdpClientFiltering(dstAddr string) error {
+	return f.toolSpecificFilter.RemoveUdpClientFiltering(dstAddr)
+}
+
+func (f *filterImpl) FinishFiltering() error {
+	return f.toolSpecificFilter.FinishFiltering()
+}
+
+func (f *filterImpl) AddUdpServerFiltering(srcAddr string) error {
+	return f.udpServerFilter.AddUdpServerFiltering(srcAddr)
+}
+
+func (f *filterImpl) RemoveUdpServerFiltering(srcAddr string) error {
+	return f.udpServerFilter.RemoveUdpServerFiltering(srcAddr)
+}
+
+// --- iptables implementation ---
+
+type iptablesFilterer struct {
+	comment string
+}
+
+func newIptablesFilterer(identifier string) *iptablesFilterer {
+	return &iptablesFilterer{comment: identifier}
+}
+
+func (f *iptablesFilterer) AddTcpClientFiltering(dstAddr string, dstPort int) error {
+	ruleCheck := fmt.Sprintf("-A OUTPUT -p tcp --tcp-flags RST RST -d %s --dport %d -m comment --comment \"%s\" -j DROP", dstAddr, dstPort, f.comment)
 	cmd := exec.Command("iptables", "-S", "OUTPUT")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to list iptables rules: %v\nOutput: %s", err, string(output))
 	}
-
-	// Check if the rule already exists
 	if strings.Contains(string(output), ruleCheck) {
-		// Rule already exists, no need to add it again
-		fmt.Printf("Rule already exists: %s\n", ruleCheck)
 		return nil
 	}
-
-	// Rule does not exist, add it
 	cmd = exec.Command("iptables", "-A", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-d", dstAddr, "--dport", strconv.Itoa(dstPort), "-m", "comment", "--comment", f.comment, "-j", "DROP")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to add iptables rule: %v", err)
 	}
-
-	log.Printf("Successfully added rule: %s\n", ruleCheck)
 	return nil
 }
 
-// RemoveIptablesRule removes the iptables rule that was added for dropping RST packets.
-func (f *filterImpl) RemoveTcpClientFiltering(dstAddr string, dstPort int) error {
-	// Construct the command to delete the iptables rule
+func (f *iptablesFilterer) RemoveTcpClientFiltering(dstAddr string, dstPort int) error {
 	cmd := exec.Command("iptables", "-D", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-d", dstAddr, "--dport", strconv.Itoa(dstPort), "-m", "comment", "--comment", f.comment, "-j", "DROP")
-
-	// Execute the command to delete the iptables rule
 	if err := cmd.Run(); err != nil {
-		// If there is an error executing the command, return the error
 		return err
 	}
-
 	return nil
 }
 
-// finishFiltering removes all iptables rules with the "myAppRule" comment
-func (f *filterImpl) FinishFiltering() error {
-	// List all rules in the INPUT chain
-	cmd := exec.Command("iptables", "-S", "INPUT")
+func (f *iptablesFilterer) AddTcpServerFiltering(srcAddr string, srcPort int) error {
+	ruleCheck := fmt.Sprintf("-A OUTPUT -p tcp --tcp-flags RST RST -s %s --sport %d -m comment --comment %s -j DROP", srcAddr, srcPort, f.comment)
+	cmd := exec.Command("iptables", "-S", "OUTPUT")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to list iptables rules: %v\nOutput: %s", err, string(output))
+	}
+	if strings.Contains(string(output), ruleCheck) {
+		return nil
+	}
+	cmd = exec.Command("iptables", "-A", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-s", srcAddr, "--sport", strconv.Itoa(srcPort), "-m", "comment", "--comment", f.comment, "-j", "DROP")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to add iptables rule: %v", err)
+	}
+	return nil
+}
+
+func (f *iptablesFilterer) RemoveTcpServerFiltering(srcAddr string, srcPort int) error {
+	cmd := exec.Command("iptables", "-D", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-s", srcAddr, "--sport", strconv.Itoa(srcPort), "-m", "comment", "--comment", f.comment, "-j", "DROP")
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (f *iptablesFilterer) AddUdpClientFiltering(dstAddr string) error {
+	ipStr, _, err := net.SplitHostPort(dstAddr)
+	if err != nil {
+		return fmt.Errorf("invalid destination address format: %v", err)
+	}
+
+	ruleCheck := fmt.Sprintf("-A OUTPUT -d %s -p icmp -m icmp --icmp-type 3/3 -j REJECT", ipStr)
+	cmd := exec.Command("iptables", "-S", "OUTPUT")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to list iptables rules: %v\nOutput: %s", err, string(output))
+	}
+	if strings.Contains(string(output), ruleCheck) {
+		return nil
+	}
+
+	cmd = exec.Command("iptables", "-A", "OUTPUT", "-d", ipStr, "-p", "icmp", "--icmp-type", "3/3", "-j", "REJECT")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to apply iptables rule: %v", err)
+	}
+	return nil
+}
+
+func (f *iptablesFilterer) RemoveUdpClientFiltering(dstAddr string) error {
+	ipStr, _, err := net.SplitHostPort(dstAddr)
+	if err != nil {
+		return fmt.Errorf("invalid destination address format: %v", err)
+	}
+	cmd := exec.Command("iptables", "-D", "OUTPUT", "-d", ipStr, "-p", "icmp", "--icmp-type", "3/3", "-j", "REJECT")
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (f *iptablesFilterer) FinishFiltering() error {
+	cmd := exec.Command("iptables", "-S")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to list iptables rules: %v\nOutput: %s", err, string(output))
 	}
 
-	// Identify and delete rules with the "myAppRule" comment
 	var deleteErrors []string
 	for _, line := range strings.Split(string(output), "\n") {
 		if strings.Contains(line, "--comment \""+f.comment+"\"") {
-			// Replace "-A" with "-D" to delete the rule
 			deleteCmd := strings.Replace(line, "-A", "-D", 1)
 			cmd := exec.Command("sh", "-c", "iptables "+deleteCmd)
 			if out, err := cmd.CombinedOutput(); err != nil {
@@ -114,143 +231,212 @@ func (f *filterImpl) FinishFiltering() error {
 		}
 	}
 
-	// Report any deletion failures
 	if len(deleteErrors) > 0 {
 		return fmt.Errorf("some rules failed to delete:\n%s", strings.Join(deleteErrors, "\n"))
 	}
-
 	return nil
 }
 
-// addAFilteringRule adds an iptables rule to block RST packets originating from the given IP and port.
-func (f *filterImpl) AddTcpServerFiltering(srcAddr string, srcPort int) error {
-	// Construct the rule string to check for its existence
-	ruleCheck := fmt.Sprintf("-A OUTPUT -p tcp --tcp-flags RST RST -s %s --sport %d -m comment --comment %s -j DROP", srcAddr, srcPort, f.comment)
+// --- nftables implementation ---
 
-	// List all rules in the OUTPUT chain
-	cmd := exec.Command("iptables", "-S", "OUTPUT")
-	output, err := cmd.CombinedOutput()
+type nftablesFilterer struct {
+	identifier string
+}
+
+func newNftablesFilterer(identifier string) *nftablesFilterer {
+	return &nftablesFilterer{identifier: identifier}
+}
+
+func (n *nftablesFilterer) AddTcpClientFiltering(dstAddr string, dstPort int) error {
+	return n.addRule(dstAddr, dstPort, "client")
+}
+
+func (n *nftablesFilterer) RemoveTcpClientFiltering(dstAddr string, dstPort int) error {
+	return n.removeRule(dstAddr, dstPort, "client")
+}
+
+func (n *nftablesFilterer) AddTcpServerFiltering(srcAddr string, srcPort int) error {
+	return n.addRule(srcAddr, srcPort, "server")
+}
+
+func (n *nftablesFilterer) RemoveTcpServerFiltering(srcAddr string, srcPort int) error {
+	return n.removeRule(srcAddr, srcPort, "server")
+}
+
+func (n *nftablesFilterer) AddUdpClientFiltering(dstAddr string) error {
+	ipStr, _, err := net.SplitHostPort(dstAddr)
 	if err != nil {
-		return fmt.Errorf("failed to list iptables rules: %v\nOutput: %s", err, string(output))
+		return fmt.Errorf("invalid destination address format: %v", err)
+	}
+	rule := fmt.Sprintf("ip daddr %s icmp type port-unreachable reject comment \"%s\"", ipStr, n.identifier)
+	return n.addGenericRule(rule)
+}
+
+func (n *nftablesFilterer) RemoveUdpClientFiltering(dstAddr string) error {
+	ipStr, _, err := net.SplitHostPort(dstAddr)
+	if err != nil {
+		return fmt.Errorf("invalid destination address format: %v", err)
+	}
+	rule := fmt.Sprintf("ip daddr %s icmp type port-unreachable reject", ipStr)
+	return n.removeGenericRule(rule)
+}
+
+func (n *nftablesFilterer) addGenericRule(rule string) error {
+	if err := n.ensureTableAndChain(); err != nil {
+		return err
 	}
 
-	// Check if the rule already exists
-	if strings.Contains(string(output), ruleCheck) {
-		// Rule already exists, no need to add it again
-		log.Printf("Rule already exists: %s\n", ruleCheck)
+	// Check if rule exists
+	cmd := exec.Command("nft", "list", "chain", "inet", "filter", "output")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to list nftables rules: %w", err)
+	}
+	if strings.Contains(string(output), rule) {
 		return nil
 	}
 
-	// Rule does not exist, add it
-	cmd = exec.Command("iptables", "-A", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-s", srcAddr, "--sport", strconv.Itoa(srcPort), "-m", "comment", "--comment", f.comment, "-j", "DROP")
+	cmd = exec.Command("nft", "add", "rule", "inet", "filter", "output", rule)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to add iptables rule: %v", err)
+		return fmt.Errorf("failed to add nftables rule: %w", err)
 	}
-
-	log.Printf("Successfully added rule: %s\n", ruleCheck)
 	return nil
 }
 
-// removeAFilteringRule removes the iptables rule that blocks RST packets for the given IP and port.
-func (f *filterImpl) RemoveTcpServerFiltering(srcAddr string, srcPort int) error {
-	// Construct the command to delete the iptables rule
-	cmd := exec.Command("iptables", "-D", "OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-s", srcAddr, "--sport", strconv.Itoa(srcPort), "-m", "comment", "--comment", f.comment, "-j", "DROP")
-
-	// Execute the command to delete the iptables rule
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to remove iptables rule: %v", err)
-	}
-
-	log.Printf("Successfully removed iptables rule for %s:%d\n", srcAddr, srcPort)
-	return nil
-}
-
-func (f *filterImpl) AddUdpServerFiltering(srcAddr string) error { // srcAddr is the source ip address and port of the UDP server in "ip:port" format
-	return f.udpServerFilter.AddUdpServerFiltering(srcAddr)
-}
-
-func (f *filterImpl) RemoveUdpServerFiltering(srcAddr string) error { // srcAddr is the source ip address and port of the UDP server in "ip:port" format
-	return f.udpServerFilter.RemoveUdpServerFiltering(srcAddr)
-}
-
-/* func (f *filterImpl) AddUdpServerFiltering(srcAddr string) error {  // srcAddr is the source ip address of the UDP server
-	// adds an iptables rule to drop icmp port unreachable packets originating from the given IP and port.
-	// Build the iptables command
-	cmd := exec.Command("iptables", "-A", "OUTPUT",
-		"-s", srcAddr,
-		"-p", "icmp",
-		"--icmp-type", "3/3",
-		//"-m", "u32",
-		//"--u32", fmt.Sprintf("0 >> 22 & 0x3C @ 16 >> 16 = %s", portStr),
-		"-j", "REJECT")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to apply iptables rule: %v, command: %s", err, strings.Join(cmd.Args, " "))
-	}
-
-	log.Printf("Successfully added rule: %s\n", cmd.String())
-	return nil
-}
-
-func (f *filterImpl) RemoveUdpServerFiltering(srcAddr string) error { // srcAddr is the source ip address of the UDP server
-	// removes the iptables rule that blocks icmp port unreachable packets for the given IP and port.
-	// Build the iptables command
-	cmd := exec.Command("iptables", "-D", "OUTPUT",
-		"-s", srcAddr,
-		"-p", "icmp",
-		"--icmp-type", "3/3",
-		//"-m", "u32",
-		//"--u32", fmt.Sprintf("0 >> 22 & 0x3C @ 16 >> 16 = %s", portStr),
-		"-j", "REJECT")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to remove iptables rule: %v, command: %s", err, strings.Join(cmd.Args, " "))
-	}
-
-	log.Printf("Successfully removed rule: %s\n", cmd.String())
-	return nil
-}*/
-
-func (f *filterImpl) AddUdpClientFiltering(dstAddr string) error { // srcAddr is the destination address of the UDP server in "ip:port" format
-	// adds an iptables rule to drop icmp port unreachable packets destined to the given IP.
-	// first we need to extract the ip address from the dstAddr string
-	ipStr, _, err := net.SplitHostPort(dstAddr)
+func (n *nftablesFilterer) removeGenericRule(rulePattern string) error {
+	handle, err := n.findRuleHandle(rulePattern)
 	if err != nil {
-		return fmt.Errorf("invalid destination address format: %v", err)
+		return err
 	}
-	// Build the iptables command
-	cmd := exec.Command("iptables", "-A", "OUTPUT",
-		"-d", ipStr,
-		"-p", "icmp",
-		"--icmp-type", "3/3",
-		//"-m", "u32",
-		//"--u32", fmt.Sprintf("0 >> 22 & 0x3C @ 16 >> 16 = %s", portStr),
-		"-j", "REJECT")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to apply iptables rule: %v, command: %s", err, strings.Join(cmd.Args, " "))
+	if handle == "" {
+		return nil // Rule doesn't exist
 	}
 
-	log.Printf("Successfully added rule: %s\n", cmd.String())
+	cmd := exec.Command("nft", "delete", "rule", "inet", "filter", "output", "handle", handle)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to delete nftables rule with handle %s: %w", handle, err)
+	}
 	return nil
 }
 
-func (f *filterImpl) RemoveUdpClientFiltering(dstAddr string) error { // srcAddr is the destination ip address of the UDP server in "ip:port" format
-	// removes the iptables rule that blocks icmp port unreachable packets to the given IP.
-	// first we need to extract the ip address from the dstAddr string
-	ipStr, _, err := net.SplitHostPort(dstAddr)
-	if err != nil {
-		return fmt.Errorf("invalid destination address format: %v", err)
-	}
-	// Build the iptables command
-	cmd := exec.Command("iptables", "-D", "OUTPUT",
-		"-d", ipStr,
-		"-p", "icmp",
-		"--icmp-type", "3/3",
-		//"-m", "u32",
-		//"--u32", fmt.Sprintf("0 >> 22 & 0x3C @ 16 >> 16 = %s", portStr),
-		"-j", "REJECT")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to remove iptables rule: %v, command: %s", err, strings.Join(cmd.Args, " "))
+func (n *nftablesFilterer) addRule(ip string, port int, direction string) error {
+	if err := n.ensureTableAndChain(); err != nil {
+		return err
 	}
 
-	log.Printf("Successfully removed rule: %s\n", cmd.String())
+	var rule string
+	var ruleCheck string
+	if direction == "server" {
+		rule = fmt.Sprintf("ip saddr %s tcp sport %d tcp flags rst drop comment \"%s\"", ip, port, n.identifier)
+		ruleCheck = fmt.Sprintf("ip saddr %s tcp sport %d tcp flags rst drop", ip, port)
+	} else {
+		rule = fmt.Sprintf("ip daddr %s tcp dport %d tcp flags rst drop comment \"%s\"", ip, port, n.identifier)
+		ruleCheck = fmt.Sprintf("ip daddr %s tcp dport %d tcp flags rst drop", ip, port)
+	}
+
+	// Check if rule exists
+	cmd := exec.Command("nft", "list", "chain", "inet", "filter", "output")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to list nftables rules: %w", err)
+	}
+	if strings.Contains(string(output), ruleCheck) {
+		return nil
+	}
+
+	cmd = exec.Command("nft", "add", "rule", "inet", "filter", "output", rule)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to add nftables rule for %s:%d: %v", ip, port, err)
+	}
+
+	return nil
+}
+
+func (n *nftablesFilterer) removeRule(ip string, port int, direction string) error {
+	var rulePattern string
+	if direction == "server" {
+		rulePattern = fmt.Sprintf("ip saddr %s tcp sport %d tcp flags rst drop", ip, port)
+	} else {
+		rulePattern = fmt.Sprintf("ip daddr %s tcp dport %d tcp flags rst drop", ip, port)
+	}
+
+	handle, err := n.findRuleHandle(rulePattern)
+	if err != nil {
+		return fmt.Errorf("error finding rule handle: %w", err)
+	}
+	if handle == "" {
+		// Rule doesn't exist, which is fine for removal.
+		return nil
+	}
+
+	cmd := exec.Command("nft", "delete", "rule", "inet", "filter", "output", "handle", handle)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to delete nftables rule with handle %s: %w", handle, err)
+	}
+	return nil
+}
+
+func (n *nftablesFilterer) ensureTableAndChain() error {
+	checkTableCmd := exec.Command("nft", "list", "table", "inet", "filter")
+	if checkTableCmd.Run() != nil {
+		createTableCmd := exec.Command("nft", "add", "table", "inet", "filter")
+		if err := createTableCmd.Run(); err != nil {
+			return fmt.Errorf("failed to create nftables table: %w", err)
+		}
+	}
+
+	checkChainCmd := exec.Command("nft", "list", "chain", "inet", "filter", "output")
+	if checkChainCmd.Run() != nil {
+		createChainCmd := exec.Command("nft", "add", "chain", "inet", "filter", "output", "{", "type", "filter", "hook", "output", "priority", "0", ";", "}")
+		if err := createChainCmd.Run(); err != nil {
+			return fmt.Errorf("failed to create nftables output chain: %w", err)
+		}
+	}
+	return nil
+}
+
+func (n *nftablesFilterer) findRuleHandle(rulePattern string) (string, error) {
+	cmd := exec.Command("nft", "--handle", "list", "chain", "inet", "filter", "output")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// If the chain doesn't exist, the rule doesn't exist.
+		if strings.Contains(string(output), "No such file or directory") {
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to list nftables rules with handles: %w, output: %s", err, string(output))
+	}
+
+	re := regexp.MustCompile(fmt.Sprintf(`.*%s.* # handle (\\d+)`, regexp.QuoteMeta(rulePattern)))
+	matches := re.FindStringSubmatch(string(output))
+
+	if len(matches) > 1 {
+		return matches[1], nil
+	}
+
+	return "", nil
+}
+
+func (n *nftablesFilterer) FinishFiltering() error {
+	cmd := exec.Command("nft", "--handle", "list", "chain", "inet", "filter", "output")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if strings.Contains(string(output), "No such file or directory") {
+			return nil // Chain or table doesn't exist, so no rules to flush.
+		}
+		return fmt.Errorf("failed to list nftables rules with handles: %w, output: %s", err, string(output))
+	}
+
+	re := regexp.MustCompile(fmt.Sprintf(`comment \"%s\".* # handle (\\d+)`, n.identifier))
+	matches := re.FindAllStringSubmatch(string(output), -1)
+
+	for _, match := range matches {
+		if len(match) > 1 {
+			handle := match[1]
+			cmd := exec.Command("nft", "delete", "rule", "inet", "filter", "output", "handle", handle)
+			if err := cmd.Run(); err != nil {
+				log.Printf("Failed to delete nftables rule with handle %s: %v", handle, err)
+			}
+		}
+	}
 	return nil
 }
