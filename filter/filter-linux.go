@@ -302,6 +302,7 @@ func (n *nftablesFilterer) addGenericRule(rule string) error {
 	ruleCheck = strings.TrimSpace(ruleCheck)
 
 	if strings.Contains(string(output), ruleCheck) {
+		fmt.Println("The rule already exist!!! do nothing")
 		return nil
 	}
 
