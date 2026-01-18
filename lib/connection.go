@@ -790,9 +790,7 @@ func (c *Connection) sendKeepalivePacket() {
 	default:
 		log.Println("PcpConnection.sendKeepalivePacket: could not send keepalive packet, channel closed or full.")
 		// Since we couldn't send, we must return the chunk if we got one.
-		if keepalivePacket != nil {
-			keepalivePacket.ReturnChunk()
-		}
+		keepalivePacket.ReturnChunk()
 	}
 }
 

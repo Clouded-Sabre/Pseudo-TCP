@@ -21,8 +21,7 @@ type PartialPcpCoreConfig struct {
 }
 
 type PartialPcpProtocolConnConfig struct {
-	IptableRuleDelay *int `yaml:"iptable_rule_daley"`
-	//PreferredMSS     *int  `yaml:"preferred_mss"`
+	IptableRuleDelay *int  `yaml:"iptable_rule_daley"`
 	PacketLostSim    *bool `yaml:"packet_lost_simulation"`
 	PConnTimeout     *int  `yaml:"pconn_time_out"`
 	ClientPortUpper  *int  `yaml:"client_port_upper"`
@@ -32,8 +31,7 @@ type PartialPcpProtocolConnConfig struct {
 }
 
 type PartialConnectionConfig struct {
-	WindowScale *int `yaml:"window_scale"`
-	//PreferredMSS            *int  `yaml:"preferred_mss"`
+	WindowScale             *int  `yaml:"window_scale"`
 	SackPermitSupport       *bool `yaml:"sack_permit_support"`
 	SackOptionSupport       *bool `yaml:"sack_option_support"`
 	IdleTimeout             *int  `yaml:"idle_timeout"`
