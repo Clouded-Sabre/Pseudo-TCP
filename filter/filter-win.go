@@ -223,189 +223,22 @@ func (f *filterImpl) RemoveTcpServerFiltering(srcAddr string, srcPort int) error
 
 // AddUdpServerFiltering adds a filtering rule which blocks icmp unreacheable packets from srcAddr.
 func (f *filterImpl) AddUdpServerFiltering(srcAddr string) error { // srcAddr is the source ip address of the UDP server
-	return f.udpServerFilter.AddUdpServerFiltering(srcAddr)
-	/*
-		f.mutex.Lock()
-		defer f.mutex.Unlock()
-
-		// Check if the rule already exists
-		if f.ruleSet[srcAddr] {
-			return fmt.Errorf("rule already exists for source address: %s", srcAddr)
-		}
-
-		// Define the WinDivert filter string to block ICMP type 3/3 packets from srcAddr
-		filter := fmt.Sprintf("icmp and icmp.Type == 3 and icmp.Code == 3 and ip.SrcAddr == %s", srcAddr)
-
-		// Open a WinDivert handle with the specified filter
-		handle, err := divert.Open(filter, divert.LayerNetwork, 0, divert.FlagDrop)
-		if err != nil {
-			return fmt.Errorf("failed to open WinDivert handle: %v", err)
-		}
-
-		// Store the handle and start the filtering loop if not already running
-		if !f.isRunning {
-			f.handle = handle
-			f.stopChan = make(chan struct{})
-			f.isRunning = true
-			go f.runIcmpFilteringLoop()
-		}
-
-		// Add the rule to the rule set
-		f.ruleSet[srcAddr] = true
-		log.Printf("Successfully added ICMP filtering rule for source address: %s\n", srcAddr)
-	*/
-
-	// we don't use udp raw socket server on windows platform, so we do nothing here
-	//return nil
+	return f.udpServerFilter.AddUdpServerFiltering(srcAddr) // call the shared method which is cross-platform implementation
 }
-
-/*func (f *filterImpl) runIcmpFilteringLoop() {
-	defer func() {
-		f.handle.Close()
-		f.isRunning = false
-	}()
-
-	buf := make([]byte, 1500)
-	addr := divert.Address{}
-
-	for {
-		select {
-		case <-f.stopChan:
-			log.Println("Stopping ICMP filter...")
-			return
-		default:
-			// Receive packets from WinDivert
-			n, err := f.handle.Recv(buf, &addr)
-			if err != nil {
-				log.Println("Failed to receive packet:", err)
-				continue
-			}
-
-			// Parse the packet using gopacket
-			packet := gopacket.NewPacket(buf[:n], layers.LayerTypeIPv4, gopacket.Default)
-			if packet == nil {
-				continue
-			}
-
-			// Extract the IPv4 layer
-			ipv4Layer := packet.Layer(layers.LayerTypeIPv4)
-			if ipv4Layer == nil {
-				continue
-			}
-			ipv4, _ := ipv4Layer.(*layers.IPv4)
-
-			// Extract the ICMP layer
-			icmpLayer := packet.Layer(layers.LayerTypeICMPv4)
-			if icmpLayer == nil {
-				continue
-			}
-			icmp, _ := icmpLayer.(*layers.ICMPv4)
-
-			// Check if the packet matches the rule
-			if icmp.TypeCode.Type() == layers.ICMPv4TypeDestinationUnreachable &&
-				icmp.TypeCode.Code() == 3 {
-				log.Printf("Dropping ICMP packet from %s\n", ipv4.SrcIP.String())
-				continue // Drop the packet
-			}
-
-			// Reinject the packet if it does not match the rule
-			if _, err := f.handle.Send(buf[:n], &addr); err != nil {
-				log.Println("Failed to reinject packet:", err)
-			}
-		}
-	}
-}*/
 
 // RemoveUdpServerFiltering removes a filtering rule which blocks icmp unreacheable packets from srcAddr.
 func (f *filterImpl) RemoveUdpServerFiltering(srcAddr string) error { // srcAddr is the source ip address of the UDP server in "ip:port" format
-	return f.udpServerFilter.RemoveUdpServerFiltering(srcAddr)
-	/*
-		f.mutex.Lock()
-
-		// Check if the rule exists
-		if !f.ruleSet[srcAddr] {
-			f.mutex.Unlock()
-			return fmt.Errorf("rule not found for source address: %s", srcAddr)
-		}
-
-		// Remove the rule from the rule set
-		delete(f.ruleSet, srcAddr)
-
-		// Clean up if no rules remain
-		if len(f.ruleSet) == 0 {
-			f.mutex.Unlock()
-			f.FinishFiltering()
-			return nil
-		}
-
-		f.mutex.Unlock()
-	*/
-
-	// we don't use udp raw socket server on windows platform, so we do nothing here
-	//return nil
+	return f.udpServerFilter.RemoveUdpServerFiltering(srcAddr) // call the shared method which is cross-platform implementation
 }
 
 // AddUdpClientFiltering adds a filtering rule which blocks icmp unreacheable packets to dstAddr.
 func (f *filterImpl) AddUdpClientFiltering(dstAddr string) error {
-	/*
-		f.mutex.Lock()
-		defer f.mutex.Unlock()
-
-		// Check if the rule already exists
-		if f.ruleSet[dstAddr] {
-			return fmt.Errorf("rule already exists for destination address: %s", dstAddr)
-		}
-
-		// Define the WinDivert filter string to block ICMP type 3/3 packets to dstAddr
-		filter := fmt.Sprintf("icmp and icmp.Type == 3 and icmp.Code == 3 and ip.DstAddr == %s", dstAddr)
-
-		// Open a WinDivert handle with the specified filter
-		handle, err := divert.Open(filter, divert.LayerNetwork, 0, divert.FlagDrop)
-		if err != nil {
-			return fmt.Errorf("failed to open WinDivert handle: %v", err)
-		}
-
-		// Store the handle and start the filtering loop if not already running
-		if !f.isRunning {
-			f.handle = handle
-			f.stopChan = make(chan struct{})
-			f.isRunning = true
-			go f.runIcmpFilteringLoop()
-		}
-
-		// Add the rule to the rule set
-		f.ruleSet[dstAddr] = true
-		log.Printf("Successfully added ICMP filtering rule for destination address: %s\n", dstAddr)
-	*/
-
 	// we don't use udp raw socket client on windows platform, so we do nothing here
 	return nil
 }
 
 // RemoveUdpClientFiltering removes a filtering rule which blocks icmp unreacheable packets to dstAddr.
 func (f *filterImpl) RemoveUdpClientFiltering(dstAddr string) error {
-	/*
-		f.mutex.Lock()
-
-		// Check if the rule exists
-		if !f.ruleSet[dstAddr] {
-			f.mutex.Unlock()
-			return fmt.Errorf("rule not found for destination address: %s", dstAddr)
-		}
-
-		// Remove the rule from the rule set
-		delete(f.ruleSet, dstAddr)
-
-		// Clean up if no rules remain
-		if len(f.ruleSet) == 0 {
-			f.mutex.Unlock()
-			f.FinishFiltering()
-			return nil
-		}
-
-		f.mutex.Unlock()
-	*/
-
 	// we don't use udp raw socket client on windows platform, so we do nothing here
 	return nil
 }

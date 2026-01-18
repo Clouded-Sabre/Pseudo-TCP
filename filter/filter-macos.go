@@ -222,11 +222,11 @@ func (f *filterImpl) RemoveTcpServerFiltering(srcAddr string, srcPort int) error
 }
 
 func (f *filterImpl) AddUdpServerFiltering(srcAddr string) error { // srcAddr is the source ip address and port of the UDP server in "ip:port" format
-	return f.udpServerFilter.AddUdpServerFiltering(srcAddr)
+	return f.udpServerFilter.AddUdpServerFiltering(srcAddr) // call the shared method which is cross-platform implementation
 }
 
 func (f *filterImpl) RemoveUdpServerFiltering(srcAddr string) error { // srcAddr is the source ip address and port of the UDP server in "ip:port" format
-	return f.udpServerFilter.RemoveUdpServerFiltering(srcAddr)
+	return f.udpServerFilter.RemoveUdpServerFiltering(srcAddr) // call the shared method which is cross-platform implementation
 }
 
 // AddIcmpDstFilteringRule adds a filtering rule which block icmp unreacheable packets to dstAddr.

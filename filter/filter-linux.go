@@ -99,6 +99,7 @@ func (f *filterImpl) RemoveTcpServerFiltering(srcAddr string, srcPort int) error
 }
 
 func (f *filterImpl) AddUdpClientFiltering(dstAddr string) error {
+	fmt.Print("Now I am adding UDP client filtering rule..........................")
 	return f.toolSpecificFilter.AddUdpClientFiltering(dstAddr)
 }
 
