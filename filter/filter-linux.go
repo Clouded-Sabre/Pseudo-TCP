@@ -99,7 +99,7 @@ func (f *filterImpl) RemoveTcpServerFiltering(srcAddr string, srcPort int) error
 }
 
 func (f *filterImpl) AddUdpClientFiltering(dstAddr string) error {
-	fmt.Print("Now I am adding UDP client filtering rule..........................")
+	fmt.Println("Now I am adding UDP client filtering rule..........................")
 	return f.toolSpecificFilter.AddUdpClientFiltering(dstAddr)
 }
 
@@ -265,6 +265,7 @@ func (n *nftablesFilterer) RemoveTcpServerFiltering(srcAddr string, srcPort int)
 }
 
 func (n *nftablesFilterer) AddUdpClientFiltering(dstAddr string) error {
+	fmt.Println("Now I am adding nftable udp filtering rule.......................")
 	ipStr, _, err := net.SplitHostPort(dstAddr)
 	if err != nil {
 		return fmt.Errorf("invalid destination address format: %v", err)
@@ -283,6 +284,7 @@ func (n *nftablesFilterer) RemoveUdpClientFiltering(dstAddr string) error {
 }
 
 func (n *nftablesFilterer) addGenericRule(rule string) error {
+	fmt.Println("Now I am adding generic nftables rule ...........")
 	if err := n.ensureTableAndChain(); err != nil {
 		return err
 	}
