@@ -184,7 +184,7 @@ func (f *iptablesFilterer) AddUdpClientFiltering(dstAddr string) error {
 		return fmt.Errorf("invalid destination address format: %v", err)
 	}
 
-	ruleCheck := fmt.Sprintf("-A OUTPUT -d %s -p icmp -m icmp --icmp-type 3/3 -j REJECT", ipStr)
+	ruleCheck := fmt.Sprintf("-A OUTPUT -d %s -p icmp -m icmp --icmp-type 3/3 -j DROP", ipStr)
 	cmd := exec.Command("iptables", "-S", "OUTPUT")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -194,7 +194,7 @@ func (f *iptablesFilterer) AddUdpClientFiltering(dstAddr string) error {
 		return nil
 	}
 
-	cmd = exec.Command("iptables", "-A", "OUTPUT", "-d", ipStr, "-p", "icmp", "--icmp-type", "3/3", "-j", "REJECT")
+	cmd = exec.Command("iptables", "-A", "OUTPUT", "-d", ipStr, "-p", "icmp", "--icmp-type", "3/3", "-j", "DROP")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to apply iptables rule: %v", err)
 	}
@@ -206,7 +206,7 @@ func (f *iptablesFilterer) RemoveUdpClientFiltering(dstAddr string) error {
 	if err != nil {
 		return fmt.Errorf("invalid destination address format: %v", err)
 	}
-	cmd := exec.Command("iptables", "-D", "OUTPUT", "-d", ipStr, "-p", "icmp", "--icmp-type", "3/3", "-j", "REJECT")
+	cmd := exec.Command("iptables", "-D", "OUTPUT", "-d", ipStr, "-p", "icmp", "--icmp-type", "3/3", "-j", "DROP")
 	if err := cmd.Run(); err != nil {
 		return err
 	}
@@ -268,7 +268,7 @@ func (n *nftablesFilterer) AddUdpClientFiltering(dstAddr string) error {
 	if err != nil {
 		return fmt.Errorf("invalid destination address format: %v", err)
 	}
-	rule := fmt.Sprintf("ip daddr %s icmp type port-unreachable reject comment \"%s\"", ipStr, n.identifier)
+	rule := fmt.Sprintf("ip daddr %s icmp type port-unreachable drop comment \"%s\"", ipStr, n.identifier)
 	return n.addGenericRule(rule)
 }
 
@@ -277,7 +277,7 @@ func (n *nftablesFilterer) RemoveUdpClientFiltering(dstAddr string) error {
 	if err != nil {
 		return fmt.Errorf("invalid destination address format: %v", err)
 	}
-	rule := fmt.Sprintf("ip daddr %s icmp type port-unreachable reject", ipStr)
+	rule := fmt.Sprintf("ip daddr %s icmp type port-unreachable drop", ipStr)
 	return n.removeGenericRule(rule)
 }
 
@@ -292,7 +292,13 @@ func (n *nftablesFilterer) addGenericRule(rule string) error {
 	if err != nil {
 		return fmt.Errorf("failed to list nftables rules: %w", err)
 	}
-	if strings.Contains(string(output), rule) {
+
+	re := regexp.MustCompile(`comment ".*?"`)
+	ruleCheck := re.ReplaceAllString(rule, "")
+	// trim trailing spaces that might be left after removing the comment
+	ruleCheck = strings.TrimSpace(ruleCheck)
+
+	if strings.Contains(string(output), ruleCheck) {
 		return nil
 	}
 
