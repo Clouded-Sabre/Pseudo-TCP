@@ -270,7 +270,7 @@ func (n *nftablesFilterer) AddUdpClientFiltering(dstAddr string) error {
 	if err != nil {
 		return fmt.Errorf("invalid destination address format: %v", err)
 	}
-	rule := fmt.Sprintf("ip daddr %s icmp type port-unreachable drop comment \"%s\"", ipStr, n.identifier)
+	rule := fmt.Sprintf("ip daddr %s icmp type destination-unreachable drop comment \"%s\"", ipStr, n.identifier)
 	return n.addGenericRule(rule)
 }
 
@@ -279,7 +279,7 @@ func (n *nftablesFilterer) RemoveUdpClientFiltering(dstAddr string) error {
 	if err != nil {
 		return fmt.Errorf("invalid destination address format: %v", err)
 	}
-	rule := fmt.Sprintf("ip daddr %s icmp type port-unreachable drop", ipStr)
+	rule := fmt.Sprintf("ip daddr %s icmp type destination-unreachable drop", ipStr)
 	return n.removeGenericRule(rule)
 }
 
