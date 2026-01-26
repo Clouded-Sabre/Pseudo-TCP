@@ -28,12 +28,14 @@ type PartialPcpProtocolConnConfig struct {
 	ClientPortLower  *int  `yaml:"client_port_lower"`
 	VerifyChecksum   *bool `yaml:"checksum_verification"`
 	PconnOutputQueue *int  `yaml:"pconn_output_queue"`
+	DisableResendBackoff *bool `yaml:"disable_resend_backoff"`
 }
 
 type PartialConnectionConfig struct {
 	WindowScale             *int  `yaml:"window_scale"`
 	SackPermitSupport       *bool `yaml:"sack_permit_support"`
 	SackOptionSupport       *bool `yaml:"sack_option_support"`
+	RetransmissionEnabled   *bool `yaml:"retransmission_enabled"`
 	IdleTimeout             *int  `yaml:"idle_timeout"`
 	KeepAliveEnabled        *bool `yaml:"keep_alive_enabled"`
 	KeepaliveInterval       *int  `yaml:"keepalive_interval"`
@@ -116,6 +118,10 @@ func mergePcpProtocolConnConfig(defaultConfig *lib.PcpProtocolConnConfig, partia
 		counter++
 		defaultConfig.PConnOutputQueue = *partial.PconnOutputQueue
 	}
+	if partial.DisableResendBackoff != nil {
+		counter++
+		defaultConfig.DisableResendBackoff = *partial.DisableResendBackoff
+	}
 }
 
 func mergeConnectionConfig(defaultConfig *lib.ConnectionConfig, partial *PartialConnectionConfig) {
@@ -133,6 +139,10 @@ func mergeConnectionConfig(defaultConfig *lib.ConnectionConfig, partial *Partial
 	if partial.SackOptionSupport != nil {
 		counter++
 		defaultConfig.SackOptionSupport = *partial.SackOptionSupport
+	}
+	if partial.RetransmissionEnabled != nil {
+		counter++
+		defaultConfig.RetransmissionEnabled = *partial.RetransmissionEnabled
 	}
 	if partial.IdleTimeout != nil {
 		counter++

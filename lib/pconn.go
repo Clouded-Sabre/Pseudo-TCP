@@ -55,6 +55,7 @@ type PcpProtocolConnConfig struct {
 	ConnConfig                       *ConnectionConfig
 	VerifyChecksum                   bool
 	PConnOutputQueue                 int
+	DisableResendBackoff             bool
 }
 
 func DefaultPcpProtocolConnConfig() *PcpProtocolConnConfig {
@@ -68,6 +69,7 @@ func DefaultPcpProtocolConnConfig() *PcpProtocolConnConfig {
 		ConnConfig:           DefaultConnectionConfig(),
 		VerifyChecksum:       false, // Checksum verification is turned off by default because TCP checksum offload is widely used nowadays
 		PConnOutputQueue:     100,
+		DisableResendBackoff: false,
 	}
 }
 
@@ -559,34 +561,42 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 			frame := frameBytes[TcpPseudoHeaderLength:] // first part of framesBytes is actually Tcp Pseudo Header
 
 			// --- RETRY LOGIC START to handle system outgoing buffer full ---
-			maxRetries := 5
-			backoff := 1 * time.Millisecond
+			if !p.config.DisableResendBackoff {
+				maxRetries := 5
+				backoff := 1 * time.Millisecond
 
-			for i := 0; i < maxRetries; i++ {
+				for i := 0; i < maxRetries; i++ {
+					if p.isServer {
+						_, err = p.rsConn.WriteTo(frame[:n], packet.DestAddr)
+					} else {
+						_, err = p.rsConn.Write(frame[:n])
+					}
+
+					// Check if the error is "No buffer space available"
+					if err != nil && (errors.Is(err, syscall.ENOBUFS) || strings.Contains(err.Error(), "no buffer space")) {
+						if i == maxRetries-1 {
+							log.Printf("PCPProtocolConnection: Dropping packet after %d retries: %v", maxRetries, err)
+							break
+						}
+
+						// Wait with exponential backoff, but stop if connection closes
+						select {
+						case <-time.After(backoff):
+							backoff *= 2 // Double the wait time (1ms, 2ms, 4ms, 8ms...)
+							continue     // Try writing again
+						case <-p.closeSignal:
+							return
+						}
+					}
+					// If error is nil or a different kind of error, exit the retry loop
+					break
+				}
+			} else {
 				if p.isServer {
 					_, err = p.rsConn.WriteTo(frame[:n], packet.DestAddr)
 				} else {
 					_, err = p.rsConn.Write(frame[:n])
 				}
-
-				// Check if the error is "No buffer space available"
-				if err != nil && (errors.Is(err, syscall.ENOBUFS) || strings.Contains(err.Error(), "no buffer space")) {
-					if i == maxRetries-1 {
-						log.Printf("PCPProtocolConnection: Dropping packet after %d retries: %v", maxRetries, err)
-						break
-					}
-
-					// Wait with exponential backoff, but stop if connection closes
-					select {
-					case <-time.After(backoff):
-						backoff *= 2 // Double the wait time (1ms, 2ms, 4ms, 8ms...)
-						continue     // Try writing again
-					case <-p.closeSignal:
-						return
-					}
-				}
-				// If error is nil or a different kind of error, exit the retry loop
-				break
 			}
 			// --- RETRY LOGIC END ---
 
