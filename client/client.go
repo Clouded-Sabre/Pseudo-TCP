@@ -56,15 +56,16 @@ reliability and transmission characteristics.
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
-	"net"
 
 	"github.com/Clouded-Sabre/Pseudo-TCP/config"
 	"github.com/Clouded-Sabre/Pseudo-TCP/filter"
@@ -101,6 +102,18 @@ func main() {
 	if err != nil {
 		log.Fatalln("Configurtion file error:", err)
 	}
+
+	coreConfigJSON, err := json.MarshalIndent(pcpCoreConfig, "", "  ")
+	if err != nil {
+		log.Fatalf("Error marshaling core config to JSON: %v", err)
+	}
+	fmt.Printf("Loaded pcpCoreConfig:\n%s\n", string(coreConfigJSON))
+
+	connConfigJSON, err := json.MarshalIndent(connConfig, "", "  ")
+	if err != nil {
+		log.Fatalf("Error marshaling conn config to JSON: %v", err)
+	}
+	fmt.Printf("Loaded connConfig:\n%s\n", string(connConfigJSON))
 
 	defaultRsConf := rs.DefaultRsConfig()
 	rscore, err := rs.NewRSCore(defaultRsConf)
