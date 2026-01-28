@@ -2,10 +2,13 @@ package lib
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log"
 	"math/rand"
 	"net"
+	"strings"
+	"syscall"
 
 	//"os/exec"
 	"strconv"
@@ -53,6 +56,7 @@ type pcpProtocolConnConfig struct {
 	connConfig                       *connectionConfig
 	verifyChecksum                   bool
 	pconnOutputQueue                 int
+	DisableResendBackoff             bool
 }
 
 func newPcpProtocolConnConfig(pcpConfig *config.Config) *pcpProtocolConnConfig {
@@ -66,6 +70,7 @@ func newPcpProtocolConnConfig(pcpConfig *config.Config) *pcpProtocolConnConfig {
 		connConfig:           newConnectionConfig(pcpConfig),
 		verifyChecksum:       pcpConfig.ChecksumVerification,
 		pconnOutputQueue:     pcpConfig.PconnOutputQueue,
+		DisableResendBackoff: pcpConfig.DisableResendBackoff,
 	}
 }
 
@@ -559,14 +564,49 @@ func (p *PcpProtocolConnection) handleOutgoingPackets() {
 			}
 			// Write the packet to the interface
 			frame := frameBytes[TcpPseudoHeaderLength:] // first part of framesBytes is actually Tcp Pseudo Header
-			if p.isServer {
-				_, err = p.ipConn.WriteTo(frame[:n], packet.DestAddr)
+
+			// --- RETRY LOGIC START to handle system outgoing buffer full ---
+			if !p.config.DisableResendBackoff {
+				maxRetries := 5
+				backoff := 1 * time.Millisecond
+
+				for i := 0; i < maxRetries; i++ {
+					if p.isServer {
+						_, err = p.ipConn.WriteTo(frame[:n], packet.DestAddr)
+					} else {
+						_, err = p.ipConn.Write(frame[:n])
+					}
+
+					// Check if the error is "No buffer space available"
+					if err != nil && (errors.Is(err, syscall.ENOBUFS) || strings.Contains(err.Error(), "no buffer space")) {
+						if i == maxRetries-1 {
+							log.Printf("PCPProtocolConnection: Dropping packet after %d retries: %v", maxRetries, err)
+							break
+						}
+
+						// Wait with exponential backoff, but stop if connection closes
+						select {
+						case <-time.After(backoff):
+							backoff *= 2 // Double the wait time (1ms, 2ms, 4ms, 8ms...)
+							continue     // Try writing again
+						case <-p.closeSignal:
+							return
+						}
+					}
+					// If error is nil or a different kind of error, exit the retry loop
+					break
+				}
 			} else {
-				_, err = p.ipConn.Write(frame[:n])
+				if p.isServer {
+					_, err = p.ipConn.WriteTo(frame[:n], packet.DestAddr)
+				} else {
+					_, err = p.ipConn.Write(frame[:n])
+				}
+				if err != nil {
+					log.Println("PCPProtocolConnection.handleOutgoingPackets: Error writing packet:", err, "Skip this packet.")
+				}
 			}
-			if err != nil {
-				log.Println("PCPProtocolConnection.handleOutgoingPackets: Error writing packet:", err, "Skip this packet.")
-			}
+			// --- RETRY LOGIC END ---
 		}
 
 		// add packet to the connection's ResendPackets to wait for acknowledgement from peer or resend if lost

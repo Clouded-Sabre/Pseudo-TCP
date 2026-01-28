@@ -42,6 +42,7 @@ type Config struct {
 	ConnectionInputQueue    int  `yaml:"connection_input_queue"`
 	PconnOutputQueue        int  `yaml:"pconn_output_queue"`
 	ShowStatistics          bool `yaml:"show_statistics"`
+	DisableResendBackoff    bool `yaml:"disable_resend_backoff"`
 }
 
 var AppConfig *Config
@@ -76,6 +77,7 @@ func ReadConfig(confFilePath string) (*Config, error) {
 		ConnectionInputQueue:    1000, // PCP connection's InputQueue depth
 		PconnOutputQueue:        1000, // PCP Protocol connection's OutputQueue depth
 		ShowStatistics:          false,
+		DisableResendBackoff:    false,
 	}
 
 	// Read the YAML file
