@@ -107,4 +107,3 @@ func ReadConfig(confFilePath string) (*Config, error) {
 
 	return &config, nil
 }
-sigOutputChan
