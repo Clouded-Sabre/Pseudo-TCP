@@ -56,6 +56,8 @@ type pcpProtocolConnConfig struct {
 	connConfig                       *connectionConfig
 	verifyChecksum                   bool
 	pconnOutputQueue                 int
+	sigOutputQueueSize               int
+	readTimeoutMs                    int
 	DisableResendBackoff             bool
 }
 
@@ -70,6 +72,8 @@ func newPcpProtocolConnConfig(pcpConfig *config.Config) *pcpProtocolConnConfig {
 		connConfig:           newConnectionConfig(pcpConfig),
 		verifyChecksum:       pcpConfig.ChecksumVerification,
 		pconnOutputQueue:     pcpConfig.PconnOutputQueue,
+		sigOutputQueueSize:   pcpConfig.SigOutputQueueSize,
+		readTimeoutMs:        pcpConfig.ReadTimeoutMs,
 		DisableResendBackoff: pcpConfig.DisableResendBackoff,
 	}
 }
@@ -105,7 +109,7 @@ func newPcpProtocolConnection(key string, isServer bool, protocolId int, serverA
 		ipConn:             ipConn,
 		packetFilterer:     NewPacketFilterer(),
 		outputChan:         make(chan *PcpPacket, config.pconnOutputQueue),
-		sigOutputChan:      make(chan *PcpPacket, 10),
+		sigOutputChan:      make(chan *PcpPacket, config.sigOutputQueueSize),
 		connectionMap:      make(map[string]*Connection),
 		tempConnectionMap:  make(map[string]*Connection),
 		connCloseSignal:    make(chan *Connection),
@@ -285,7 +289,7 @@ func (p *PcpProtocolConnection) clientProcessingIncomingPacket(buffer []byte) {
 	)
 
 	// Set a read deadline to ensure non-blocking behavior
-	p.ipConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // Example timeout of 100 milliseconds
+	p.ipConn.SetReadDeadline(time.Now().Add(time.Duration(p.config.readTimeoutMs) * time.Millisecond)) // P1 fix: configurable read timeout
 
 	n, err = p.ipConn.Read(buffer)
 	if err != nil {
@@ -409,7 +413,7 @@ func (p *PcpProtocolConnection) serverProcessingIncomingPacket(buffer []byte) {
 
 	pcpFrame := buffer[TcpPseudoHeaderLength:] // the first lib.TcpPseudoHeaderLength bytes are reserved for Tcp pseudo header
 	// Set a read deadline to ensure non-blocking behavior
-	p.ipConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // Example timeout of 100 milliseconds
+	p.ipConn.SetReadDeadline(time.Now().Add(time.Duration(p.config.readTimeoutMs) * time.Millisecond)) // P1 fix: configurable read timeout
 
 	n, addr, err := p.ipConn.ReadFrom(pcpFrame)
 	if err != nil {

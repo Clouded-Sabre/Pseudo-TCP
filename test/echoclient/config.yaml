@@ -16,7 +16,7 @@ max_resend_count: 5
 resend_interval: 200
 sack_permit_support: true
 sack_option_support: true
-payload_pool_size: 2000
+payload_pool_size: 5000 # P1 fix: increased from 2000
 conn_signal_retry: 5
 conn_signal_retry_interval: 2
 pconn_time_out: 10
@@ -26,4 +26,6 @@ debug: false
 pool_debug: false
 processing_time_threshold: 10
 connection_input_queue: 1000
-pconn_output_queue: 1000
+pconn_output_queue: 2000 # P0 fix: increased from 1000
+sig_output_queue_size: 100 # P0 fix: previously hardcoded to 10
+read_timeout_ms: 500 # P1 fix: read timeout in milliseconds

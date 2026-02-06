@@ -16,9 +16,13 @@ max_resend_count: 5
 resend_interval: 1000
 sack_permit_support: true
 sack_option_support: false
-payload_pool_size: 2000
+payload_pool_size: 5000 # P1 fix: increased from 2000
 conn_signal_retry: 5
 conn_signal_retry_interval: 2   # in seconds
 pconn_time_out: 10 # in seconds
 iptable_rule_daley: 500 # in milliseconds
 debug: false
+connection_input_queue: 1000
+pconn_output_queue: 2000 # P0 fix: increased from 1000
+sig_output_queue_size: 100 # P0 fix: previously hardcoded to 10
+read_timeout_ms: 500 # P1 fix: read timeout in milliseconds

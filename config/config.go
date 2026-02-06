@@ -41,6 +41,8 @@ type Config struct {
 	ProcessingTimeThreshold int  `yaml:"processing_time_threshold"`
 	ConnectionInputQueue    int  `yaml:"connection_input_queue"`
 	PconnOutputQueue        int  `yaml:"pconn_output_queue"`
+	SigOutputQueueSize      int  `yaml:"sig_output_queue_size"`
+	ReadTimeoutMs           int  `yaml:"read_timeout_ms"`
 	ShowStatistics          bool `yaml:"show_statistics"`
 	DisableResendBackoff    bool `yaml:"disable_resend_backoff"`
 }
@@ -65,7 +67,7 @@ func ReadConfig(confFilePath string) (*Config, error) {
 		ResendInterval:          1000, // interval between resend of lost packets
 		SackPermitSupport:       true,
 		SackOptionSupport:       false,
-		PayloadPoolSize:         2000,  // number of packets in pre-allocated payload pool
+		PayloadPoolSize:         5000,  // number of packets in pre-allocated payload pool (P1 fix: increased from 2000)
 		ConnSignalRetry:         5,     // 3-way handshake and 4-way termination max number of retry
 		ConnSignalRetryInterval: 2,     // in seconds
 		PConnTimeout:            10,    // in seconds
@@ -75,7 +77,9 @@ func ReadConfig(confFilePath string) (*Config, error) {
 		PoolDebug:               false,
 		ProcessingTimeThreshold: 50,   // used in packet ring pool to check if a function or channel holds a packet for too long time
 		ConnectionInputQueue:    1000, // PCP connection's InputQueue depth
-		PconnOutputQueue:        1000, // PCP Protocol connection's OutputQueue depth
+		PconnOutputQueue:        2000, // PCP Protocol connection's OutputQueue depth (P0 fix: increased from 1000)
+		SigOutputQueueSize:      100,  // Signalling packet output queue size (P0 fix: previously hardcoded to 10)
+		ReadTimeoutMs:           500,  // Read timeout in milliseconds (P1 fix: previously hardcoded)
 		ShowStatistics:          false,
 		DisableResendBackoff:    false,
 	}
@@ -103,3 +107,4 @@ func ReadConfig(confFilePath string) (*Config, error) {
 
 	return &config, nil
 }
+sigOutputChan
