@@ -29,3 +29,6 @@ connection_input_queue: 1000
 pconn_output_queue: 2000 # P0 fix: increased from 1000
 sig_output_queue_size: 100 # P0 fix: previously hardcoded to 10
 read_timeout_ms: 500 # P1 fix: read timeout in milliseconds
+delayed_ack_enabled: true # Enable delayed ACK to reduce syscalls
+delayed_ack_time_ms: 40 # Delay ACK for up to 40ms
+delayed_ack_threshold: 2 # Or send ACK immediately if 2+ packets received

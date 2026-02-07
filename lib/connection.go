@@ -48,6 +48,10 @@ type Connection struct {
 	resendInterval                  time.Duration   // packet resend interval
 	resendTimer                     *time.Timer     // resend timer to trigger resending packet every ResendInterval
 	resendTimerMutex                sync.Mutex      // mutex for resendTimer
+	delayedAckTimer                 *time.Timer     // delayed ACK timer
+	delayedAckPending               bool            // flag to indicate if ACK is pending
+	unackedPacketCount              int             // count of unacked packets since last ACK
+	delayedAckTimerMutex            sync.Mutex      // mutex for delayedAckTimer
 	revPacketCache                  PacketGapMap    // Cache for received packets who has gap before it due to packet loss or out-of-order
 	isClosed                        bool            // denote that the conneciton is closed so that no packets should be accepted
 	isClosedMu                      sync.Mutex      // prevent isClosed from concurrent access
@@ -116,6 +120,9 @@ type connectionConfig struct {
 	connSignalRetry         int
 	connectionInputQueue    int
 	showStatistics          bool
+	delayedAckEnabled       bool
+	delayedAckTimeMs        int
+	delayedAckThreshold     int
 }
 
 func newConnectionConfig(pcpConfig *config.Config) *connectionConfig {
@@ -135,6 +142,9 @@ func newConnectionConfig(pcpConfig *config.Config) *connectionConfig {
 		connSignalRetry:         pcpConfig.ConnSignalRetry,
 		connectionInputQueue:    pcpConfig.ConnectionInputQueue,
 		showStatistics:          pcpConfig.ShowStatistics,
+		delayedAckEnabled:       pcpConfig.DelayedAckEnabled,
+		delayedAckTimeMs:        pcpConfig.DelayedAckTimeMs,
+		delayedAckThreshold:     pcpConfig.DelayedAckThreshold,
 	}
 
 	// Print the configuration
@@ -531,7 +541,49 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 	}
 
 	// send ACK packet back to the server
-	c.acknowledge()
+	c.scheduleDelayedAck()
+}
+
+func (c *Connection) scheduleDelayedAck() {
+	if !c.config.delayedAckEnabled {
+		// If delayed ACK is disabled, send ACK immediately
+		c.acknowledge()
+		return
+	}
+
+	c.delayedAckTimerMutex.Lock()
+	defer c.delayedAckTimerMutex.Unlock()
+
+	c.unackedPacketCount++
+
+	// If this is the first unacked packet, start the timer
+	if !c.delayedAckPending {
+		c.delayedAckPending = true
+		c.delayedAckTimer = time.AfterFunc(time.Duration(c.config.delayedAckTimeMs)*time.Millisecond, func() {
+			c.sendDelayedAck()
+		})
+	}
+
+	// If we've reached the threshold of unacked packets, send ACK immediately
+	if c.unackedPacketCount >= c.config.delayedAckThreshold {
+		if c.delayedAckTimer != nil {
+			c.delayedAckTimer.Stop()
+		}
+		c.delayedAckPending = false
+		c.unackedPacketCount = 0
+		c.acknowledge()
+	}
+}
+
+func (c *Connection) sendDelayedAck() {
+	c.delayedAckTimerMutex.Lock()
+	defer c.delayedAckTimerMutex.Unlock()
+
+	if c.delayedAckPending {
+		c.delayedAckPending = false
+		c.unackedPacketCount = 0
+		c.acknowledge()
+	}
 }
 
 func (c *Connection) trimOutSackOption(newlastAckNum uint32) {
