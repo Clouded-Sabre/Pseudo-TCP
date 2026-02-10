@@ -541,16 +541,15 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 	}
 
 	// send ACK packet back to the server
-	c.scheduleDelayedAck()
-}
-
-func (c *Connection) scheduleDelayedAck() {
 	if !c.config.delayedAckEnabled {
 		// If delayed ACK is disabled, send ACK immediately
 		c.acknowledge()
-		return
+	} else {
+		c.scheduleDelayedAck()
 	}
+}
 
+func (c *Connection) scheduleDelayedAck() {
 	c.delayedAckTimerMutex.Lock()
 	defer c.delayedAckTimerMutex.Unlock()
 
@@ -711,6 +710,18 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 		return 0, fmt.Errorf("pcpConnection.Write: buffer length (%d) is too short to hold the payload (length %d) to be written out", int(c.tcpOptions.mss), len(buffer))
 	}
 
+	// --- Cancel delayed ACK timer and reset state (piggyback ACK) ---
+	if c.config.delayedAckEnabled {
+		c.delayedAckTimerMutex.Lock()
+		if c.delayedAckTimer != nil {
+			c.delayedAckTimer.Stop()
+		}
+		c.delayedAckPending = false
+		c.unackedPacketCount = 0
+		c.delayedAckTimerMutex.Unlock()
+	}
+	// --- End piggyback logic ---
+
 	c.txCount++
 
 	// Iterate over the buffer and split it into segments if necessary
@@ -722,7 +733,7 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 		}
 
 		// Construct a packet with the current segment
-		packet := NewPcpPacket(c.nextSequenceNumber, c.lastAckNumber, ACKFlag, buffer[:segmentLength], c)
+		packet := NewPcpPacket(c.nextSequenceNumber, c.lastAckNumber, ACKFlag, buffer[:segmentLength], c) // Always set ACKFlag
 		if packet == nil {
 			return 0, fmt.Errorf("pcp connection write: failed to create new packet with payload length %d", segmentLength)
 		}
