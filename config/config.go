@@ -48,6 +48,7 @@ type Config struct {
 	DelayedAckEnabled       bool `yaml:"delayed_ack_enabled"`
 	DelayedAckTimeMs        int  `yaml:"delayed_ack_time_ms"`
 	DelayedAckThreshold     int  `yaml:"delayed_ack_threshold"`
+	DelayadAckDebug         bool `yaml:"delayad_ack_debug"`
 }
 
 var AppConfig *Config
@@ -85,9 +86,10 @@ func ReadConfig(confFilePath string) (*Config, error) {
 		ReadTimeoutMs:           500,  // Read timeout in milliseconds (P1 fix: previously hardcoded)
 		ShowStatistics:          false,
 		DisableResendBackoff:    false,
-		DelayedAckEnabled:       true, // Enable delayed ACK to reduce syscalls
-		DelayedAckTimeMs:        40,   // Delay ACK for up to 40ms
-		DelayedAckThreshold:     2,    // Or send ACK immediately if 2+ packets received
+		DelayedAckEnabled:       true,  // Enable delayed ACK to reduce syscalls
+		DelayedAckTimeMs:        40,    // Delay ACK for up to 40ms
+		DelayedAckThreshold:     2,     // Or send ACK immediately if 2+ packets received
+		DelayadAckDebug:         false, // Enable debug printouts for delayed ACKs
 	}
 
 	// Read the YAML file

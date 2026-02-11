@@ -33,3 +33,4 @@ disable_resend_backoff: true
 delayed_ack_enabled: true # Enable delayed ACK to reduce syscalls
 delayed_ack_time_ms: 40 # Delay ACK for up to 40ms
 delayed_ack_threshold: 2 # Or send ACK immediately if 2+ packets received
+delayad_ack_debug: false # Enable debug printouts for delayed ACKs
