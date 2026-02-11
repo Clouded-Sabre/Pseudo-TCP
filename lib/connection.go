@@ -763,17 +763,25 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 
 	// --- Cancel delayed ACK timer and reset state (piggyback ACK) ---
 	if c.config.delayedAckEnabled {
-		log.Println("[DEBUG] Write: attempting to lock delayedAckTimerMutex for piggyback ACK")
+		if c.config.delayedAckDebug {
+			log.Println("[DEBUG] Write: attempting to lock delayedAckTimerMutex for piggyback ACK")
+		}
 		c.delayedAckTimerMutex.Lock()
-		log.Println("[DEBUG] Write: acquired delayedAckTimerMutex for piggyback ACK")
+		if c.config.delayedAckDebug {
+			log.Println("[DEBUG] Write: acquired delayedAckTimerMutex for piggyback ACK")
+		}
 		if c.delayedAckTimer != nil {
 			c.delayedAckTimer.Stop()
-			log.Println("[DEBUG] Write: stopped delayedAckTimer for piggyback ACK")
+			if c.config.delayedAckDebug {
+				log.Println("[DEBUG] Write: stopped delayedAckTimer for piggyback ACK")
+			}
 		}
 		c.delayedAckPending = false
 		c.unackedPacketCount = 0
 		c.delayedAckTimerMutex.Unlock()
-		log.Println("[DEBUG] Write: released delayedAckTimerMutex for piggyback ACK")
+		if c.config.delayedAckDebug {
+			log.Println("[DEBUG] Write: released delayedAckTimerMutex for piggyback ACK")
+		}
 	}
 	// --- End piggyback logic ---
 
