@@ -545,44 +545,67 @@ func (c *Connection) handleDataPacket(packet *PcpPacket) {
 		// If delayed ACK is disabled, send ACK immediately
 		c.acknowledge()
 	} else {
-		c.scheduleDelayedAck()
+		c.processAck()
 	}
 }
 
-func (c *Connection) scheduleDelayedAck() {
-	c.delayedAckTimerMutex.Lock()
-	defer c.delayedAckTimerMutex.Unlock()
+func (c *Connection) processAck() {
+	if !c.config.delayedAckEnabled {
+		log.Println("[DEBUG] processAck: delayed ACK disabled, sending immediate ACK")
+		c.acknowledge()
+		return
+	}
 
+	log.Println("[DEBUG] processAck: attempting to lock delayedAckTimerMutex")
+	c.delayedAckTimerMutex.Lock()
+	log.Println("[DEBUG] processAck: acquired delayedAckTimerMutex")
 	c.unackedPacketCount++
 
 	// If this is the first unacked packet, start the timer
 	if !c.delayedAckPending {
 		c.delayedAckPending = true
+		c.delayedAckTimerMutex.Unlock()
+		log.Println("[DEBUG] processAck: starting delayedAckTimer")
 		c.delayedAckTimer = time.AfterFunc(time.Duration(c.config.delayedAckTimeMs)*time.Millisecond, func() {
+			log.Println("[DEBUG] sendDelayedAck: timer callback fired")
 			c.sendDelayedAck()
+			log.Println("[DEBUG] sendDelayedAck: timer callback exit")
 		})
+		return
 	}
+
+	c.delayedAckTimerMutex.Unlock()
+	log.Println("[DEBUG] processAck: released delayedAckTimerMutex")
 
 	// If we've reached the threshold of unacked packets, send ACK immediately
 	if c.unackedPacketCount >= c.config.delayedAckThreshold {
+		log.Println("[DEBUG] processAck: threshold reached, sending ACK and resetting state")
+		c.delayedAckTimerMutex.Lock()
 		if c.delayedAckTimer != nil {
 			c.delayedAckTimer.Stop()
+			log.Println("[DEBUG] processAck: stopped delayedAckTimer")
 		}
 		c.delayedAckPending = false
 		c.unackedPacketCount = 0
-		c.acknowledge()
+		c.delayedAckTimerMutex.Unlock()
+		c.acknowledge() // Released lock before calling
 	}
 }
 
 func (c *Connection) sendDelayedAck() {
+	log.Println("[DEBUG] sendDelayedAck: attempting to lock delayedAckTimerMutex")
 	c.delayedAckTimerMutex.Lock()
-	defer c.delayedAckTimerMutex.Unlock()
-
-	if c.delayedAckPending {
-		c.delayedAckPending = false
-		c.unackedPacketCount = 0
-		c.acknowledge()
+	log.Println("[DEBUG] sendDelayedAck: acquired delayedAckTimerMutex")
+	if !c.delayedAckPending {
+		log.Println("[DEBUG] sendDelayedAck: no pending ACK, returning")
+		c.delayedAckTimerMutex.Unlock()
+		return
 	}
+	c.delayedAckPending = false
+	c.unackedPacketCount = 0
+	c.delayedAckTimerMutex.Unlock()
+	log.Println("[DEBUG] sendDelayedAck: sending ACK after timer expired")
+	c.acknowledge() // Released lock before calling
 }
 
 func (c *Connection) trimOutSackOption(newlastAckNum uint32) {
@@ -712,13 +735,17 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 
 	// --- Cancel delayed ACK timer and reset state (piggyback ACK) ---
 	if c.config.delayedAckEnabled {
+		log.Println("[DEBUG] Write: attempting to lock delayedAckTimerMutex for piggyback ACK")
 		c.delayedAckTimerMutex.Lock()
+		log.Println("[DEBUG] Write: acquired delayedAckTimerMutex for piggyback ACK")
 		if c.delayedAckTimer != nil {
 			c.delayedAckTimer.Stop()
+			log.Println("[DEBUG] Write: stopped delayedAckTimer for piggyback ACK")
 		}
 		c.delayedAckPending = false
 		c.unackedPacketCount = 0
 		c.delayedAckTimerMutex.Unlock()
+		log.Println("[DEBUG] Write: released delayedAckTimerMutex for piggyback ACK")
 	}
 	// --- End piggyback logic ---
 
@@ -746,7 +773,9 @@ func (c *Connection) Write(buffer []byte) (int, error) {
 			packet.TickFootPrint(fp)
 			packet.AddChannel("c.OutputChan")
 		}
+		log.Printf("[DEBUG] Write: sending packet to outputChan (len=%d cap=%d)", len(c.params.outputChan), cap(c.params.outputChan))
 		c.params.outputChan <- packet
+		log.Println("[DEBUG] Write: sent packet to outputChan")
 
 		// Adjust buffer to exclude the sent segment
 		buffer = buffer[segmentLength:]
