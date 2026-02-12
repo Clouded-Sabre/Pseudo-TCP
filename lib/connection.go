@@ -1459,7 +1459,18 @@ func (c *Connection) StartStatsPrinter() {
 	for {
 		select {
 		case <-ticker.C:
+			// Get channel buffer utilization
+			inputChanUtil := float64(len(c.inputChannel)) / float64(cap(c.inputChannel)) * 100
+			readChanUtil := float64(len(c.readChannel)) / float64(cap(c.readChannel)) * 100
+			outputChanUtil := float64(len(c.params.outputChan)) / float64(cap(c.params.outputChan)) * 100
+			sigOutputChanUtil := float64(len(c.params.sigOutputChan)) / float64(cap(c.params.sigOutputChan)) * 100
+
 			log.Printf("PCP connecction (%s:%d - %s:%d) rxCount: %s%d%s, txCount: %s%d%s, rxOooCount: %s%d%s\n", c.RemoteAddr().IP.String(), c.RemotePort(), c.LocalAddr().IP.String(), c.LocalPort(), ColorGreen, c.rxCount, ColorReset, ColorGreen, c.txCount, ColorReset, ColorMagenta, c.rxOooCount, ColorReset)
+			log.Printf("  Channel Buffers - inputChan: %d/%d (%.1f%%), readChan: %d/%d (%.1f%%), outputChan: %d/%d (%.1f%%), sigOutputChan: %d/%d (%.1f%%)\n",
+				len(c.inputChannel), cap(c.inputChannel), inputChanUtil,
+				len(c.readChannel), cap(c.readChannel), readChanUtil,
+				len(c.params.outputChan), cap(c.params.outputChan), outputChanUtil,
+				len(c.params.sigOutputChan), cap(c.params.sigOutputChan), sigOutputChanUtil)
 		case <-c.closeSignal:
 			return
 		}
